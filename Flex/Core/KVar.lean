@@ -4,8 +4,11 @@ open Lean List
 
 abbrev Var := Name
 
--- Refinement variable κ
--- shape κ(x₁, ..., xₙ)
+/-!
+  # Refinement variables KVars
+
+  κ of shape κ(x₁, ..., xₙ)
+-/
 structure KVar where
   name       : Name       -- κ
   params     : List Name  -- x₁, ..., xₙ (canonical param names)
@@ -16,8 +19,10 @@ deriving BEq, Hashable, Repr, Inhabited
 instance : Hashable KVar where
   hash k := hash k.name
 
-/-
-  `Assignment` models a solution `σ` mapping κ-variables to predicates.
+/-!
+  # Assignment set of solutions
+
+    `Assignment` models a solution `σ` mapping κ-variables to predicates.
   Each entry is `(κ, (params, body))` where `body` is the predicate
   solution with free variables from `params`.
 -/

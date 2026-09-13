@@ -36,11 +36,7 @@ elab_rules : tactic
   | `(tactic| zap_with ($tac) $[$lbl:str]?) =>
       zapImpl (searchStrategy tac ((lbl.map (·.getString)).getD "zap_with"))
 
--- ───────────────────────────────────────────────────────────────────────
 -- Tests (same A/B/D constraints as `zap`'s tests in Fusion.lean)
--- ───────────────────────────────────────────────────────────────────────
-
-/-- A-test: one acyclic κ, leaf closed by grind. -/
 example : ∃ κ : Int → Int → Prop,
     ∀ x : Int, 0 ≤ x →
       (∀ ν : Int, ν = x - 1 → κ ν x)
@@ -49,7 +45,6 @@ example : ∃ κ : Int → Int → Prop,
   zap_with (grind)
   all_goals first | rfl | grind
 
-/-- A-test with aesop at the leaf. -/
 example : ∃ κ : Int → Int → Prop,
     ∀ x : Int, 0 ≤ x →
       (∀ ν : Int, ν = x - 1 → κ ν x)
@@ -58,7 +53,6 @@ example : ∃ κ : Int → Int → Prop,
   zap_with (aesop)
   all_goals first | rfl | grind
 
-/-- B-test: two independent acyclic κs. -/
 example : ∃ κ1 : Int → Int → Prop, ∃ κ2 : Int → Int → Prop,
     ∀ x : Int, 0 ≤ x →
       (∀ ν : Int, ν = x + 1 → κ1 ν x)
@@ -69,8 +63,6 @@ example : ∃ κ1 : Int → Int → Prop, ∃ κ2 : Int → Int → Prop,
   zap_with (grind)
   all_goals first | rfl | grind
 
-/-- D-test: κ1 cyclic, κ2 acyclic — exercises the `Exists.elim` branch of
-    `destructAndBuild` under a search leaf. -/
 example : ∃ κ1 : Int → Prop, ∃ κ2 : Int → Prop,
       (∀ y : Int, κ1 y → κ1 (y + 1))
     ∧ (∀ ν : Int, ν = 0 → κ1 ν)

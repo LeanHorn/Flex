@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RQ2 driver: acyclic-κ elimination — deterministic (fusion/Zap) vs proof search.
+"""RQ3 driver: acyclic-κ elimination — deterministic (fusion/Zap) vs proof search.
 
 For each benchmark with ≥1 acyclic κ, run THREE configs on the SAME VC. Each runs
 *only* the acyclic-κ elimination tactic and then leaves the rest of the VC as
@@ -9,11 +9,11 @@ For each benchmark with ≥1 acyclic κ, run THREE configs on the SAME VC. Each 
   grind = `unfold VC; fusion_grind; all_goals sorry`   (κ-head clauses via grind)
   aesop = `unfold VC; fusion_aesop; all_goals sorry`   (κ-head clauses via aesop)
 
-`fusion_grind`/`fusion_aesop` are the isolated, eval-only tactics in
-`Flex/Eval/FusionSearch.lean` (a copy of the `fusion` pipeline whose
-κ-head leaves are discharged by search instead of `emitKLeaf`). If a search
-variant cannot discharge a κ-head clause it ERRORS — that failure (status=FAIL)
-is itself a data point.
+`fusion_grind`/`fusion_aesop` are eval aliases in
+`Flex/Tactic/Tactics/Eval/`, backed by `zap_with`.
+They share `zapImpl` with `zap`, using proof search at κ-head leaves
+instead of `nav`. Search failure is recorded as status=FAIL and is itself
+a data point.
 
 Each config runs in its OWN `lake env lean` invocation (so the per-phase
 `[phase]` lines belong unambiguously to that config). Metrics per config:
@@ -73,7 +73,7 @@ KCOUNTS = {
     "Quicksort": (2, 0),
 }
 
-THM_RE = re.compile(r"(?m)^theorem\s+(\w+)\s*:\s*([\w'.]+)\s*:=\s*by\b")
+THM_RE = re.compile(r"(?m)^theorem\s+([\w'.]+)\s*:\s*([\w'.]+)\s*:=\s*by\b")
 BL2_RE = re.compile(
     r"BENCHLINE2\s+(\S+)\s+status=(\S+)\s+hb=(\d+)\s+ms=(\d+)\s+"
     r"depth=(\d+)\s+nconst=(\d+)\s+kerus=(\d+)")
@@ -175,7 +175,7 @@ def main() -> int:
 
     benches = [(g, b) for g, b in SUBSET if not args.filter or args.filter in b]
     tasks = [(g, b, key, tac) for g, b in benches for key, tac in CONFIGS]
-    print(f"RQ2: {len(benches)} benchmarks × {len(CONFIGS)} configs "
+    print(f"RQ3: {len(benches)} benchmarks × {len(CONFIGS)} configs "
           f"= {len(tasks)} runs ({args.jobs} parallel)\n")
 
     out: dict[str, dict] = {}

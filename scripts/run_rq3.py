@@ -126,7 +126,7 @@ def build_file(group: str, bench: str, config: str, tac: str) -> tuple[str, str]
     thm = f"{sanitize(bench)}_{config}"
     proof = f"by unfold {vc}; {tac}; all_goals sorry"
     src = (
-        f"import Flex.Eval.FusionSearch\n"   # isolated eval-only tactics
+        f"import Flex.Tactic.Tactics.Eval\n"   # fusion_grind / fusion_aesop
         f"{head}\n{prelude_body()}\n\n"
         f'benchx "{thm}" in\n'
         f"theorem {thm} : {vc} := {proof}\n"

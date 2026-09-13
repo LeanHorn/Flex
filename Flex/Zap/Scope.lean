@@ -10,7 +10,7 @@ open Lean Meta Elab Tactic
 -- `exprScope` / `exprSol1` in `Core/Fusion.lean` strip non-κ branches
 -- of `∧` — that form is what `solve_fixpoint` is tuned for. ZapK needs
 -- the FULL And-tree preserved so the goal's And ↔ sol's Or position
--- mirror holds (otherwise walkProof's orPath bits land on the wrong
+-- mirror holds (otherwise `nav`'s orPath bits land on the wrong
 -- Or branch). These local copies do exactly that.
 partial def exprScopePres (κ : KVar) (e : Expr) : KM Expr := do
   -- Faithful to the paper's structure-preserving `scope′` (Fig. 3):

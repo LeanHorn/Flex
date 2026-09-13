@@ -3,8 +3,6 @@ import Aesop
 
 import Flex.Core
 import Flex.Fusion
-import Flex.Elab.ToExpr
-import Flex.Elab.FromExpr
 import Flex.Tactic.Utils
 import Flex.Tactic.Tactics.Zap
 import Flex.Tactic.Tactics.SplitHyps

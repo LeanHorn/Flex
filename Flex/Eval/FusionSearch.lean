@@ -4,8 +4,6 @@ import Flex.Tactic.Tactics.RewriteKs
 import Flex.Tactic.Utils
 import Flex.Core
 import Flex.Fusion
-import Flex.Elab.ToExpr
-import Flex.Elab.FromExpr
 import Flex.Zap
 
 open Lean Meta Elab Tactic

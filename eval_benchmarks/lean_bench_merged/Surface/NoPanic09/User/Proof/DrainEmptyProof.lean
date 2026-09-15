@@ -66,8 +66,9 @@ end DrainEmptyQualifs
 open DrainEmptyQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def DrainEmpty_proof : DrainEmpty := by
   unfold DrainEmpty
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

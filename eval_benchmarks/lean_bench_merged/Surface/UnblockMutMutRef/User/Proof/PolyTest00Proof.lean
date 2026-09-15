@@ -66,8 +66,9 @@ end PolyTest00Qualifs
 open PolyTest00Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def PolyTest00_proof : PolyTest00 := by
   unfold PolyTest00
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

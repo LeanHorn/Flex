@@ -66,8 +66,9 @@ end TestUsizeToFloatQualifs
 open TestUsizeToFloatQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestUsizeToFloat_proof : TestUsizeToFloat := by
   unfold TestUsizeToFloat
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

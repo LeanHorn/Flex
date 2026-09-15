@@ -66,8 +66,9 @@ end OsTraceGetdents64Qualifs
 open OsTraceGetdents64Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def OsTraceGetdents64_proof : OsTraceGetdents64 := by
   unfold OsTraceGetdents64
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

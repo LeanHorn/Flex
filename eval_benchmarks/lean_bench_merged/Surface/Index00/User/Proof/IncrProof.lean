@@ -66,8 +66,9 @@ end IncrQualifs
 open IncrQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Incr_proof : Incr := by
   unfold Incr
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

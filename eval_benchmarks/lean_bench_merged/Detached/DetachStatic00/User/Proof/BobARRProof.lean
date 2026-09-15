@@ -66,8 +66,9 @@ end BobARRQualifs
 open BobARRQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def BobARR_proof : BobARR := by
   unfold BobARR
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

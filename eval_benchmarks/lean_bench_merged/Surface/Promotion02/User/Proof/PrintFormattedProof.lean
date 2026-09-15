@@ -66,8 +66,9 @@ end PrintFormattedQualifs
 open PrintFormattedQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def PrintFormatted_proof : PrintFormatted := by
   unfold PrintFormatted
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

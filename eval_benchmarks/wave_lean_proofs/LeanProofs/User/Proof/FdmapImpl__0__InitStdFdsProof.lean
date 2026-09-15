@@ -66,8 +66,9 @@ end FdmapImpl0InitStdFdsQualifs
 open FdmapImpl0InitStdFdsQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def FdmapImpl__0__InitStdFds_proof : FdmapImpl__0__InitStdFds := by
   unfold FdmapImpl__0__InitStdFds
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

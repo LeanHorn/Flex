@@ -66,8 +66,9 @@ end TypesImpl27ReadQualifs
 open TypesImpl27ReadQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__27__Read_proof : TypesImpl__27__Read := by
   unfold TypesImpl__27__Read
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end TestOptSpecsQualifs
 open TestOptSpecsQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestOptSpecs_proof : TestOptSpecs := by
   unfold TestOptSpecs
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

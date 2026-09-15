@@ -66,8 +66,9 @@ end RingbufferImpl2IsValidQualifs
 open RingbufferImpl2IsValidQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RingbufferImpl__2__IsValid_proof : RingbufferImpl__2__IsValid := by
   unfold RingbufferImpl__2__IsValid
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

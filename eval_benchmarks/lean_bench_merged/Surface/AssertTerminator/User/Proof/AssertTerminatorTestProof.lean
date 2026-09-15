@@ -66,8 +66,9 @@ end AssertTerminatorTestQualifs
 open AssertTerminatorTestQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def AssertTerminatorTest_proof : AssertTerminatorTest := by
   unfold AssertTerminatorTest
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

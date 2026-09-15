@@ -8,5 +8,6 @@ termination_by n.toNat
 def pleSumProp : Prop :=
   ∀ x : Int, x = 5 → mySum x = 15
 
+set_option flex.benchPhases true
 theorem pleSumProof : pleSumProp := by
   solve_fixpoint

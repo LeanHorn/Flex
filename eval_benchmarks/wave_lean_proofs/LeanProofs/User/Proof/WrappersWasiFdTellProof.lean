@@ -66,8 +66,9 @@ end WrappersWasiFdTellQualifs
 open WrappersWasiFdTellQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def WrappersWasiFdTell_proof : WrappersWasiFdTell := by
   unfold WrappersWasiFdTell
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

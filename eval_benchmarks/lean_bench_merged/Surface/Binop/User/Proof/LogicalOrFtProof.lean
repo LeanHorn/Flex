@@ -66,8 +66,9 @@ end LogicalOrFtQualifs
 open LogicalOrFtQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def LogicalOrFt_proof : LogicalOrFt := by
   unfold LogicalOrFt
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

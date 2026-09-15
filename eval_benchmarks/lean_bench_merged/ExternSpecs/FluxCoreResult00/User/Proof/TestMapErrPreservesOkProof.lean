@@ -66,8 +66,9 @@ end TestMapErrPreservesOkQualifs
 open TestMapErrPreservesOkQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestMapErrPreservesOk_proof : TestMapErrPreservesOk := by
   unfold TestMapErrPreservesOk
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

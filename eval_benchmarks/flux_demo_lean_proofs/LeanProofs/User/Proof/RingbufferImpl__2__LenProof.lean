@@ -66,8 +66,9 @@ end RingbufferImpl2LenQualifs
 open RingbufferImpl2LenQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RingbufferImpl__2__Len_proof : RingbufferImpl__2__Len := by
   unfold RingbufferImpl__2__Len
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

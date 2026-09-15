@@ -66,8 +66,9 @@ end RequiresSize8Qualifs
 open RequiresSize8Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RequiresSize8_proof : RequiresSize8 := by
   unfold RequiresSize8
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

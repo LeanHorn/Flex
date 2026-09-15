@@ -66,8 +66,9 @@ end TestStringQualifs
 open TestStringQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestString_proof : TestString := by
   unfold TestString
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

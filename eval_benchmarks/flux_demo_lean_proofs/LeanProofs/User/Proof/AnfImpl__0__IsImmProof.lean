@@ -66,8 +66,9 @@ end AnfImpl0IsImmQualifs
 open AnfImpl0IsImmQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def AnfImpl__0__IsImm_proof : AnfImpl__0__IsImm := by
   unfold AnfImpl__0__IsImm
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

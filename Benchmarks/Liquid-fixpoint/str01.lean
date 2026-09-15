@@ -17,6 +17,7 @@ def str01Prop : Prop :=
   ∧ (∀ x : String, x = "hot" → ∀ y : String, y = "dog" →
     ∀ z : String, z = "hotdog" → x ++ y = z)
 
+set_option flex.benchPhases true
 theorem str01Proof : str01Prop := by
   solve_fixpoint
 

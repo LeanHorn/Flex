@@ -66,8 +66,9 @@ end CastToU8AndBackQualifs
 open CastToU8AndBackQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def CastToU8AndBack_proof : CastToU8AndBack := by
   unfold CastToU8AndBack
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end TypestateImpl1IntoInputHighZQualifs
 open TypestateImpl1IntoInputHighZQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypestateImpl__1__IntoInputHighZ_proof : TypestateImpl__1__IntoInputHighZ := by
   unfold TypestateImpl__1__IntoInputHighZ
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

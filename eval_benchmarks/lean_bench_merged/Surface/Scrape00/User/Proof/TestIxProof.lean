@@ -66,8 +66,9 @@ end TestIxQualifs
 open TestIxQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestIx_proof : TestIx := by
   unfold TestIx
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

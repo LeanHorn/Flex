@@ -66,8 +66,9 @@ end Test00Qualifs
 open Test00Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Test00_proof : Test00 := by
   unfold Test00
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

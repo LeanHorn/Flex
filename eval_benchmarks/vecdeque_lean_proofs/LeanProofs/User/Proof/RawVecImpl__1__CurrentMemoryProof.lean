@@ -66,8 +66,9 @@ end RawVecImpl1CurrentMemoryQualifs
 open RawVecImpl1CurrentMemoryQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RawVecImpl__1__CurrentMemory_proof : RawVecImpl__1__CurrentMemory := by
   unfold RawVecImpl__1__CurrentMemory
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

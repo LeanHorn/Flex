@@ -66,8 +66,9 @@ end Wasm2cFrontendZWasiSnapshotPreview1ZPathCreateDirectoryZIiiiQualifs
 open Wasm2cFrontendZWasiSnapshotPreview1ZPathCreateDirectoryZIiiiQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Wasm2cFrontendZWasiSnapshotPreview1ZPathCreateDirectoryZIiii_proof : Wasm2cFrontendZWasiSnapshotPreview1ZPathCreateDirectoryZIiii := by
   unfold Wasm2cFrontendZWasiSnapshotPreview1ZPathCreateDirectoryZIiii
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

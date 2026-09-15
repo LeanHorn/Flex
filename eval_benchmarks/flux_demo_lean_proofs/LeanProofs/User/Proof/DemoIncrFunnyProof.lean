@@ -66,8 +66,9 @@ end DemoIncrFunnyQualifs
 open DemoIncrFunnyQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def DemoIncrFunny_proof : DemoIncrFunny := by
   unfold DemoIncrFunny
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

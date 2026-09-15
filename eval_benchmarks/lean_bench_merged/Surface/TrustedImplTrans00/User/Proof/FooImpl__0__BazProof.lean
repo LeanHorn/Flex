@@ -66,8 +66,9 @@ end FooImpl0BazQualifs
 open FooImpl0BazQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def FooImpl__0__Baz_proof : FooImpl__0__Baz := by
   unfold FooImpl__0__Baz
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

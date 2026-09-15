@@ -66,8 +66,9 @@ end TypesImpl15ToLinkatPosixQualifs
 open TypesImpl15ToLinkatPosixQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__15__ToLinkatPosix_proof : TypesImpl__15__ToLinkatPosix := by
   unfold TypesImpl__15__ToLinkatPosix
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

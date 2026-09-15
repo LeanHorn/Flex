@@ -66,8 +66,9 @@ end MutPartsConstrainedQualifs
 open MutPartsConstrainedQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def MutPartsConstrained_proof : MutPartsConstrained := by
   unfold MutPartsConstrained
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

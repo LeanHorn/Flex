@@ -66,8 +66,9 @@ end TrivialLtQualifs
 open TrivialLtQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TrivialLt_proof : TrivialLt := by
   unfold TrivialLt
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

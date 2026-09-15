@@ -66,8 +66,9 @@ end SubQualifs
 open SubQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Sub_proof : Sub := by
   unfold Sub
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

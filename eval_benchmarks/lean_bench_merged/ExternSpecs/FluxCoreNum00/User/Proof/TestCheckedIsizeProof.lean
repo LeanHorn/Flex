@@ -66,8 +66,9 @@ end TestCheckedIsizeQualifs
 open TestCheckedIsizeQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestCheckedIsize_proof : TestCheckedIsize := by
   unfold TestCheckedIsize
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

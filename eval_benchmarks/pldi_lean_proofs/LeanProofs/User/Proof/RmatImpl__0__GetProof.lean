@@ -66,8 +66,9 @@ end RmatImpl0GetQualifs
 open RmatImpl0GetQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RmatImpl__0__Get_proof : RmatImpl__0__Get := by
   unfold RmatImpl__0__Get
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

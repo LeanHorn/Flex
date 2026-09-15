@@ -66,8 +66,9 @@ end RowOpQualifs
 open RowOpQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RowOp_proof : RowOp := by
   unfold RowOp
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -15,6 +15,7 @@ def lhSetProp : Prop :=
     ∧ (∀ a0 : Int, True → ∀ a1 : List Int, True →
         ∀ _x : Int, xs = a0 :: a1 → xs ≠ [])
 
+set_option flex.benchPhases true
 theorem lhSetProof : lhSetProp := by
 <<<<<<< HEAD
   unfold lhSetProp

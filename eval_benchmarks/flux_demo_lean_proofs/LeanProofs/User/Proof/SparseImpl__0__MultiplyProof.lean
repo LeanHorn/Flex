@@ -66,8 +66,9 @@ end SparseImpl0MultiplyQualifs
 open SparseImpl0MultiplyQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def SparseImpl__0__Multiply_proof : SparseImpl__0__Multiply := by
   unfold SparseImpl__0__Multiply
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

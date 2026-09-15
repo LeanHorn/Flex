@@ -66,8 +66,9 @@ end TestReplaceReturnsOldNoneQualifs
 open TestReplaceReturnsOldNoneQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestReplaceReturnsOldNone_proof : TestReplaceReturnsOldNone := by
   unfold TestReplaceReturnsOldNone
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

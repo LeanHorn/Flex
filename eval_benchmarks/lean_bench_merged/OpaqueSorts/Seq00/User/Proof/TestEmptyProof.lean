@@ -66,8 +66,9 @@ end TestEmptyQualifs
 open TestEmptyQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestEmpty_proof : TestEmpty := by
   unfold TestEmpty
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end TestBlahQualifs
 open TestBlahQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestBlah_proof : TestBlah := by
   unfold TestBlah
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

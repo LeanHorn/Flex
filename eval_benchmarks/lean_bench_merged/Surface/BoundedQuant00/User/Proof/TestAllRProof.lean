@@ -66,8 +66,9 @@ end TestAllRQualifs
 open TestAllRQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestAllR_proof : TestAllR := by
   unfold TestAllR
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

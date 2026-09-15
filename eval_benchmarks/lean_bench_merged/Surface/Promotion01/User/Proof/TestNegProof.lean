@@ -66,8 +66,9 @@ end TestNegQualifs
 open TestNegQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestNeg_proof : TestNeg := by
   unfold TestNeg
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

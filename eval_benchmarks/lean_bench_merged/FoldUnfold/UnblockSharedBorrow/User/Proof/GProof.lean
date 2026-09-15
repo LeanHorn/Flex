@@ -66,8 +66,9 @@ end GQualifs
 open GQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def G_proof : G := by
   unfold G
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

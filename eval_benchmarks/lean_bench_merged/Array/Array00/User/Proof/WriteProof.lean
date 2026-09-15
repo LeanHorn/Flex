@@ -66,8 +66,9 @@ end WriteQualifs
 open WriteQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Write_proof : Write := by
   unfold Write
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

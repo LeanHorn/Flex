@@ -66,8 +66,9 @@ end TypesPlatformImpl2ToPosixQualifs
 open TypesPlatformImpl2ToPosixQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesPlatformImpl__2__ToPosix_proof : TypesPlatformImpl__2__ToPosix := by
   unfold TypesPlatformImpl__2__ToPosix
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

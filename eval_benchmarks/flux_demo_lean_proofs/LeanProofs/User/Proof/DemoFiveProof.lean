@@ -66,8 +66,9 @@ end DemoFiveQualifs
 open DemoFiveQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def DemoFive_proof : DemoFive := by
   unfold DemoFive
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

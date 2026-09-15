@@ -66,8 +66,9 @@ end MkStructQualifs
 open MkStructQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def MkStruct_proof : MkStruct := by
   unfold MkStruct
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

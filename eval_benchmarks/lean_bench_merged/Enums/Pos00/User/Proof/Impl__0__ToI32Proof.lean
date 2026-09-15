@@ -66,8 +66,9 @@ end Impl0ToI32Qualifs
 open Impl0ToI32Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Impl__0__ToI32_proof : Impl__0__ToI32 := by
   unfold Impl__0__ToI32
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

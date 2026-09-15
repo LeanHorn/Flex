@@ -37,5 +37,6 @@ def bitv_vc : Prop :=
   ∀ res : Int, res = res_.toInt →
     res < size
 
+set_option flex.benchPhases true
 theorem bitv_proof : bitv_vc := by
   solve_fixpoint

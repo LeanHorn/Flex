@@ -66,8 +66,9 @@ end JoinArrQualifs
 open JoinArrQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def JoinArr_proof : JoinArr := by
   unfold JoinArr
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

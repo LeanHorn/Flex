@@ -66,8 +66,9 @@ end ConstructQualifs
 open ConstructQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Construct_proof : Construct := by
   unfold Construct
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

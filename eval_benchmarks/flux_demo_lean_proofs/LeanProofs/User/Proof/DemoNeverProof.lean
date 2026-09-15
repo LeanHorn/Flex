@@ -66,8 +66,9 @@ end DemoNeverQualifs
 open DemoNeverQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def DemoNever_proof : DemoNever := by
   unfold DemoNever
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

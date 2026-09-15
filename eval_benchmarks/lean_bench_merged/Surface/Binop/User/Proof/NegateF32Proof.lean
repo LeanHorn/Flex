@@ -66,8 +66,9 @@ end NegateF32Qualifs
 open NegateF32Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def NegateF32_proof : NegateF32 := by
   unfold NegateF32
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

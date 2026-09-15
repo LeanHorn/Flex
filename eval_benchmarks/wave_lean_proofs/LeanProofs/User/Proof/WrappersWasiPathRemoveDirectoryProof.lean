@@ -66,8 +66,9 @@ end WrappersWasiPathRemoveDirectoryQualifs
 open WrappersWasiPathRemoveDirectoryQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def WrappersWasiPathRemoveDirectory_proof : WrappersWasiPathRemoveDirectory := by
   unfold WrappersWasiPathRemoveDirectory
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end I64U32LosslessQualifs
 open I64U32LosslessQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def I64U32Lossless_proof : I64U32Lossless := by
   unfold I64U32Lossless
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

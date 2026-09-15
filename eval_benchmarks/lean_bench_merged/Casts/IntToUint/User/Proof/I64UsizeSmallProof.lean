@@ -66,8 +66,9 @@ end I64UsizeSmallQualifs
 open I64UsizeSmallQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def I64UsizeSmall_proof : I64UsizeSmall := by
   unfold I64UsizeSmall
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

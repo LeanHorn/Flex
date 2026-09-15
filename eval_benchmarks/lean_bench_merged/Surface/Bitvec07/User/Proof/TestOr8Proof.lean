@@ -66,8 +66,9 @@ end TestOr8Qualifs
 open TestOr8Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestOr8_proof : TestOr8 := by
   unfold TestOr8
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

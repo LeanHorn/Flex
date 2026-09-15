@@ -44,5 +44,6 @@ def fluxNoAnfDup : Prop :=
             k1 a9 s a9
           ∧ (∀ a10 : List Adt0, k1 a10 s a9 → a10 = s))
 
+set_option flex.benchPhases true
 theorem fluxNoAnfDup_proof : fluxNoAnfDup := by
   solve_fixpoint

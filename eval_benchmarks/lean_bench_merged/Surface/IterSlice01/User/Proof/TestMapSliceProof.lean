@@ -66,8 +66,9 @@ end TestMapSliceQualifs
 open TestMapSliceQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestMapSlice_proof : TestMapSlice := by
   unfold TestMapSlice
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

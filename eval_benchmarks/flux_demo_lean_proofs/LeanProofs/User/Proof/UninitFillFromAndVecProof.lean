@@ -66,8 +66,9 @@ end UninitFillFromAndVecQualifs
 open UninitFillFromAndVecQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def UninitFillFromAndVec_proof : UninitFillFromAndVec := by
   unfold UninitFillFromAndVec
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

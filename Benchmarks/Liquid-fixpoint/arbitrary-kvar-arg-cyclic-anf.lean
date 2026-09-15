@@ -57,5 +57,6 @@ def arbitraryKvarArgCyclicAnf : Prop :=
               ∧ (k1 a10 a11_plus p00 p01)
               ∧ (k2 a11_plus p00 p01)))
 
+set_option flex.benchPhases true
 theorem arbitraryKvarArgCyclicAnf_proof : arbitraryKvarArgCyclicAnf := by
   solve_fixpoint

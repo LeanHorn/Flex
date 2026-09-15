@@ -66,8 +66,9 @@ end MutShortFieldProjectionsQualifs
 open MutShortFieldProjectionsQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def MutShortFieldProjections_proof : MutShortFieldProjections := by
   unfold MutShortFieldProjections
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

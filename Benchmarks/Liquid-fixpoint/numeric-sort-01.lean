@@ -20,5 +20,6 @@ def numericSort01Prop : Prop :=
         ∀ t1 : Int, κ1 t1 → ∀ v : Int, v = n + t1 → κ1 v)
     ∧ (∀ y : Int, ∀ r : Int, κ1 r → 0 ≤ r)
 
+set_option flex.benchPhases true
 theorem numericSort01Proof : numericSort01Prop := by
   solve_fixpoint

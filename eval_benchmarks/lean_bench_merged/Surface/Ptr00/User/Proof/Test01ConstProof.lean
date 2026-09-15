@@ -66,8 +66,9 @@ end Test01ConstQualifs
 open Test01ConstQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Test01Const_proof : Test01Const := by
   unfold Test01Const
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

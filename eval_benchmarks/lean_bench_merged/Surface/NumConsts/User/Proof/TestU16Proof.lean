@@ -66,8 +66,9 @@ end TestU16Qualifs
 open TestU16Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestU16_proof : TestU16 := by
   unfold TestU16
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -48,5 +48,6 @@ def hofQual : Prop :=
       ∧ (∀ z : Int, k0 z p0 → p0 z)
 
 set_option maxHeartbeats 800000 in
+set_option flex.benchPhases true
 theorem hofQual_proof : hofQual := by
   solve_fixpoint

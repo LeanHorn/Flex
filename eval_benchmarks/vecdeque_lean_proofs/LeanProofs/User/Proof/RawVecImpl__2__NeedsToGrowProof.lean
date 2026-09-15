@@ -66,8 +66,9 @@ end RawVecImpl2NeedsToGrowQualifs
 open RawVecImpl2NeedsToGrowQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RawVecImpl__2__NeedsToGrow_proof : RawVecImpl__2__NeedsToGrow := by
   unfold RawVecImpl__2__NeedsToGrow
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

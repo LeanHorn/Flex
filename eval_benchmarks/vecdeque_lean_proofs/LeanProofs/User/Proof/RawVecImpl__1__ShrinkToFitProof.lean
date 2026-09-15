@@ -66,8 +66,9 @@ end RawVecImpl1ShrinkToFitQualifs
 open RawVecImpl1ShrinkToFitQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RawVecImpl__1__ShrinkToFit_proof : RawVecImpl__1__ShrinkToFit := by
   unfold RawVecImpl__1__ShrinkToFit
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

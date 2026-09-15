@@ -66,8 +66,9 @@ end TestWrappingU32Qualifs
 open TestWrappingU32Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestWrappingU32_proof : TestWrappingU32 := by
   unfold TestWrappingU32
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

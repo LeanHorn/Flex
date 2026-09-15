@@ -66,8 +66,9 @@ end Unb1Qualifs
 open Unb1Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Unb1_proof : Unb1 := by
   unfold Unb1
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end VecDequeImpl2NewQualifs
 open VecDequeImpl2NewQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VecDequeImpl__2__New_proof : VecDequeImpl__2__New := by
   unfold VecDequeImpl__2__New
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

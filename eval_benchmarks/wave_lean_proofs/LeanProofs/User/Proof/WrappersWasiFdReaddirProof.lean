@@ -66,8 +66,9 @@ end WrappersWasiFdReaddirQualifs
 open WrappersWasiFdReaddirQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def WrappersWasiFdReaddir_proof : WrappersWasiFdReaddir := by
   unfold WrappersWasiFdReaddir
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

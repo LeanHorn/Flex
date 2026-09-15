@@ -66,8 +66,9 @@ end RawVecImpl1TryReserveQualifs
 open RawVecImpl1TryReserveQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RawVecImpl__1__TryReserve_proof : RawVecImpl__1__TryReserve := by
   unfold RawVecImpl__1__TryReserve
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

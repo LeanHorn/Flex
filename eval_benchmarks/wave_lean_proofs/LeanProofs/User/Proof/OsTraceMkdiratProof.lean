@@ -66,8 +66,9 @@ end OsTraceMkdiratQualifs
 open OsTraceMkdiratQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def OsTraceMkdirat_proof : OsTraceMkdirat := by
   unfold OsTraceMkdirat
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

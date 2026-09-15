@@ -66,8 +66,9 @@ end TypesImpl17NsecQualifs
 open TypesImpl17NsecQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__17__Nsec_proof : TypesImpl__17__Nsec := by
   unfold TypesImpl__17__Nsec
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

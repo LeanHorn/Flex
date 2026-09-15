@@ -66,8 +66,9 @@ end VecDequeImpl1BufferWriteQualifs
 open VecDequeImpl1BufferWriteQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VecDequeImpl__1__BufferWrite_proof : VecDequeImpl__1__BufferWrite := by
   unfold VecDequeImpl__1__BufferWrite
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

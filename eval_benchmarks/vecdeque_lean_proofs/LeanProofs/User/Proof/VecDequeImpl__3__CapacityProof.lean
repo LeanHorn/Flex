@@ -66,8 +66,9 @@ end VecDequeImpl3CapacityQualifs
 open VecDequeImpl3CapacityQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VecDequeImpl__3__Capacity_proof : VecDequeImpl__3__Capacity := by
   unfold VecDequeImpl__3__Capacity
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

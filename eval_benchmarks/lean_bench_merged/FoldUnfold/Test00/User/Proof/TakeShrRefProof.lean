@@ -66,8 +66,9 @@ end TakeShrRefQualifs
 open TakeShrRefQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TakeShrRef_proof : TakeShrRef := by
   unfold TakeShrRef
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

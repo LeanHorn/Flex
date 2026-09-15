@@ -66,8 +66,9 @@ end Let3Qualifs
 open Let3Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Let3_proof : Let3 := by
   unfold Let3
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

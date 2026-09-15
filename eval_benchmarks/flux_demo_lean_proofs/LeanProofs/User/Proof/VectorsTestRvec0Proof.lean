@@ -66,8 +66,9 @@ end VectorsTestRvec0Qualifs
 open VectorsTestRvec0Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VectorsTestRvec0_proof : VectorsTestRvec0 := by
   unfold VectorsTestRvec0
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end GetNthQualifs
 open GetNthQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def GetNth_proof : GetNth := by
   unfold GetNth
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

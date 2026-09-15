@@ -66,8 +66,9 @@ end RawVecImpl1AllocatorQualifs
 open RawVecImpl1AllocatorQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RawVecImpl__1__Allocator_proof : RawVecImpl__1__Allocator := by
   unfold RawVecImpl__1__Allocator
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

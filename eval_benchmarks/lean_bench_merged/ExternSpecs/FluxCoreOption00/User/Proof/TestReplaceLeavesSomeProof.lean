@@ -66,8 +66,9 @@ end TestReplaceLeavesSomeQualifs
 open TestReplaceLeavesSomeQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestReplaceLeavesSome_proof : TestReplaceLeavesSome := by
   unfold TestReplaceLeavesSome
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

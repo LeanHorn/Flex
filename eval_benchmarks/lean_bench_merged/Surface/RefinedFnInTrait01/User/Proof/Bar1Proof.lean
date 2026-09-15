@@ -66,8 +66,9 @@ end Bar1Qualifs
 open Bar1Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Bar1_proof : Bar1 := by
   unfold Bar1
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

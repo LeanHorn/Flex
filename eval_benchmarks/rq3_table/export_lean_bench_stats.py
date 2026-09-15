@@ -36,6 +36,14 @@ LAKE_FAIL_RE  = re.compile(r"^✖\s+\[\d+/\d+\]\s+Building\s+([\w.]+)")
 # with and the κ's still unsolved afterward — see Fusion.lean.
 FUSION_END_BARE_RE = re.compile(r"^\[fusion\] End κ:\s*\[([^\]]*)\]")
 
+# `benchPhase` (Flex/Tactic/Utils.lean, gated by `flex.benchPhases`) emits a
+# bare `[phase] fusion:sol=...` line between `Start` and `End` whenever
+# fusion has ≥1 acyclic κ to eliminate (the `sol` step runs, THEN `End`
+# prints). A fixed 1-line lookahead for `End` right after `Start` breaks the
+# moment `flex.benchPhases` is on — this VC would otherwise be misclassified
+# as having no residual cyclic κ — so skip over any such phase lines first.
+_BARE_PHASE_RE = re.compile(r"^\[phase\]\s+\w+:\w+=\d+(?:\s+ms=\d+)?$")
+
 
 def is_trivially_true(path: Path) -> bool:
     text = path.read_text(encoding="utf-8", errors="replace")
@@ -141,13 +149,17 @@ def parse_merged_log(log_path: Path) -> dict[str, dict]:
         if "[fusion] Start" in message:
             raw = re.search(r"κ:\s*\[([^\]]*)\]", message)
             start = _items(raw.group(1)) if raw else []
-            # End line immediately follows without an info: prefix.
+            # End line follows, without an info: prefix, possibly after one
+            # or more bare `[phase]` lines (see `_BARE_PHASE_RE`).
             end: list[str] = []
-            if i + 1 < len(all_lines):
-                em = FUSION_END_BARE_RE.match(all_lines[i + 1])
+            j = i + 1
+            while j < len(all_lines) and _BARE_PHASE_RE.match(all_lines[j]):
+                j += 1
+            if j < len(all_lines):
+                em = FUSION_END_BARE_RE.match(all_lines[j])
                 if em:
                     end = _items(em.group(1))
-                    i += 1
+                    i = j
             _get(key)["start"] = start
             _get(key)["end"] = end
 

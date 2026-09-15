@@ -66,8 +66,9 @@ end OsTraceCloseQualifs
 open OsTraceCloseQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def OsTraceClose_proof : OsTraceClose := by
   unfold OsTraceClose
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

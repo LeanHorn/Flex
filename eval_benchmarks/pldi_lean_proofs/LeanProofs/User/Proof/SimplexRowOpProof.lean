@@ -66,8 +66,9 @@ end SimplexRowOpQualifs
 open SimplexRowOpQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def SimplexRowOp_proof : SimplexRowOp := by
   unfold SimplexRowOp
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

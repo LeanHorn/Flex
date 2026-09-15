@@ -66,8 +66,9 @@ end TestExpectAfterCheckQualifs
 open TestExpectAfterCheckQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestExpectAfterCheck_proof : TestExpectAfterCheck := by
   unfold TestExpectAfterCheck
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end TestAbsI32Qualifs
 open TestAbsI32Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestAbsI32_proof : TestAbsI32 := by
   unfold TestAbsI32
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

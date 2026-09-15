@@ -66,8 +66,9 @@ end MutRefBoxQualifs
 open MutRefBoxQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def MutRefBox_proof : MutRefBox := by
   unfold MutRefBox
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

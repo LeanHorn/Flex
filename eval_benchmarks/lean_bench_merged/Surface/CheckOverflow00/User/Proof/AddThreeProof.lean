@@ -66,8 +66,9 @@ end AddThreeQualifs
 open AddThreeQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def AddThree_proof : AddThree := by
   unfold AddThree
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

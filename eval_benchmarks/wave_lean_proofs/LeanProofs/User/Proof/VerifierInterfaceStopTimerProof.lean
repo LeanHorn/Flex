@@ -66,8 +66,9 @@ end VerifierInterfaceStopTimerQualifs
 open VerifierInterfaceStopTimerQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VerifierInterfaceStopTimer_proof : VerifierInterfaceStopTimer := by
   unfold VerifierInterfaceStopTimer
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

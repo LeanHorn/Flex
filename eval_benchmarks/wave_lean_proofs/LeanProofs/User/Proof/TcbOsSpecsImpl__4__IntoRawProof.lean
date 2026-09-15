@@ -66,8 +66,9 @@ end TcbOsSpecsImpl4IntoRawQualifs
 open TcbOsSpecsImpl4IntoRawQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TcbOsSpecsImpl__4__IntoRaw_proof : TcbOsSpecsImpl__4__IntoRaw := by
   unfold TcbOsSpecsImpl__4__IntoRaw
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

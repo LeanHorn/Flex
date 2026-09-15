@@ -66,8 +66,9 @@ end I32U8LosslessReftQualifs
 open I32U8LosslessReftQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def I32U8LosslessReft_proof : I32U8LosslessReft := by
   unfold I32U8LosslessReft
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

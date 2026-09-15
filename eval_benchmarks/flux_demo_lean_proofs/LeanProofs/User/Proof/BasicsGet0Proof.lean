@@ -66,8 +66,9 @@ end BasicsGet0Qualifs
 open BasicsGet0Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def BasicsGet0_proof : BasicsGet0 := by
   unfold BasicsGet0
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

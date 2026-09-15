@@ -66,8 +66,9 @@ end TestLibQualifs
 open TestLibQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestLib_proof : TestLib := by
   unfold TestLib
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

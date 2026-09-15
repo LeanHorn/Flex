@@ -66,8 +66,9 @@ end PathResolutionResolvePathQualifs
 open PathResolutionResolvePathQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def PathResolutionResolvePath_proof : PathResolutionResolvePath := by
   unfold PathResolutionResolvePath
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

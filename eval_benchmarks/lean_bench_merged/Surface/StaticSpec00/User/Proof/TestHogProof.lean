@@ -66,8 +66,9 @@ end TestHogQualifs
 open TestHogQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestHog_proof : TestHog := by
   unfold TestHog
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

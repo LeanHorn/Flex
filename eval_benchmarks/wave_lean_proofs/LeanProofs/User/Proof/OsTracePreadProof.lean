@@ -66,8 +66,9 @@ end OsTracePreadQualifs
 open OsTracePreadQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def OsTracePread_proof : OsTracePread := by
   unfold OsTracePread
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

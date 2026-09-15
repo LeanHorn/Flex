@@ -66,8 +66,9 @@ end UintIntLosslessQualifs
 open UintIntLosslessQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def UintIntLossless_proof : UintIntLossless := by
   unfold UintIntLossless
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

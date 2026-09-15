@@ -66,8 +66,9 @@ end Impl7RouteQualifs
 open Impl7RouteQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Impl__7__Route_proof : Impl__7__Route := by
   unfold Impl__7__Route
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

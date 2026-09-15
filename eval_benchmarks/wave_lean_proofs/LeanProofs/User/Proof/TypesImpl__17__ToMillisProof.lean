@@ -66,8 +66,9 @@ end TypesImpl17ToMillisQualifs
 open TypesImpl17ToMillisQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__17__ToMillis_proof : TypesImpl__17__ToMillis := by
   unfold TypesImpl__17__ToMillis
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

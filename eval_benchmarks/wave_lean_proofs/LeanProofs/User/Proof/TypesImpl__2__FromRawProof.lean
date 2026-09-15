@@ -66,8 +66,9 @@ end TypesImpl2FromRawQualifs
 open TypesImpl2FromRawQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__2__FromRaw_proof : TypesImpl__2__FromRaw := by
   unfold TypesImpl__2__FromRaw
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

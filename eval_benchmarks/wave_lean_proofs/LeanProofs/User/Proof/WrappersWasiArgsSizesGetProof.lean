@@ -66,8 +66,9 @@ end WrappersWasiArgsSizesGetQualifs
 open WrappersWasiArgsSizesGetQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def WrappersWasiArgsSizesGet_proof : WrappersWasiArgsSizesGet := by
   unfold WrappersWasiArgsSizesGet
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

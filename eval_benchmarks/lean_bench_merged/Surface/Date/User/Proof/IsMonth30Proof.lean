@@ -66,8 +66,9 @@ end IsMonth30Qualifs
 open IsMonth30Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def IsMonth30_proof : IsMonth30 := by
   unfold IsMonth30
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

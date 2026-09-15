@@ -66,8 +66,9 @@ end FftLoopBQualifs
 open FftLoopBQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def FftLoopB_proof : FftLoopB := by
   unfold FftLoopB
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

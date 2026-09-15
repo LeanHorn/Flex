@@ -66,8 +66,9 @@ end InitRatioIQualifs
 open InitRatioIQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def InitRatioI_proof : InitRatioI := by
   unfold InitRatioI
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end ApplyClosureToAnimalQualifs
 open ApplyClosureToAnimalQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def ApplyClosureToAnimal_proof : ApplyClosureToAnimal := by
   unfold ApplyClosureToAnimal
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

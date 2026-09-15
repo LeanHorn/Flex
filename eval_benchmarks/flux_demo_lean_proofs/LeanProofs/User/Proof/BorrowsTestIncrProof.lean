@@ -66,8 +66,9 @@ end BorrowsTestIncrQualifs
 open BorrowsTestIncrQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def BorrowsTestIncr_proof : BorrowsTestIncr := by
   unfold BorrowsTestIncr
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

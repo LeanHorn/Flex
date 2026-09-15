@@ -1,0 +1,787 @@
+<title>Where the Heartbeats Go</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  :root {
+    --bg: #f6f4ef;
+    --surface: #ffffff;
+    --surface-2: #eeebe3;
+    --ink: #1b1e1f;
+    --muted: #5c6560;
+    --line: #ddd8cc;
+    --accent: #0e6a5b;      /* zap */
+    --accent-soft: #dfeee9;
+    --b-zap: #0e6a5b;
+    --b-simp: #b5891f;
+    --b-pa: #9c3b52;
+    --b-discharge: #375f8c;
+    --focus: #0e6a5b;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14181a;
+      --surface: #1a1f20;
+      --surface-2: #202628;
+      --ink: #e7e6e0;
+      --muted: #9aa5a1;
+      --line: #303836;
+      --accent: #4bcab0;
+      --accent-soft: #1e3330;
+      --b-zap: #4bcab0;
+      --b-simp: #dcb254;
+      --b-pa: #dd849a;
+      --b-discharge: #7fa4d8;
+      --focus: #4bcab0;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14181a;
+    --surface: #1a1f20;
+    --surface-2: #202628;
+    --ink: #e7e6e0;
+    --muted: #9aa5a1;
+    --line: #303836;
+    --accent: #4bcab0;
+    --accent-soft: #1e3330;
+    --b-zap: #4bcab0;
+    --b-simp: #dcb254;
+    --b-pa: #dd849a;
+    --b-discharge: #7fa4d8;
+    --focus: #4bcab0;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    line-height: 1.55;
+  }
+  ::selection { background: var(--accent-soft); }
+  a { color: var(--accent); }
+  a:focus-visible, button:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--focus); outline-offset: 2px;
+  }
+
+  .page {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 2.75rem;
+  }
+
+  header.hero {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 2rem;
+  }
+  .eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 500;
+  }
+  h1 {
+    font-family: 'Source Serif 4', serif;
+    font-weight: 700;
+    font-size: clamp(2.1rem, 5vw, 2.9rem);
+    line-height: 1.08;
+    margin: 0;
+    text-wrap: balance;
+    letter-spacing: -0.01em;
+  }
+  .dek {
+    font-size: 1.05rem;
+    color: var(--muted);
+    max-width: 62ch;
+    text-wrap: pretty;
+  }
+  .dek code, .pipeline code {
+    font-family: 'IBM Plex Mono', monospace;
+    background: var(--surface-2);
+    border-radius: 3px;
+    padding: 0.1em 0.35em;
+    font-size: 0.92em;
+    color: var(--ink);
+  }
+  .stat-row {
+    display: flex;
+    gap: 2.25rem;
+    flex-wrap: wrap;
+    margin-top: 0.5rem;
+  }
+  .stat {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .stat .num {
+    font-family: 'IBM Plex Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 1.6rem;
+    font-weight: 600;
+    color: var(--accent);
+  }
+  .stat .lbl {
+    font-size: 0.78rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  section { display: flex; flex-direction: column; gap: 1.1rem; }
+  h2 {
+    font-family: 'Source Serif 4', serif;
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin: 0;
+  }
+  .section-note { color: var(--muted); font-size: 0.94rem; max-width: 68ch; }
+
+  /* ── pipeline strip ── */
+  .pipeline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    align-items: center;
+    font-size: 0.92rem;
+    color: var(--muted);
+  }
+  .pipeline .step {
+    display: flex; align-items: center; gap: 0.5rem;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 8px; padding: 0.4rem 0.7rem;
+  }
+  .pipeline .dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; flex: none; }
+  .pipeline .arrow { color: var(--line); font-size: 1rem; }
+
+  /* ── share chart ── */
+  .share-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 1.35rem 1.5rem;
+  }
+  .share-row {
+    display: grid;
+    grid-template-columns: 9.5rem 1fr 6.5rem;
+    align-items: center;
+    gap: 0.9rem;
+  }
+  .share-row .name { font-weight: 600; font-size: 0.94rem; }
+  .share-row .n { font-size: 0.78rem; color: var(--muted); font-family: 'IBM Plex Mono', monospace; }
+  .bar {
+    display: flex;
+    height: 1.55rem;
+    border-radius: 5px;
+    overflow: hidden;
+    background: var(--surface-2);
+  }
+  .bar span {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.68rem;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .bar .zap { background: var(--b-zap); }
+  .bar .simp { background: var(--b-simp); }
+  .bar .pa { background: var(--b-pa); }
+  .bar .discharge { background: var(--b-discharge); }
+  .share-row .total-ms {
+    font-family: 'IBM Plex Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.85rem;
+    text-align: right;
+    color: var(--muted);
+  }
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 1.1rem;
+    border-top: 1px solid var(--line);
+    padding-top: 0.85rem;
+    margin-top: 0.2rem;
+    font-size: 0.82rem;
+    color: var(--muted);
+  }
+  .legend .item { display: flex; align-items: center; gap: 0.45rem; }
+  .legend .swatch { width: 0.7rem; height: 0.7rem; border-radius: 2px; flex: none; }
+
+  .chart-toggle {
+    display: inline-flex;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0.22rem;
+    gap: 0.2rem;
+    align-self: flex-start;
+  }
+  .chart-toggle button {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.78rem;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    padding: 0.42rem 0.9rem;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .chart-toggle button[aria-pressed="true"] {
+    background: var(--surface);
+    color: var(--ink);
+    font-weight: 600;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  }
+  .chart-toggle button:hover { color: var(--ink); }
+  .chart-unit { font-size: 0.72rem; color: var(--muted); }
+
+  /* ── tables ── */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+  table { width: 100%; border-collapse: collapse; min-width: 720px; }
+  caption { text-align: left; padding: 1rem 1.25rem 0; font-size: 0.86rem; color: var(--muted); }
+  thead th {
+    text-align: right;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 500;
+    padding: 0.9rem 1rem 0.6rem;
+    border-bottom: 1px solid var(--line);
+  }
+  thead th:first-child, tbody td:first-child { text-align: left; }
+  tbody td {
+    text-align: right;
+    padding: 0.65rem 1rem;
+    font-family: 'IBM Plex Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.88rem;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  tbody td.ms { color: var(--muted); font-size: 0.8rem; }
+  tbody td:first-child { font-family: 'IBM Plex Sans', sans-serif; font-weight: 500; font-size: 0.92rem; white-space: normal; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr.total td { font-weight: 600; background: var(--surface-2); border-top: 1px solid var(--line); border-bottom: none; }
+  tbody tr.total td:first-child { font-family: 'Source Serif 4', serif; }
+
+  /* ── notes ── */
+  .note {
+    display: flex;
+    gap: 0.9rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--b-pa);
+    border-radius: 10px;
+    padding: 1.1rem 1.3rem;
+    font-size: 0.92rem;
+  }
+  .note .mark {
+    font-family: 'IBM Plex Mono', monospace;
+    color: var(--b-pa);
+    font-weight: 600;
+    flex: none;
+  }
+  .note p { margin: 0; color: var(--ink); }
+  .note p + p { margin-top: 0.5rem; color: var(--muted); }
+  .note code { font-family: 'IBM Plex Mono', monospace; background: var(--surface-2); padding: 0.1em 0.35em; border-radius: 3px; }
+
+  /* ── method ── */
+  .method {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 0.75rem;
+  }
+  .method .def {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 0.9rem 1.05rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .method .def .k {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.85rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .method .def .k .swatch { width: 0.6rem; height: 0.6rem; border-radius: 2px; flex: none; }
+  .method .def .formula {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.76rem;
+    color: var(--muted);
+    line-height: 1.5;
+    word-break: break-word;
+  }
+
+  footer {
+    color: var(--muted);
+    font-size: 0.82rem;
+    border-top: 1px solid var(--line);
+    padding-top: 1.25rem;
+  }
+</style>
+
+<div class="page">
+
+  <header class="hero">
+    <span class="eyebrow">Flex &middot; RQ3 &middot; proof-time phase breakdown</span>
+    <h1>Where the heartbeats go</h1>
+    <p class="dek">
+      Every RQ3 VC — real Rust-derived constraints (Flux) and the Liquid-Fixpoint corpus — is closed by
+      the same combinator, <code>(try zap) ; (try simp [*]) ; (try solve)</code>. Timed both in Lean's
+      own deterministic heartbeat counter and in wall-clock ms, over the 841 <em>non-trivial, solved</em>
+      verification conditions — 1,924 generated in total, 1,041 trivially <code>True</code> and 42
+      failed, excluded rather than diluting the averages — split into the four steps that combinator
+      actually runs, and further split by whether a VC has any cyclic &kappa; to solve at all.
+    </p>
+    <div class="stat-row">
+      <div class="stat"><span class="num">841<span style="font-size:0.6em; color:var(--muted);">&nbsp;/&nbsp;1,924</span></span><span class="lbl">non-trivial VCs solved</span></div>
+      <div class="stat"><span class="num">16%</span><span class="lbl">of those have a cyclic &kappa;</span></div>
+      <div class="stat"><span class="num">73%</span><span class="lbl">of heartbeats spent in PA</span></div>
+      <div class="stat"><span class="num">35.4m</span><span class="lbl">wall-clock, one machine</span></div>
+    </div>
+  </header>
+
+  <section aria-label="pipeline">
+    <div class="pipeline">
+      <span class="step"><span class="dot" style="background:var(--b-zap)"></span><code>zap</code> &mdash; acyclic-&kappa; elimination</span>
+      <span class="arrow">&rarr;</span>
+      <span class="step"><span class="dot" style="background:var(--b-simp)"></span><code>simp [*]</code> &mdash; cleanup</span>
+      <span class="arrow">&rarr;</span>
+      <span class="step"><span class="dot" style="background:var(--b-pa)"></span><code>solve</code>: PA &mdash; fixpoint on cyclic &kappa;</span>
+      <span class="arrow">&rarr;</span>
+      <span class="step"><span class="dot" style="background:var(--b-discharge)"></span><code>solve</code>: discharge &mdash; close the residual VC</span>
+    </div>
+  </section>
+
+  <section aria-labelledby="share-h">
+    <div style="display:flex; align-items:baseline; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
+      <h2 id="share-h">Share of time, by suite</h2>
+      <div class="chart-toggle" role="group" aria-label="Chart metric">
+        <button type="button" id="btn-hb" aria-pressed="true" onclick="showChart('hb')">Heartbeats</button>
+        <button type="button" id="btn-ms" aria-pressed="false" onclick="showChart('ms')">Wall-clock (ms)</button>
+      </div>
+    </div>
+    <p class="section-note">Each bar is one suite's total over its solved VCs only, split by where the time actually went. Heartbeats are deterministic and reproducible across machines; wall-clock ms is indicative, measured once on one machine — the two views agree on the broad strokes but not the fine ones. Segments under ~4% go unlabeled to keep the bar legible; exact figures are in the tables below.</p>
+
+    <div class="share-chart" id="chart-hb">
+      <div class="share-row">
+        <span class="name">wave</span>
+        <div class="bar" role="img" aria-label="wave: zap 0.6%, simp 5.1%, PA 90.8%, discharge 3.5%">
+          <span class="zap" style="width:0.6%"></span>
+          <span class="simp" style="width:5.1%"></span>
+          <span class="pa" style="width:90.8%">91%</span>
+          <span class="discharge" style="width:3.5%"></span>
+        </div>
+        <span class="total-ms">2,245,444 <span class="chart-unit">hb</span></span>
+      </div>
+
+      <div class="share-row">
+        <span class="name">flux-medium</span>
+        <div class="bar" role="img" aria-label="flux-medium: zap 0.1%, simp 3.5%, PA 65.1%, discharge 31.3%">
+          <span class="zap" style="width:0.1%"></span>
+          <span class="simp" style="width:3.5%"></span>
+          <span class="pa" style="width:65.1%">65%</span>
+          <span class="discharge" style="width:31.3%">31%</span>
+        </div>
+        <span class="total-ms">13,732,138 <span class="chart-unit">hb</span></span>
+      </div>
+
+      <div class="share-row">
+        <span class="name">Flux lean-bench</span>
+        <div class="bar" role="img" aria-label="Flux lean-bench: zap 0.3%, simp 3.9%, PA 78.6%, discharge 17.2%">
+          <span class="zap" style="width:0.3%"></span>
+          <span class="simp" style="width:3.9%"></span>
+          <span class="pa" style="width:78.6%">79%</span>
+          <span class="discharge" style="width:17.2%">17%</span>
+        </div>
+        <span class="total-ms">11,718,575 <span class="chart-unit">hb</span></span>
+      </div>
+
+      <div class="share-row">
+        <span class="name">Liquid-fixpoint</span>
+        <div class="bar" role="img" aria-label="Liquid-fixpoint: zap 0.3%, simp 0%, PA 77.9%, discharge 21.8%">
+          <span class="zap" style="width:0.3%"></span>
+          <span class="simp" style="width:0%"></span>
+          <span class="pa" style="width:77.9%">78%</span>
+          <span class="discharge" style="width:21.8%">22%</span>
+        </div>
+        <span class="total-ms">340,298 <span class="chart-unit">hb</span></span>
+      </div>
+
+      <div class="share-row">
+        <span class="name" style="font-family:'Source Serif 4',serif; font-weight:700;">Total</span>
+        <div class="bar" role="img" aria-label="Total: zap 0.2%, simp 3.7%, PA 73.0%, discharge 23.1%">
+          <span class="zap" style="width:0.2%"></span>
+          <span class="simp" style="width:3.7%"></span>
+          <span class="pa" style="width:73.0%">73%</span>
+          <span class="discharge" style="width:23.1%">23%</span>
+        </div>
+        <span class="total-ms" style="font-weight:600;">28,036,455 <span class="chart-unit">hb</span></span>
+      </div>
+    </div>
+
+    <div class="share-chart" id="chart-ms" hidden>
+      <div class="share-row">
+        <span class="name">wave</span>
+        <div class="bar" role="img" aria-label="wave: zap 1.6%, simp 4.7%, PA 88.9%, discharge 4.8%">
+          <span class="zap" style="width:1.6%"></span>
+          <span class="simp" style="width:4.7%"></span>
+          <span class="pa" style="width:88.9%">89%</span>
+          <span class="discharge" style="width:4.8%"></span>
+        </div>
+        <span class="total-ms">203.4s</span>
+      </div>
+
+      <div class="share-row">
+        <span class="name">flux-medium</span>
+        <div class="bar" role="img" aria-label="flux-medium: zap 0.3%, simp 3.9%, PA 60.1%, discharge 35.7%">
+          <span class="zap" style="width:0.3%"></span>
+          <span class="simp" style="width:3.9%"></span>
+          <span class="pa" style="width:60.1%">60%</span>
+          <span class="discharge" style="width:35.7%">36%</span>
+        </div>
+        <span class="total-ms">954.0s</span>
+      </div>
+
+      <div class="share-row">
+        <span class="name">Flux lean-bench</span>
+        <div class="bar" role="img" aria-label="Flux lean-bench: zap 1.0%, simp 3.8%, PA 73.4%, discharge 21.9%">
+          <span class="zap" style="width:1.0%"></span>
+          <span class="simp" style="width:3.8%"></span>
+          <span class="pa" style="width:73.4%">73%</span>
+          <span class="discharge" style="width:21.9%">22%</span>
+        </div>
+        <span class="total-ms">943.3s</span>
+      </div>
+
+      <div class="share-row">
+        <span class="name">Liquid-fixpoint</span>
+        <div class="bar" role="img" aria-label="Liquid-fixpoint: zap 0.9%, simp 0%, PA 70.8%, discharge 28.4%">
+          <span class="zap" style="width:0.9%"></span>
+          <span class="simp" style="width:0%"></span>
+          <span class="pa" style="width:70.8%">71%</span>
+          <span class="discharge" style="width:28.4%">28%</span>
+        </div>
+        <span class="total-ms">21.8s</span>
+      </div>
+
+      <div class="share-row">
+        <span class="name" style="font-family:'Source Serif 4',serif; font-weight:700;">Total</span>
+        <div class="bar" role="img" aria-label="Total: zap 0.7%, simp 3.9%, PA 68.9%, discharge 26.5%">
+          <span class="zap" style="width:0.7%"></span>
+          <span class="simp" style="width:3.9%"></span>
+          <span class="pa" style="width:68.9%">69%</span>
+          <span class="discharge" style="width:26.5%">27%</span>
+        </div>
+        <span class="total-ms" style="font-weight:600;">2,122.4s</span>
+      </div>
+    </div>
+
+    <div class="legend">
+      <span class="item"><span class="swatch" style="background:var(--b-zap)"></span>zap &mdash; acyclic-&kappa; elimination</span>
+      <span class="item"><span class="swatch" style="background:var(--b-simp)"></span>simp &mdash; cleanup between zap and solve</span>
+      <span class="item"><span class="swatch" style="background:var(--b-pa)"></span>PA &mdash; predicate abstraction / fixpoint on cyclic &kappa;</span>
+      <span class="item"><span class="swatch" style="background:var(--b-discharge)"></span>discharge &mdash; closing the residual VC</span>
+    </div>
+  </section>
+
+  <script>
+    function showChart(which) {
+      var hb = document.getElementById('chart-hb');
+      var ms = document.getElementById('chart-ms');
+      var btnHb = document.getElementById('btn-hb');
+      var btnMs = document.getElementById('btn-ms');
+      hb.hidden = which !== 'hb';
+      ms.hidden = which !== 'ms';
+      btnHb.setAttribute('aria-pressed', String(which === 'hb'));
+      btnMs.setAttribute('aria-pressed', String(which === 'ms'));
+    }
+  </script>
+
+  <section aria-labelledby="sum-h">
+    <h2 id="sum-h">Sum over all VCs</h2>
+    <p class="section-note">Heartbeats/1000 (wall-clock ms), summed across every <em>non-trivial, solved</em> VC in the suite. "triv." = VCs whose VC-file's final <code>def</code> body is literally <code>True</code>, the same non-trivial-VC convention this repo's Table&nbsp;1 already uses. "fail." = VCs whose proof errored. Both are excluded from every total on this page. Heartbeats are deterministic; ms is indicative, measured on one machine.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Benchmark</th><th>#VCs</th><th>triv.</th><th>fail.</th><th>zap</th><th>simp</th><th>PA</th><th>discharge</th><th>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>wave</td><td>74</td><td>195</td><td>3</td>
+            <td>13,545<br><span class="ms">3,279ms</span></td>
+            <td>114,458<br><span class="ms">9,459ms</span></td>
+            <td>2,039,514<br><span class="ms">180,770ms</span></td>
+            <td>77,927<br><span class="ms">9,811ms</span></td>
+            <td>2,245,444<br><span class="ms">203,319ms</span></td>
+          </tr>
+          <tr>
+            <td>flux-medium</td><td>132</td><td>97</td><td>16</td>
+            <td>16,125<br><span class="ms">3,173ms</span></td>
+            <td>480,139<br><span class="ms">37,222ms</span></td>
+            <td>8,933,660<br><span class="ms">573,029ms</span></td>
+            <td>4,302,214<br><span class="ms">340,503ms</span></td>
+            <td>13,732,138<br><span class="ms">953,927ms</span></td>
+          </tr>
+          <tr>
+            <td>Flux lean-bench</td><td>590</td><td>749</td><td>21</td>
+            <td>33,730<br><span class="ms">9,224ms</span></td>
+            <td>455,184<br><span class="ms">35,425ms</span></td>
+            <td>9,214,934<br><span class="ms">692,085ms</span></td>
+            <td>2,014,727<br><span class="ms">206,368ms</span></td>
+            <td>11,718,575<br><span class="ms">943,102ms</span></td>
+          </tr>
+          <tr>
+            <td>Liquid-fixpoint</td><td>45</td><td>0</td><td>2</td>
+            <td>1,170<br><span class="ms">191ms</span></td>
+            <td>0<br><span class="ms">0ms</span></td>
+            <td>265,000<br><span class="ms">15,416ms</span></td>
+            <td>74,128<br><span class="ms">6,178ms</span></td>
+            <td>340,298<br><span class="ms">21,785ms</span></td>
+          </tr>
+          <tr class="total">
+            <td>Total</td><td>841</td><td>1,041</td><td>42</td>
+            <td>64,570<br><span class="ms">15,867ms</span></td>
+            <td>1,049,781<br><span class="ms">82,106ms</span></td>
+            <td>20,453,108<br><span class="ms">1,461,300ms</span></td>
+            <td>6,468,996<br><span class="ms">562,860ms</span></td>
+            <td>28,036,455<br><span class="ms">2,122,133ms</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="note" style="border-left-color: var(--accent);">
+    <span class="mark" style="color: var(--accent);">&#10003;</span>
+    <div>
+      <p>Trivial and failed VCs are dropped entirely, not averaged in. A trivial VC (<code>Flux/VC/&lt;Name&gt;.lean</code>'s final <code>def</code> is literally <code>True</code> &mdash; generated boilerplate with no real proof obligation) would otherwise pad the VC count with near-zero-cost records and quietly pull every mean toward zero. A failed VC is worse: if a proof errors mid-computation &mdash; e.g. hitting <code>maxRecDepth</code> deep inside predicate abstraction &mdash; the exception escapes before <code>benchPhase</code>'s own print statement runs, so its record is missing whichever phases never finished. Mixing that partial record in alongside fully-solved VCs would understate PA/discharge without saying so.</p>
+      <p>1,041 of 1,924 generated VCs (54%) are trivial and 42 (2.2%) failed, both matching this repo's own Table&nbsp;1/Table&nbsp;2 counts (regenerable via <code>make_table.py</code>) VC-for-VC. Every number on this page is computed over the remaining 841 non-trivial, solved VCs only.</p>
+    </div>
+  </div>
+
+  <section aria-labelledby="mean-h">
+    <h2 id="mean-h">Mean per VC &mdash; both &kappa;-structures</h2>
+    <p class="section-note">Sum &divide; #VCs, over non-trivial solved VCs &mdash; weighted across all VCs in the suite, so the Total row is a true per-VC mean, not an average of suite means. Mixing VCs that need no cyclic-&kappa; solving with the (much more expensive) ones that do, as this table does, is exactly what the two tables further down separate out.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Benchmark</th><th>#VCs</th><th>zap</th><th>simp</th><th>PA</th><th>discharge</th><th>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>wave</td><td>74</td>
+            <td>183.0<br><span class="ms">44.3ms</span></td>
+            <td>1,546.7<br><span class="ms">127.8ms</span></td>
+            <td>27,561.0<br><span class="ms">2,442.8ms</span></td>
+            <td>1,053.1<br><span class="ms">132.6ms</span></td>
+            <td>30,343.8<br><span class="ms">2,747.6ms</span></td>
+          </tr>
+          <tr>
+            <td>flux-medium</td><td>132</td>
+            <td>122.2<br><span class="ms">24.0ms</span></td>
+            <td>3,637.4<br><span class="ms">282.0ms</span></td>
+            <td>67,679.2<br><span class="ms">4,341.1ms</span></td>
+            <td>32,592.5<br><span class="ms">2,579.6ms</span></td>
+            <td>104,031.3<br><span class="ms">7,226.7ms</span></td>
+          </tr>
+          <tr>
+            <td>Flux lean-bench</td><td>590</td>
+            <td>57.2<br><span class="ms">15.6ms</span></td>
+            <td>771.5<br><span class="ms">60.0ms</span></td>
+            <td>15,618.5<br><span class="ms">1,173.0ms</span></td>
+            <td>3,414.8<br><span class="ms">349.8ms</span></td>
+            <td>19,862.0<br><span class="ms">1,598.5ms</span></td>
+          </tr>
+          <tr>
+            <td>Liquid-fixpoint</td><td>45</td>
+            <td>26.0<br><span class="ms">4.2ms</span></td>
+            <td>0.0<br><span class="ms">0.0ms</span></td>
+            <td>5,888.9<br><span class="ms">342.6ms</span></td>
+            <td>1,647.3<br><span class="ms">137.3ms</span></td>
+            <td>7,562.2<br><span class="ms">484.1ms</span></td>
+          </tr>
+          <tr class="total">
+            <td>Total</td><td>841</td>
+            <td>76.8<br><span class="ms">18.9ms</span></td>
+            <td>1,248.3<br><span class="ms">97.6ms</span></td>
+            <td>24,320.0<br><span class="ms">1,737.6ms</span></td>
+            <td>7,692.0<br><span class="ms">669.3ms</span></td>
+            <td>33,337.0<br><span class="ms">2,523.3ms</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="mean-acyclic-h">
+    <h2 id="mean-acyclic-h">Mean per VC &mdash; no cyclic &kappa;</h2>
+    <p class="section-note">none / acyclic-only VCs: <code>zap</code> (or, failing that, <code>solve</code>'s own acyclic pass) eliminates every &kappa; the VC has, so there is nothing for predicate abstraction to do &mdash; PA is exactly 0 for every suite below, not just small. 706 of 841 VCs (84%) fall in this group.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Benchmark</th><th>#VCs</th><th>zap</th><th>simp</th><th>PA</th><th>discharge</th><th>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>wave</td><td>67</td>
+            <td>149.1<br><span class="ms">35.5ms</span></td>
+            <td>1,214.7<br><span class="ms">98.9ms</span></td>
+            <td>0.0<br><span class="ms">0.0ms</span></td>
+            <td>643.8<br><span class="ms">77.9ms</span></td>
+            <td>2,007.7<br><span class="ms">212.3ms</span></td>
+          </tr>
+          <tr>
+            <td>flux-medium</td><td>85</td>
+            <td>61.2<br><span class="ms">15.9ms</span></td>
+            <td>1,331.0<br><span class="ms">105.9ms</span></td>
+            <td>0.0<br><span class="ms">0.0ms</span></td>
+            <td>274.3<br><span class="ms">32.3ms</span></td>
+            <td>1,666.5<br><span class="ms">154.0ms</span></td>
+          </tr>
+          <tr>
+            <td>Flux lean-bench</td><td>523</td>
+            <td>40.0<br><span class="ms">13.0ms</span></td>
+            <td>359.0<br><span class="ms">28.7ms</span></td>
+            <td>0.0<br><span class="ms">0.0ms</span></td>
+            <td>171.0<br><span class="ms">22.1ms</span></td>
+            <td>569.9<br><span class="ms">63.9ms</span></td>
+          </tr>
+          <tr>
+            <td>Liquid-fixpoint</td><td>31</td>
+            <td>19.1<br><span class="ms">3.7ms</span></td>
+            <td>0.0<br><span class="ms">0.0ms</span></td>
+            <td>0.0<br><span class="ms">0.0ms</span></td>
+            <td>847.6<br><span class="ms">91.3ms</span></td>
+            <td>866.8<br><span class="ms">95.0ms</span></td>
+          </tr>
+          <tr class="total">
+            <td>Total</td><td>706</td>
+            <td>52.0<br><span class="ms">15.1ms</span></td>
+            <td>541.5<br><span class="ms">43.4ms</span></td>
+            <td>0.0<br><span class="ms">0.0ms</span></td>
+            <td>258.0<br><span class="ms">31.7ms</span></td>
+            <td>851.4<br><span class="ms">90.2ms</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="mean-cyclic-h">
+    <h2 id="mean-cyclic-h">Mean per VC &mdash; has cyclic &kappa;</h2>
+    <p class="section-note">cyclic-only / both VCs: real fixpoint computation on at least one cyclic &kappa;. Just 135 of 841 VCs (16%) &mdash; but they average <strong>151,505 hb</strong> of PA alone, ~6&times; this whole group's own <code>discharge</code> cost and dwarfing everything the "no cyclic &kappa;" group spends on anything.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Benchmark</th><th>#VCs</th><th>zap</th><th>simp</th><th>PA</th><th>discharge</th><th>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>wave</td><td>7</td>
+            <td>507.7<br><span class="ms">128.9ms</span></td>
+            <td>4,724.6<br><span class="ms">405.1ms</span></td>
+            <td>291,359.1<br><span class="ms">25,824.0ms</span></td>
+            <td>4,970.1<br><span class="ms">655.9ms</span></td>
+            <td>301,561.6<br><span class="ms">27,013.9ms</span></td>
+          </tr>
+          <tr>
+            <td>flux-medium</td><td>47</td>
+            <td>232.3<br><span class="ms">38.8ms</span></td>
+            <td>7,808.6<br><span class="ms">600.5ms</span></td>
+            <td>190,077.9<br><span class="ms">12,192.1ms</span></td>
+            <td>91,040.5<br><span class="ms">7,186.4ms</span></td>
+            <td>289,159.3<br><span class="ms">20,017.8ms</span></td>
+          </tr>
+          <tr>
+            <td>Flux lean-bench</td><td>67</td>
+            <td>191.5<br><span class="ms">36.0ms</span></td>
+            <td>3,991.6<br><span class="ms">304.6ms</span></td>
+            <td>137,536.3<br><span class="ms">10,329.6ms</span></td>
+            <td>28,735.8<br><span class="ms">2,907.3ms</span></td>
+            <td>170,455.3<br><span class="ms">13,577.4ms</span></td>
+          </tr>
+          <tr>
+            <td>Liquid-fixpoint</td><td>14</td>
+            <td>41.2<br><span class="ms">5.4ms</span></td>
+            <td>0.0<br><span class="ms">0.0ms</span></td>
+            <td>18,928.6<br><span class="ms">1,101.1ms</span></td>
+            <td>3,417.9<br><span class="ms">239.2ms</span></td>
+            <td>22,387.7<br><span class="ms">1,345.8ms</span></td>
+          </tr>
+          <tr class="total">
+            <td>Total</td><td>135</td>
+            <td>206.5<br><span class="ms">38.6ms</span></td>
+            <td>4,944.6<br><span class="ms">381.2ms</span></td>
+            <td>151,504.5<br><span class="ms">10,824.4ms</span></td>
+            <td>46,569.2<br><span class="ms">4,003.6ms</span></td>
+            <td>203,224.8<br><span class="ms">15,247.9ms</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="method-h">
+    <h2 id="method-h">How the buckets are computed</h2>
+    <p class="section-note">Every phase below is timed by <code>benchPhase</code> (<code>Flex/Tactic/Utils.lean</code>), gated by <code>flex.benchPhases</code>, emitting <code>[phase] &lt;tac&gt;:&lt;phase&gt;=&lt;hb&gt; ms=&lt;ms&gt;</code> into the build log.</p>
+    <div class="method">
+      <div class="def">
+        <span class="k"><span class="swatch" style="background:var(--b-zap)"></span>zap</span>
+        <span class="formula">fusion:sol + fusion:build + fusion:clean + solve_fixpoint:fuse</span>
+      </div>
+      <div class="def">
+        <span class="k"><span class="swatch" style="background:var(--b-simp)"></span>simp</span>
+        <span class="formula">top:simp</span>
+      </div>
+      <div class="def">
+        <span class="k"><span class="swatch" style="background:var(--b-pa)"></span>PA</span>
+        <span class="formula">solve_fixpoint:pa</span>
+      </div>
+      <div class="def">
+        <span class="k"><span class="swatch" style="background:var(--b-discharge)"></span>discharge</span>
+        <span class="formula">solve_fixpoint:close</span>
+      </div>
+    </div>
+    <p class="section-note" style="margin-top:0.5rem;">The no-cyclic-&kappa; / has-cyclic-&kappa; split reuses this repo's existing &kappa;-classification
+      (<code>none</code> / <code>acyclic_only</code> / <code>cyclic_only</code> / <code>both</code>, from
+      <code>[fusion] Start/End &kappa;:</code> log lines &mdash; the same classification behind Table&nbsp;2's
+      kvar breakdown): <code>none</code>/<code>acyclic_only</code> &rarr; no cyclic &kappa;,
+      <code>cyclic_only</code>/<code>both</code> &rarr; has cyclic &kappa;.</p>
+  </section>
+
+  <footer>
+    Source: <code>eval_benchmarks/rq3_table/rq3_phase_table.py</code>, reading the rebuilt
+    <code>*.log</code> files for all four suites. flux-medium aggregates flux-demo, kani-vecdeque and
+    pldi23. Reproduce with <code>python3 scripts/rq3_instrument_phases.py &amp;&amp;
+    python3 eval_benchmarks/rq3_table/rq3_phase_table.py</code>.
+  </footer>
+
+</div>

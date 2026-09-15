@@ -66,8 +66,9 @@ end AddRightQualifs
 open AddRightQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def AddRight_proof : AddRight := by
   unfold AddRight
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

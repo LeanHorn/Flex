@@ -66,8 +66,9 @@ end GcdQualifs
 open GcdQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Gcd_proof : Gcd := by
   unfold Gcd
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

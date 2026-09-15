@@ -66,8 +66,9 @@ end FillVecIndexLoopQualifs
 open FillVecIndexLoopQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def FillVecIndexLoop_proof : FillVecIndexLoop := by
   unfold FillVecIndexLoop
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

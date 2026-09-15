@@ -17,5 +17,6 @@ def maps00Prop : Prop :=
           ∧ (∀ v : Int, v = m2 20 → v = 2)
           ∧ (∀ v : Int, v = m2 30 → v = 0))
 
+set_option flex.benchPhases true
 theorem maps00Proof : maps00Prop := by
   solve_fixpoint

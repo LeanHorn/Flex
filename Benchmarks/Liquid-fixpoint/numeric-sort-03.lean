@@ -22,5 +22,6 @@ def numericSort03Prop : Prop :=
           ∀ t1 : Int, κ1 t1 zero → ∀ v : Int, v = n + t1 → κ1 v zero)
       ∧ (∀ y : Int, ∀ r : Int, κ1 r zero → zero ≤ r)
 
+set_option flex.benchPhases true
 theorem numericSort03Proof : numericSort03Prop := by
   solve_fixpoint

@@ -66,8 +66,9 @@ end TestReplaceReturnMatchesOriginalQualifs
 open TestReplaceReturnMatchesOriginalQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestReplaceReturnMatchesOriginal_proof : TestReplaceReturnMatchesOriginal := by
   unfold TestReplaceReturnMatchesOriginal
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end TypesImpl2ToRawQualifs
 open TypesImpl2ToRawQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__2__ToRaw_proof : TypesImpl__2__ToRaw := by
   unfold TypesImpl__2__ToRaw
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

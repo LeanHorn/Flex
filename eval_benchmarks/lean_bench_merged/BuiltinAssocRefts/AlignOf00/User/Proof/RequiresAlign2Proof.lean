@@ -66,8 +66,9 @@ end RequiresAlign2Qualifs
 open RequiresAlign2Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RequiresAlign2_proof : RequiresAlign2 := by
   unfold RequiresAlign2
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

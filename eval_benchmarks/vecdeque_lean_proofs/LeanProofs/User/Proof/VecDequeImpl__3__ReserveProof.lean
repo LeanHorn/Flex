@@ -66,8 +66,9 @@ end VecDequeImpl3ReserveQualifs
 open VecDequeImpl3ReserveQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VecDequeImpl__3__Reserve_proof : VecDequeImpl__3__Reserve := by
   unfold VecDequeImpl__3__Reserve
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

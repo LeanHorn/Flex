@@ -66,8 +66,9 @@ end BobTest01SimpleQualifs
 open BobTest01SimpleQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def BobTest01Simple_proof : BobTest01Simple := by
   unfold BobTest01Simple
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

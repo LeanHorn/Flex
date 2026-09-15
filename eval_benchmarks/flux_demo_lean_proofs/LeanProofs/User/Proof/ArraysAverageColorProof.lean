@@ -66,8 +66,9 @@ end ArraysAverageColorQualifs
 open ArraysAverageColorQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def ArraysAverageColor_proof : ArraysAverageColor := by
   unfold ArraysAverageColor
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

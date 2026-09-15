@@ -66,8 +66,9 @@ end RuntimeImpl0CopyBufToSandboxQualifs
 open RuntimeImpl0CopyBufToSandboxQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RuntimeImpl__0__CopyBufToSandbox_proof : RuntimeImpl__0__CopyBufToSandbox := by
   unfold RuntimeImpl__0__CopyBufToSandbox
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

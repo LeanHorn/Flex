@@ -66,8 +66,9 @@ end SuccQualifs
 open SuccQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Succ_proof : Succ := by
   unfold Succ
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

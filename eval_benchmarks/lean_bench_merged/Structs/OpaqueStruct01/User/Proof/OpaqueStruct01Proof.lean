@@ -66,8 +66,9 @@ end OpaqueStruct01Qualifs
 open OpaqueStruct01Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def OpaqueStruct01_proof : OpaqueStruct01 := by
   unfold OpaqueStruct01
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

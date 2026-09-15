@@ -66,8 +66,9 @@ end TypesImpl21AtimNowQualifs
 open TypesImpl21AtimNowQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__21__AtimNow_proof : TypesImpl__21__AtimNow := by
   unfold TypesImpl__21__AtimNow
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end TestTakeNoneQualifs
 open TestTakeNoneQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestTakeNone_proof : TestTakeNone := by
   unfold TestTakeNone
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

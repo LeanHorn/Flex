@@ -66,8 +66,9 @@ end TestLowerBoundedErrQualifs
 open TestLowerBoundedErrQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestLowerBoundedErr_proof : TestLowerBoundedErr := by
   unfold TestLowerBoundedErr
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

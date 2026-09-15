@@ -66,8 +66,9 @@ end TestAndNoneRightQualifs
 open TestAndNoneRightQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestAndNoneRight_proof : TestAndNoneRight := by
   unfold TestAndNoneRight
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

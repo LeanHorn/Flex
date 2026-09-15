@@ -66,8 +66,9 @@ end TypesImpl0AlignDownMaskQualifs
 open TypesImpl0AlignDownMaskQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__0__AlignDownMask_proof : TypesImpl__0__AlignDownMask := by
   unfold TypesImpl__0__AlignDownMask
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

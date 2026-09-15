@@ -66,8 +66,9 @@ end ListsNeverQualifs
 open ListsNeverQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def ListsNever_proof : ListsNever := by
   unfold ListsNever
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

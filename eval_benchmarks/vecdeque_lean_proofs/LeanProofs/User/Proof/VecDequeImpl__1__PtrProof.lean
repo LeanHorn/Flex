@@ -66,8 +66,9 @@ end VecDequeImpl1PtrQualifs
 open VecDequeImpl1PtrQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VecDequeImpl__1__Ptr_proof : VecDequeImpl__1__Ptr := by
   unfold VecDequeImpl__1__Ptr
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end TestXorAQualifs
 open TestXorAQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestXorA_proof : TestXorA := by
   unfold TestXorA
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

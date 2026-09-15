@@ -6,5 +6,6 @@ def lhHornProp : Prop :=
       (∀ v : Int, v = x - 1 → κ v x)
       ∧ (∀ y : Int, κ y x → ∀ v : Int, v = y + 1 → 0 ≤ v)
 
+set_option flex.benchPhases true
 theorem lhHornProof : lhHornProp := by
   solve_fixpoint

@@ -4,6 +4,9 @@
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=198 ms=16
 [2/47] Building: arbitrary-kvar-arg-cyclic-anf.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
@@ -44,10 +47,13 @@
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  [k0, k1, k2]
+    [phase] solve_fixpoint:fuse=0 ms=0
     [solve_fixpoint] --- PA on cyclic κ's [k0, k1, k2] ---
     [solve_fixpoint]   PA sol for k0 = ((((((z1 ≥ z3 ∧ z2 ≥ z4) ∧ z3 ≥ z1) ∧ z1 ≤ z3) ∧ z3 ≤ z1) ∧ z4 ≤ z2) ∧ z1 = z3) ∧ z3 = z1
     [solve_fixpoint]   PA sol for k1 = ((((((z0 ≥ z2 ∧ z1 ≥ z3) ∧ z2 ≥ z0) ∧ z0 ≤ z2) ∧ z2 ≤ z0) ∧ z3 ≤ z1) ∧ z0 = z2) ∧ z2 = z0
     [solve_fixpoint]   PA sol for k2 = z0 ≥ z2 ∧ z2 ≤ z0
+    [phase] solve_fixpoint:pa=19409 ms=1637
+    [phase] solve_fixpoint:close=4516 ms=341
 [3/47] Building: arbitrary-kvar-arg-cyclic.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
@@ -62,10 +68,13 @@
     [solve_fixpoint] closed by: native_decide
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  [k0, k1, k2]
+    [phase] solve_fixpoint:fuse=0 ms=0
     [solve_fixpoint] --- PA on cyclic κ's [k0, k1, k2] ---
     [solve_fixpoint]   PA sol for k0 = z1 = z3 ∧ z3 = z1
     [solve_fixpoint]   PA sol for k1 = z0 = z2 ∧ z2 = z0
     [solve_fixpoint]   PA sol for k2 = True
+    [phase] solve_fixpoint:pa=3626 ms=301
+    [phase] solve_fixpoint:close=420 ms=36
 [4/47] Building: arbitrary-kvar-arg.lean ... OK
     [solve_fixpoint] closed by: aesop
     [solve_fixpoint] closed by: aesop
@@ -106,27 +115,41 @@
               ∃ a0,
                 a0 = false ∧ ((z0 = p01 ∧ z1 = p00) ∧ z2 = p01) ∧ z3 = a0 ∨
                   a0 = true ∧ ((z0 = p01 + 1 ∧ z1 = p00) ∧ z2 = p01) ∧ z3 = true
+    [phase] solve_fixpoint:fuse=121 ms=16
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=6054 ms=466
 [5/47] Building: bitv.lean ... ERROR
-    /home/ranjit/Desktop/lean-fixpoint/Benchmarks/Liquid-fixpoint/bitv.lean:41:2: error: maximum recursion depth has been reached
+    /Users/petros/Documents/UCSD/Work/lean-fixpoint/Benchmarks/Liquid-fixpoint/bitv.lean:42:2: error: maximum recursion depth has been reached
     use `set_option maxRecDepth <num>` to increase limit
     use `set_option diagnostics true` to get diagnostic information
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
 [6/47] Building: bitv8.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=1438 ms=142
 [7/47] Building: bitvec-ii.lean ... OK
     [solve_fixpoint] closed by: aesop
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=796 ms=114
 [8/47] Building: bool-neq.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=200 ms=16
 [9/47] Building: comment.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
@@ -151,28 +174,43 @@
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
     [fusion] Start κ: [k1, k2, k3, k0, k5, k4]
+    [phase] fusion:sol=60 ms=43
     [fusion] End κ:   [k4]
+    [phase] fusion:build=61 ms=6
+    [phase] fusion:clean=312 ms=14
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  [k4]
+    [phase] solve_fixpoint:fuse=0 ms=0
     [solve_fixpoint] --- PA on cyclic κ's [k4] ---
     [solve_fixpoint]   PA sol for k4 = (((((z1 ≤ z2 - 1 ∧ z1 < z2) ∧ z1 ≤ z0) ∧ z1 ≤ z2) ∧ z0 ≥ z1) ∧ z2 ≥ z1) ∧ z2 > z1
+    [phase] solve_fixpoint:pa=193938 ms=10000
+    [phase] solve_fixpoint:close=4561 ms=369
 [10/47] Building: constant.lean ... OK
     [solve_fixpoint] closed by: aesop
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=747 ms=90
 [11/47] Building: define_fun01.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=91 ms=47
 [12/47] Building: define_fun02.lean ... ERROR
-    /home/ranjit/Desktop/lean-fixpoint/Benchmarks/Liquid-fixpoint/define_fun02.lean:18:36: error: unexpected token '<<<'; expected '{' or tactic
-    /home/ranjit/Desktop/lean-fixpoint/Benchmarks/Liquid-fixpoint/define_fun02.lean:18:34: error: unsolved goals
+    /Users/petros/Documents/UCSD/Work/lean-fixpoint/Benchmarks/Liquid-fixpoint/define_fun02.lean:19:36: error: unexpected token '<<<'; expected '{' or tactic
+    /Users/petros/Documents/UCSD/Work/lean-fixpoint/Benchmarks/Liquid-fixpoint/define_fun02.lean:19:34: error: unsolved goals
     ⊢ lhSetProp
 [13/47] Building: define_fun03.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=21 ms=7
 [14/47] Building: exists_oddity.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
@@ -182,8 +220,14 @@
     [solve] --- κ0 ---
     [solve]   sol = (∃ a0, a0 = 0 ∧ z0 = a0) ∨ ∃ a2 _x, a2 = 0 ∧ z0 = a2
     [solve]   lam = fun z0 => (∃ a0, a0 = 0 ∧ z0 = a0) ∨ ∃ a2 _x, a2 = 0 ∧ z0 = a2
+    [phase] solve_fixpoint:fuse=19 ms=20
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=293 ms=35
     [fusion] Start κ: [κ0]
+    [phase] fusion:sol=3 ms=6
     [fusion] End κ:   []
+    [phase] fusion:build=4 ms=7
+    [phase] fusion:clean=20 ms=6
 [15/47] Building: flux-no-anf-append.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
@@ -208,6 +252,9 @@
         ∃ a0 a1,
           z1 = a0 :: a1 ∧
             ∃ a2, ((((a2 = a1 ++ z2 ∧ z1 = z1) ∧ z2 = z2) ∧ a0 = a0) ∧ a1 = a1) ∧ (z0 = a0 :: a2 ∧ z1 = z1) ∧ z2 = z2
+    [phase] solve_fixpoint:fuse=74 ms=10
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=638 ms=45
 [16/47] Building: flux-no-anf-dup.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
@@ -238,6 +285,9 @@
     [solve] --- k1 ---
     [solve]   sol = (z0 = z2 ∧ z1 = z1) ∧ z2 = z2
     [solve]   lam = fun z0 z1 z2 => (z0 = z2 ∧ z1 = z1) ∧ z2 = z2
+    [phase] solve_fixpoint:fuse=132 ms=13
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=2530 ms=167
 [17/47] Building: hof_qual.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
@@ -254,6 +304,9 @@
     [solve] --- κ ---
     [solve]   sol = ∃ v, v = z1 - 1 ∧ z0 = v ∧ z1 = z1
     [solve]   lam = fun z0 z1 => ∃ v, v = z1 - 1 ∧ z0 = v ∧ z1 = z1
+    [phase] solve_fixpoint:fuse=15 ms=3
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=296 ms=25
 [19/47] Building: icfp17-ex2.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
@@ -278,6 +331,9 @@
             p = z1 + 1 ∧
               ((∃ v, v = p ∧ z0 = v ∧ z1 = z1) ∨
                 ∃ v, (∃ v_1, v_1 = n ∧ ((v = v_1 ∧ z1 = z1) ∧ n = n) ∧ p = p) ∧ z0 = v ∧ z1 = z1)
+    [phase] solve_fixpoint:fuse=75 ms=6
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=2485 ms=198
 [20/47] Building: icfp17-ex3.lean ... OK
     [solve_fixpoint] closed by: aesop
     [solve_fixpoint] closed by: grind
@@ -294,14 +350,23 @@
     [solve] --- κc ---
     [solve]   sol = ∃ b, (∃ a, (∃ v, 0 ≤ v ∧ a = v) ∧ ∃ v, v = a - 1 ∧ b = v) ∧ ∃ v, v = b + 1 ∧ z0 = v
     [solve]   lam = fun z0 => ∃ b, (∃ a, (∃ v, 0 ≤ v ∧ a = v) ∧ ∃ v, v = a - 1 ∧ b = v) ∧ ∃ v, v = b + 1 ∧ z0 = v
+    [phase] solve_fixpoint:fuse=63 ms=12
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=2609 ms=222
 [21/47] Building: issue-701.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=51 ms=7
 [22/47] Building: issue-738.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=51 ms=12
 [23/47] Building: kut00.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: native_decide
@@ -310,10 +375,16 @@
     [solve] --- κ1 ---
     [solve]   sol = ∃ x, x = 5 ∧ ∃ y, y = x ∧ ∃ v, v = x + y ∧ z0 = v
     [solve]   lam = fun z0 => ∃ x, x = 5 ∧ ∃ y, y = x ∧ ∃ v, v = x + y ∧ z0 = v
+    [phase] solve_fixpoint:fuse=21 ms=5
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=323 ms=28
 [24/47] Building: let-binding00.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=10 ms=6
 [25/47] Building: maps00.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: aesop
@@ -321,6 +392,9 @@
     [solve_fixpoint] closed by: aesop
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=455 ms=72
 [26/47] Building: mod00.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
@@ -330,8 +404,11 @@
     [solve] --- κ0 ---
     [solve]   sol = (∃ a0, a0 = 4 ∧ z0 = a0) ∨ ∃ a1, a1 = 10 ∧ z0 = a1
     [solve]   lam = fun z0 => (∃ a0, a0 = 4 ∧ z0 = a0) ∨ ∃ a1, a1 = 10 ∧ z0 = a1
+    [phase] solve_fixpoint:fuse=18 ms=3
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=410 ms=33
 [27/47] Building: numeric-sort-00.lean ... OK
-    /home/ranjit/Desktop/lean-fixpoint/Benchmarks/Liquid-fixpoint/numeric-sort-00.lean:21:9: warning: unused variable `y`
+    /Users/petros/Documents/UCSD/Work/lean-fixpoint/Benchmarks/Liquid-fixpoint/numeric-sort-00.lean:21:9: warning: unused variable `y`
     
     Note: This linter can be disabled with `set_option linter.unusedVariables false`
     [solve_fixpoint] closed by: grind
@@ -339,10 +416,13 @@
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  [κ1]
+    [phase] solve_fixpoint:fuse=0 ms=0
     [solve_fixpoint] --- PA on cyclic κ's [κ1] ---
     [solve_fixpoint]   PA sol for κ1 = 0 ≤ z0
+    [phase] solve_fixpoint:pa=963 ms=89
+    [phase] solve_fixpoint:close=218 ms=15
 [28/47] Building: numeric-sort-01.lean ... OK
-    /home/ranjit/Desktop/lean-fixpoint/Benchmarks/Liquid-fixpoint/numeric-sort-01.lean:21:9: warning: unused variable `y`
+    /Users/petros/Documents/UCSD/Work/lean-fixpoint/Benchmarks/Liquid-fixpoint/numeric-sort-01.lean:21:9: warning: unused variable `y`
     
     Note: This linter can be disabled with `set_option linter.unusedVariables false`
     [solve_fixpoint] closed by: grind
@@ -350,10 +430,13 @@
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  [κ1]
+    [phase] solve_fixpoint:fuse=0 ms=0
     [solve_fixpoint] --- PA on cyclic κ's [κ1] ---
     [solve_fixpoint]   PA sol for κ1 = 0 ≤ z0
+    [phase] solve_fixpoint:pa=963 ms=114
+    [phase] solve_fixpoint:close=218 ms=24
 [29/47] Building: numeric-sort-02.lean ... OK
-    /home/ranjit/Desktop/lean-fixpoint/Benchmarks/Liquid-fixpoint/numeric-sort-02.lean:26:11: warning: unused variable `y`
+    /Users/petros/Documents/UCSD/Work/lean-fixpoint/Benchmarks/Liquid-fixpoint/numeric-sort-02.lean:26:11: warning: unused variable `y`
     
     Note: This linter can be disabled with `set_option linter.unusedVariables false`
     [solve_fixpoint] closed by: grind
@@ -371,10 +454,13 @@
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  [κ1]
+    [phase] solve_fixpoint:fuse=0 ms=0
     [solve_fixpoint] --- PA on cyclic κ's [κ1] ---
     [solve_fixpoint]   PA sol for κ1 = ((((0 ≤ z0 ∧ 0 ≤ z1) ∧ z1 ≤ 0) ∧ z1 = 0) ∧ z1 ≤ z0) ∧ z0 ≥ z1
+    [phase] solve_fixpoint:pa=4007 ms=334
+    [phase] solve_fixpoint:close=1430 ms=133
 [30/47] Building: numeric-sort-03.lean ... OK
-    /home/ranjit/Desktop/lean-fixpoint/Benchmarks/Liquid-fixpoint/numeric-sort-03.lean:23:11: warning: unused variable `y`
+    /Users/petros/Documents/UCSD/Work/lean-fixpoint/Benchmarks/Liquid-fixpoint/numeric-sort-03.lean:23:11: warning: unused variable `y`
     
     Note: This linter can be disabled with `set_option linter.unusedVariables false`
     [solve_fixpoint] closed by: grind
@@ -392,28 +478,46 @@
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  [κ1]
+    [phase] solve_fixpoint:fuse=0 ms=0
     [solve_fixpoint] --- PA on cyclic κ's [κ1] ---
     [solve_fixpoint]   PA sol for κ1 = ((((0 ≤ z0 ∧ 0 ≤ z1) ∧ z1 ≤ 0) ∧ z1 = 0) ∧ z1 ≤ z0) ∧ z0 ≥ z1
+    [phase] solve_fixpoint:pa=4007 ms=275
+    [phase] solve_fixpoint:close=1430 ms=112
 [31/47] Building: ple0.lean ... OK
     [solve_fixpoint] closed by: aesop
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=125 ms=42
 [32/47] Building: ple_list00.lean ... OK
     [solve_fixpoint] closed by: aesop
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=149 ms=50
 [33/47] Building: ple_list01_adt.lean ... OK
     [solve_fixpoint] closed by: aesop
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=149 ms=45
 [34/47] Building: ple_sum.lean ... OK
     [solve_fixpoint] closed by: aesop
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=393 ms=61
 [35/47] Building: ple_sum_fuel-4.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=329 ms=28
 [36/47] Building: scrape00.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
@@ -532,6 +636,7 @@
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  [κ0, κ1]
+    [phase] solve_fixpoint:fuse=0 ms=0
     [solve_fixpoint] --- PA on cyclic κ's [κ0, κ1] ---
     [solve_fixpoint]   PA sol for κ0 = (((((((0 ≤ z0 ∧ 0 ≤ z1) ∧ 0 ≤ z2) ∧ z0 ≤ z2) ∧ z1 ≤ z0) ∧ z1 ≤ z2) ∧ z0 ≥ z1) ∧ z2 ≥ z0) ∧ z2 ≥ z1
     [solve_fixpoint]   PA sol for κ1 = ((((((((((((((z0 = z1 - z2 ∧ z2 = z1 - z0) ∧ 0 ≤ z0) ∧ 0 ≤ z1) ∧ 0 ≤ z2) ∧ 0 ≤ z3) ∧ z0 ≤ z1) ∧ z0 ≤ z3) ∧ z1 ≤ z3) ∧
@@ -542,6 +647,8 @@
           z3 ≥ z0) ∧
         z3 ≥ z1) ∧
       z3 ≥ z2
+    [phase] solve_fixpoint:pa=33513 ms=2325
+    [phase] solve_fixpoint:close=14147 ms=972
 [38/47] Building: scrape02.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
@@ -590,7 +697,7 @@
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: [k0, k4]
-    [solve_fixpoint] Cyclic κ:  [k5, k1, k2, k3]
+    [solve_fixpoint] Cyclic κ:  [k5, k3, k1, k2]
     [solve] --- k0 ---
     [solve]   sol = ∃ a1, f_get_mode z1 a1 = Adt0.mkadt0_0 ∧ (z0 = a1 ∧ z1 = z1) ∧ z2 = z2
     [solve]   lam = fun z0 z1 z2 => ∃ a1, f_get_mode z1 a1 = Adt0.mkadt0_0 ∧ (z0 = a1 ∧ z1 = z1) ∧ z2 = z2
@@ -616,7 +723,8 @@
                 ∃ _a20 a24 a25 a26,
                   ?k5 a24 z4 z5 a7 a25 a26 ∧
                     ∃ a27 a28 a29, ((((z0 = a24 ∧ z1 = a27) ∧ z2 = a28) ∧ z3 = a29) ∧ z4 = z4) ∧ z5 = z5
-    [solve_fixpoint] --- PA on cyclic κ's [k5, k1, k2, k3] ---
+    [phase] solve_fixpoint:fuse=144 ms=12
+    [solve_fixpoint] --- PA on cyclic κ's [k5, k3, k1, k2] ---
     [solve_fixpoint]   PA sol for k5 = (((((((((((((f_get_mode z1 z0 = Adt0.mkadt0_0 ∧ f_get_mode z1 z2 = Adt0.mkadt0_0) ∧ f_get_mode z1 z3 = Adt0.mkadt0_0) ∧
                             f_get_mode z1 z4 = Adt0.mkadt0_0) ∧
                           f_get_mode z1 z5 = Adt0.mkadt0_0) ∧
@@ -630,6 +738,7 @@
           z3 = 0) ∧
         z4 = 0) ∧
       z5 = 0
+    [solve_fixpoint]   PA sol for k3 = ((((f_get_mode z1 z0 = Adt0.mkadt0_0 ∧ f_get_mode z1 z2 = Adt0.mkadt0_0) ∧ 1 ≤ z0) ∧ 1 ≤ z2) ∧ z0 = 0) ∧ z2 = 0
     [solve_fixpoint]   PA sol for k1 = ((((((((((f_get_mode z3 z0 = Adt0.mkadt0_0 ∧ f_get_mode z3 z1 = Adt0.mkadt0_0) ∧ f_get_mode z3 z2 = Adt0.mkadt0_0) ∧
                       f_get_mode z3 z4 = Adt0.mkadt0_0) ∧
                     1 ≤ z0) ∧
@@ -647,19 +756,20 @@
           z0 = 0) ∧
         z1 = 0) ∧
       z3 = 0
-    [solve_fixpoint]   PA sol for k3 = ((((f_get_mode z1 z0 = Adt0.mkadt0_0 ∧ f_get_mode z1 z2 = Adt0.mkadt0_0) ∧ 1 ≤ z0) ∧ 1 ≤ z2) ∧ z0 = 0) ∧ z2 = 0
+    [phase] solve_fixpoint:pa=184 ms=15
+    [phase] solve_fixpoint:close=19413 ms=1228
 [39/47] Building: scrape03.lean ... OK
-    /home/ranjit/Desktop/lean-fixpoint/Benchmarks/Liquid-fixpoint/scrape03.lean:34:10: warning: unused variable `a2`
+    /Users/petros/Documents/UCSD/Work/lean-fixpoint/Benchmarks/Liquid-fixpoint/scrape03.lean:34:10: warning: unused variable `a2`
     
     Note: This linter can be disabled with `set_option linter.unusedVariables false`
-    /home/ranjit/Desktop/lean-fixpoint/Benchmarks/Liquid-fixpoint/scrape03.lean:35:12: warning: unused variable `a3`
+    /Users/petros/Documents/UCSD/Work/lean-fixpoint/Benchmarks/Liquid-fixpoint/scrape03.lean:35:12: warning: unused variable `a3`
     
     Note: This linter can be disabled with `set_option linter.unusedVariables false`
     [solve_fixpoint] closed by: grind
-    /home/ranjit/Desktop/lean-fixpoint/Benchmarks/Liquid-fixpoint/scrape03.lean:41:2: warning: aesop: failed to prove the goal after exhaustive search.
+    /Users/petros/Documents/UCSD/Work/lean-fixpoint/Benchmarks/Liquid-fixpoint/scrape03.lean:42:2: warning: aesop: failed to prove the goal after exhaustive search.
     [solve_fixpoint] closed by: aesop
     [solve_fixpoint] closed by: bv_decide
-    /home/ranjit/Desktop/lean-fixpoint/Benchmarks/Liquid-fixpoint/scrape03.lean:41:2: warning: aesop: failed to prove the goal after exhaustive search.
+    /Users/petros/Documents/UCSD/Work/lean-fixpoint/Benchmarks/Liquid-fixpoint/scrape03.lean:42:2: warning: aesop: failed to prove the goal after exhaustive search.
     [solve_fixpoint] closed by: aesop
     [solve_fixpoint] closed by: bv_decide
     [solve_fixpoint] closed by: aesop
@@ -668,28 +778,37 @@
     [solve] --- κ ---
     [solve]   sol = ∃ a0, z0 = a0
     [solve]   lam = fun z0 => ∃ a0, z0 = a0
+    [phase] solve_fixpoint:fuse=6 ms=5
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=3350 ms=645
 [40/47] Building: str00.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=25 ms=8
 [41/47] Building: str01.lean ... OK
     [solve_fixpoint] closed by: aesop
     [solve_fixpoint] closed by: aesop
-    /home/ranjit/Desktop/lean-fixpoint/Benchmarks/Liquid-fixpoint/str01.lean:21:2: warning: aesop: failed to prove the goal after exhaustive search.
+    /Users/petros/Documents/UCSD/Work/lean-fixpoint/Benchmarks/Liquid-fixpoint/str01.lean:22:2: warning: aesop: failed to prove the goal after exhaustive search.
     [solve_fixpoint] closed by: aesop
     [solve_fixpoint] closed by: native_decide
-    /home/ranjit/Desktop/lean-fixpoint/Benchmarks/Liquid-fixpoint/str01.lean:21:2: warning: aesop: failed to prove the goal after exhaustive search.
+    /Users/petros/Documents/UCSD/Work/lean-fixpoint/Benchmarks/Liquid-fixpoint/str01.lean:22:2: warning: aesop: failed to prove the goal after exhaustive search.
     [solve_fixpoint] closed by: aesop
     [solve_fixpoint] closed by: native_decide
-    /home/ranjit/Desktop/lean-fixpoint/Benchmarks/Liquid-fixpoint/str01.lean:21:2: warning: aesop: failed to prove the goal after exhaustive search.
+    /Users/petros/Documents/UCSD/Work/lean-fixpoint/Benchmarks/Liquid-fixpoint/str01.lean:22:2: warning: aesop: failed to prove the goal after exhaustive search.
     [solve_fixpoint] closed by: aesop
     [solve_fixpoint] closed by: native_decide
     [solve_fixpoint] closed by: aesop
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=1121 ms=127
 [42/47] Building: sum_rec-ok.lean ... OK
-    /home/ranjit/Desktop/lean-fixpoint/Benchmarks/Liquid-fixpoint/sum_rec-ok.lean:21:9: warning: unused variable `y`
+    /Users/petros/Documents/UCSD/Work/lean-fixpoint/Benchmarks/Liquid-fixpoint/sum_rec-ok.lean:21:9: warning: unused variable `y`
     
     Note: This linter can be disabled with `set_option linter.unusedVariables false`
     [solve_fixpoint] closed by: grind
@@ -697,8 +816,11 @@
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  [κ1]
+    [phase] solve_fixpoint:fuse=0 ms=0
     [solve_fixpoint] --- PA on cyclic κ's [κ1] ---
     [solve_fixpoint]   PA sol for κ1 = 0 ≤ z0
+    [phase] solve_fixpoint:pa=963 ms=93
+    [phase] solve_fixpoint:close=218 ms=21
 [43/47] Building: sum_rec.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
@@ -711,17 +833,26 @@
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  [κ1]
+    [phase] solve_fixpoint:fuse=0 ms=1
     [solve_fixpoint] --- PA on cyclic κ's [κ1] ---
     [solve_fixpoint]   PA sol for κ1 = ((0 ≤ z0 ∧ z1 ≤ 0) ∧ z1 ≤ z0) ∧ z0 ≥ z1
+    [phase] solve_fixpoint:pa=2545 ms=181
+    [phase] solve_fixpoint:close=848 ms=71
 [44/47] Building: test00.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=96 ms=11
 [45/47] Building: test01.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  []
+    [phase] solve_fixpoint:fuse=0 ms=0
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=202 ms=26
 [46/47] Building: test02.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
@@ -730,6 +861,9 @@
     [solve] --- κ0 ---
     [solve]   sol = ∃ y, y > z1 + 100 ∧ ∃ v, v = z1 + y ∧ z0 = v ∧ z1 = z1
     [solve]   lam = fun z0 z1 => ∃ y, y > z1 + 100 ∧ ∃ v, v = z1 + y ∧ z0 = v ∧ z1 = z1
+    [phase] solve_fixpoint:fuse=22 ms=3
+    [phase] solve_fixpoint:pa=0 ms=0
+    [phase] solve_fixpoint:close=642 ms=38
 [47/47] Building: test03.lean ... OK
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] closed by: grind
@@ -738,5 +872,8 @@
     [solve_fixpoint] closed by: grind
     [solve_fixpoint] Acyclic κ: []
     [solve_fixpoint] Cyclic κ:  [κ1]
+    [phase] solve_fixpoint:fuse=0 ms=0
     [solve_fixpoint] --- PA on cyclic κ's [κ1] ---
     [solve_fixpoint]   PA sol for κ1 = z0 ≥ 0 ∧ z0 ≥ z1
+    [phase] solve_fixpoint:pa=882 ms=52
+    [phase] solve_fixpoint:close=432 ms=27

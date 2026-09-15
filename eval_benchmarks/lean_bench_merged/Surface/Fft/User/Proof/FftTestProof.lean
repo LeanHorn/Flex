@@ -66,8 +66,9 @@ end FftTestQualifs
 open FftTestQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def FftTest_proof : FftTest := by
   unfold FftTest
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end KmeansAddQualifs
 open KmeansAddQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def KmeansAdd_proof : KmeansAdd := by
   unfold KmeansAdd
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

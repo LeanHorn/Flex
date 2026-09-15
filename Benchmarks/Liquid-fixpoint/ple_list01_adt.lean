@@ -12,5 +12,6 @@ def pleListProp : Prop :=
   ∀ x : Int, True → ∀ y : Int, y = 2 → ∀ z : Int, z = 3 →
     vecLen (Vec.vcons x (Vec.vcons y (Vec.vcons z Vec.vnil))) = 3
 
+set_option flex.benchPhases true
 theorem pleListProof : pleListProp := by
   solve_fixpoint

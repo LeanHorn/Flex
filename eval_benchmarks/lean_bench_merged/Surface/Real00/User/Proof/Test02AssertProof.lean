@@ -66,8 +66,9 @@ end Test02AssertQualifs
 open Test02AssertQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Test02Assert_proof : Test02Assert := by
   unfold Test02Assert
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

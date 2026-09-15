@@ -66,8 +66,9 @@ end Impl1ForeachQualifs
 open Impl1ForeachQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Impl__1__Foreach_proof : Impl__1__Foreach := by
   unfold Impl__1__Foreach
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

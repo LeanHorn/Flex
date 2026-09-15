@@ -66,8 +66,9 @@ end SimplexEnterVarQualifs
 open SimplexEnterVarQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def SimplexEnterVar_proof : SimplexEnterVar := by
   unfold SimplexEnterVar
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

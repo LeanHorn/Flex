@@ -66,8 +66,9 @@ end VecVecGetMutQualifs
 open VecVecGetMutQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VecVecGetMut_proof : VecVecGetMut := by
   unfold VecVecGetMut
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end BitwiseShlU32I32Qualifs
 open BitwiseShlU32I32Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def BitwiseShlU32I32_proof : BitwiseShlU32I32 := by
   unfold BitwiseShlU32I32
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

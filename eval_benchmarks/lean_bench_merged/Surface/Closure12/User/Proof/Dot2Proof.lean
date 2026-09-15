@@ -66,8 +66,9 @@ end Dot2Qualifs
 open Dot2Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Dot2_proof : Dot2 := by
   unfold Dot2
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

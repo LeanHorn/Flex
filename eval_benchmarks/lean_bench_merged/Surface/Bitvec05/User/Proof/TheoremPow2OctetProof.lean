@@ -66,8 +66,9 @@ end TheoremPow2OctetQualifs
 open TheoremPow2OctetQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TheoremPow2Octet_proof : TheoremPow2Octet := by
   unfold TheoremPow2Octet
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

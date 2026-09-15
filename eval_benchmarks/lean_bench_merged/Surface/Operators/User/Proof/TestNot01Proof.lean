@@ -66,8 +66,9 @@ end TestNot01Qualifs
 open TestNot01Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestNot01_proof : TestNot01 := by
   unfold TestNot01
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

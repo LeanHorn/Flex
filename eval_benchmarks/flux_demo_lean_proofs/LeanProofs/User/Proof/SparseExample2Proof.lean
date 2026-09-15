@@ -66,8 +66,9 @@ end SparseExample2Qualifs
 open SparseExample2Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def SparseExample2_proof : SparseExample2 := by
   unfold SparseExample2
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

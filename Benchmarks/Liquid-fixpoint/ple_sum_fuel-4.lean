@@ -10,5 +10,6 @@ def pleSumFuel4Prop : Prop :=
   ∀ x : Int, 0 ≤ mySum (x - 5) → 5 ≤ x → 15 ≤ mySum x
 
 -- needs much more automation due to bounded x ≤ 5
+set_option flex.benchPhases true
 theorem pleSumFuel4Proof : pleSumFuel4Prop := by
   solve_fixpoint

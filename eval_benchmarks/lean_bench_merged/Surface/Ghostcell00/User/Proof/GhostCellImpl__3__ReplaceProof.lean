@@ -66,8 +66,9 @@ end GhostCellImpl3ReplaceQualifs
 open GhostCellImpl3ReplaceQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def GhostCellImpl__3__Replace_proof : GhostCellImpl__3__Replace := by
   unfold GhostCellImpl__3__Replace
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

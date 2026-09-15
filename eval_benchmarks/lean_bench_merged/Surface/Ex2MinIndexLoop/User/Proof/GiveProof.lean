@@ -66,8 +66,9 @@ end GiveQualifs
 open GiveQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Give_proof : Give := by
   unfold Give
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

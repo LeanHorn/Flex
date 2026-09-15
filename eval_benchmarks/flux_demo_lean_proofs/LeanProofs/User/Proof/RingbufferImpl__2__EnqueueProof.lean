@@ -66,8 +66,9 @@ end RingbufferImpl2EnqueueQualifs
 open RingbufferImpl2EnqueueQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RingbufferImpl__2__Enqueue_proof : RingbufferImpl__2__Enqueue := by
   unfold RingbufferImpl__2__Enqueue
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

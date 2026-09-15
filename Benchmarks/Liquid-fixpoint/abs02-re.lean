@@ -21,5 +21,6 @@ def lhGroundProp : Prop :=
           ∀ v : Int, 0 ≤ v →
             0 ≤ v))
 
+set_option flex.benchPhases true
 theorem lhGroundProof : lhGroundProp := by
   solve_fixpoint

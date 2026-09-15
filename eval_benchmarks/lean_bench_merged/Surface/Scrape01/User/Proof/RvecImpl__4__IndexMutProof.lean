@@ -66,8 +66,9 @@ end RvecImpl4IndexMutQualifs
 open RvecImpl4IndexMutQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RvecImpl__4__IndexMut_proof : RvecImpl__4__IndexMut := by
   unfold RvecImpl__4__IndexMut
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

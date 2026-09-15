@@ -42,5 +42,6 @@ def arbitraryKvarArg : Prop :=
          k0 a10 a11 p00 p01 a0 ∧ k1 a11 p00 p01 a0 →
            a10 = p00)
 
+set_option flex.benchPhases true
 theorem arbitraryKvarArg_proof : arbitraryKvarArg := by
   solve_fixpoint

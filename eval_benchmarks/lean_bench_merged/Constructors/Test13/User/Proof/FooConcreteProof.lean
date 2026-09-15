@@ -66,8 +66,9 @@ end FooConcreteQualifs
 open FooConcreteQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def FooConcrete_proof : FooConcrete := by
   unfold FooConcrete
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

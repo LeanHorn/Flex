@@ -66,8 +66,9 @@ end BinarySearchQualifs
 open BinarySearchQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def BinarySearch_proof : BinarySearch := by
   unfold BinarySearch
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end Wasm2cFrontendAdjustOflagsQualifs
 open Wasm2cFrontendAdjustOflagsQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Wasm2cFrontendAdjustOflags_proof : Wasm2cFrontendAdjustOflags := by
   unfold Wasm2cFrontendAdjustOflags
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

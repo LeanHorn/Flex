@@ -66,8 +66,9 @@ end TakeMutRefQualifs
 open TakeMutRefQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TakeMutRef_proof : TakeMutRef := by
   unfold TakeMutRef
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

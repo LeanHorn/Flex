@@ -66,8 +66,9 @@ end TestUnwrapOrQualifs
 open TestUnwrapOrQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestUnwrapOr_proof : TestUnwrapOr := by
   unfold TestUnwrapOr
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

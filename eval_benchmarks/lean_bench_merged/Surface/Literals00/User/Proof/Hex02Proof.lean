@@ -66,8 +66,9 @@ end Hex02Qualifs
 open Hex02Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Hex02_proof : Hex02 := by
   unfold Hex02
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

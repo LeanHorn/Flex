@@ -66,8 +66,9 @@ end TypesImpl29SubscriptionClockAbstimeQualifs
 open TypesImpl29SubscriptionClockAbstimeQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__29__SubscriptionClockAbstime_proof : TypesImpl__29__SubscriptionClockAbstime := by
   unfold TypesImpl__29__SubscriptionClockAbstime
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

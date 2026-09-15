@@ -66,8 +66,9 @@ end TypesPlatformImpl1TryFromQualifs
 open TypesPlatformImpl1TryFromQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesPlatformImpl__1__TryFrom_proof : TypesPlatformImpl__1__TryFrom := by
   unfold TypesPlatformImpl__1__TryFrom
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

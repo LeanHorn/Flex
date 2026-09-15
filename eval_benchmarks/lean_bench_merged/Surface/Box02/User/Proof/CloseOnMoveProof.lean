@@ -66,8 +66,9 @@ end CloseOnMoveQualifs
 open CloseOnMoveQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def CloseOnMove_proof : CloseOnMove := by
   unfold CloseOnMove
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

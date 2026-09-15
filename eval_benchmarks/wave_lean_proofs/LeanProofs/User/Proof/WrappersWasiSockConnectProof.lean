@@ -66,8 +66,9 @@ end WrappersWasiSockConnectQualifs
 open WrappersWasiSockConnectQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def WrappersWasiSockConnect_proof : WrappersWasiSockConnect := by
   unfold WrappersWasiSockConnect
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

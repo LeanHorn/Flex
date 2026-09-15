@@ -66,8 +66,9 @@ end FirstHalfQualifs
 open FirstHalfQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def FirstHalf_proof : FirstHalf := by
   unfold FirstHalf
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end IsSomeFlipQualifs
 open IsSomeFlipQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def IsSomeFlip_proof : IsSomeFlip := by
   unfold IsSomeFlip
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

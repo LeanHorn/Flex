@@ -66,8 +66,9 @@ end TestOrSomeRightQualifs
 open TestOrSomeRightQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestOrSomeRight_proof : TestOrSomeRight := by
   unfold TestOrSomeRight
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end VecDequeImpl3IsEmptyQualifs
 open VecDequeImpl3IsEmptyQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VecDequeImpl__3__IsEmpty_proof : VecDequeImpl__3__IsEmpty := by
   unfold VecDequeImpl__3__IsEmpty
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

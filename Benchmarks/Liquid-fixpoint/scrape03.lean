@@ -37,6 +37,7 @@ def scrape03 : Prop :=
             ∧ extractBit (computeV a1) 1 = true
             ∧ extractBit (computeV a1) 5 = false)
 
+set_option flex.benchPhases true
 theorem scrape03_proof : scrape03 := by
   solve_fixpoint
   -- all_goals bv_decide

@@ -66,8 +66,9 @@ end VecDequeImpl0DefaultQualifs
 open VecDequeImpl0DefaultQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VecDequeImpl__0__Default_proof : VecDequeImpl__0__Default := by
   unfold VecDequeImpl__0__Default
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

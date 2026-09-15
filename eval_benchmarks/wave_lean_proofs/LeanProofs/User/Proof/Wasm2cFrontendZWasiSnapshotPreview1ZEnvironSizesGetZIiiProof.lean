@@ -66,8 +66,9 @@ end Wasm2cFrontendZWasiSnapshotPreview1ZEnvironSizesGetZIiiQualifs
 open Wasm2cFrontendZWasiSnapshotPreview1ZEnvironSizesGetZIiiQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Wasm2cFrontendZWasiSnapshotPreview1ZEnvironSizesGetZIii_proof : Wasm2cFrontendZWasiSnapshotPreview1ZEnvironSizesGetZIii := by
   unfold Wasm2cFrontendZWasiSnapshotPreview1ZEnvironSizesGetZIii
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

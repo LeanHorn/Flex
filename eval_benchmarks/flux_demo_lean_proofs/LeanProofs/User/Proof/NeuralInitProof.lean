@@ -66,8 +66,9 @@ end NeuralInitQualifs
 open NeuralInitQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def NeuralInit_proof : NeuralInit := by
   unfold NeuralInit
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

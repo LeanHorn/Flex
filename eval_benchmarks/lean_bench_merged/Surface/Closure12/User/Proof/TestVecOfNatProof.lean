@@ -66,8 +66,9 @@ end TestVecOfNatQualifs
 open TestVecOfNatQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestVecOfNat_proof : TestVecOfNat := by
   unfold TestVecOfNat
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

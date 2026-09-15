@@ -66,8 +66,9 @@ end TestRepeatReturnGeqZeroQualifs
 open TestRepeatReturnGeqZeroQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestRepeatReturnGeqZero_proof : TestRepeatReturnGeqZero := by
   unfold TestRepeatReturnGeqZero
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end TypesImpl9TryFromQualifs
 open TypesImpl9TryFromQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__9__TryFrom_proof : TypesImpl__9__TryFrom := by
   unfold TypesImpl__9__TryFrom
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

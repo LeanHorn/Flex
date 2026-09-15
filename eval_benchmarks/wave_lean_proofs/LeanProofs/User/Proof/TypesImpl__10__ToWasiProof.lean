@@ -66,8 +66,9 @@ end TypesImpl10ToWasiQualifs
 open TypesImpl10ToWasiQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__10__ToWasi_proof : TypesImpl__10__ToWasi := by
   unfold TypesImpl__10__ToWasi
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

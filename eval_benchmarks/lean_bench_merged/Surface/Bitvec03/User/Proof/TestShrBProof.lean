@@ -66,8 +66,9 @@ end TestShrBQualifs
 open TestShrBQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestShrB_proof : TestShrB := by
   unfold TestShrB
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

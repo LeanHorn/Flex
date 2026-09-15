@@ -66,8 +66,9 @@ end NeuralImpl1BackwardQualifs
 open NeuralImpl1BackwardQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def NeuralImpl__1__Backward_proof : NeuralImpl__1__Backward := by
   unfold NeuralImpl__1__Backward
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

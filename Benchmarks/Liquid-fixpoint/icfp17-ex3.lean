@@ -7,5 +7,6 @@ def icfp17Ex3Prop : Prop :=
     ∧ (∀ v : Int, 0 ≤ v → κa v)
     ∧ (∀ v : Int, κc v → 0 ≤ v)
 
+set_option flex.benchPhases true
 theorem icfp17Ex3Proof : icfp17Ex3Prop := by
   solve_fixpoint

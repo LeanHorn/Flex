@@ -66,8 +66,9 @@ end NormalizeCentersQualifs
 open NormalizeCentersQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def NormalizeCenters_proof : NormalizeCenters := by
   unfold NormalizeCenters
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

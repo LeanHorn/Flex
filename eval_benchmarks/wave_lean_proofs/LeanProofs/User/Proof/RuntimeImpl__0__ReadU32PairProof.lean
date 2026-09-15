@@ -66,8 +66,9 @@ end RuntimeImpl0ReadU32PairQualifs
 open RuntimeImpl0ReadU32PairQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RuntimeImpl__0__ReadU32Pair_proof : RuntimeImpl__0__ReadU32Pair := by
   unfold RuntimeImpl__0__ReadU32Pair
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

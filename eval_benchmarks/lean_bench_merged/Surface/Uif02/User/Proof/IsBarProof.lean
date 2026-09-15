@@ -66,8 +66,9 @@ end IsBarQualifs
 open IsBarQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def IsBar_proof : IsBar := by
   unfold IsBar
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

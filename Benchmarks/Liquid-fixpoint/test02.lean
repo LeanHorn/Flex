@@ -24,5 +24,6 @@ def sumRec3Prop : Prop :=
       (∀ y : Int, y > x + 100 → ∀ v : Int, v = x + y → κ0 v x)
       ∧ (∀ z : Int, κ0 z x → ∀ v : Int, v = x + z → v > 100)
 
+set_option flex.benchPhases true
 theorem sumRec3Proof : sumRec3Prop := by
   solve_fixpoint

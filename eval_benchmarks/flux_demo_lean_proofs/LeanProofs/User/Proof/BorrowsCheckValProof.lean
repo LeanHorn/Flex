@@ -66,8 +66,9 @@ end BorrowsCheckValQualifs
 open BorrowsCheckValQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def BorrowsCheckVal_proof : BorrowsCheckVal := by
   unfold BorrowsCheckVal
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

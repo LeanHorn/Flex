@@ -66,8 +66,9 @@ end VectorsCopyWithIterQualifs
 open VectorsCopyWithIterQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VectorsCopyWithIter_proof : VectorsCopyWithIter := by
   unfold VectorsCopyWithIter
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

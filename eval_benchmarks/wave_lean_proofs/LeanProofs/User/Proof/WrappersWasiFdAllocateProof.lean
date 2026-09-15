@@ -66,8 +66,9 @@ end WrappersWasiFdAllocateQualifs
 open WrappersWasiFdAllocateQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def WrappersWasiFdAllocate_proof : WrappersWasiFdAllocate := by
   unfold WrappersWasiFdAllocate
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

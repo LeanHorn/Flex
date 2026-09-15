@@ -66,8 +66,9 @@ end MapreduceMapQualifs
 open MapreduceMapQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def MapreduceMap_proof : MapreduceMap := by
   unfold MapreduceMap
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

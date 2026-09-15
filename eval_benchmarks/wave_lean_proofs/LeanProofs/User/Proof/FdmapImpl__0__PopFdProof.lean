@@ -66,8 +66,9 @@ end FdmapImpl0PopFdQualifs
 open FdmapImpl0PopFdQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def FdmapImpl__0__PopFd_proof : FdmapImpl__0__PopFd := by
   unfold FdmapImpl__0__PopFd
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

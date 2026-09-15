@@ -66,8 +66,9 @@ end TypesImpl36AddrInNetlistQualifs
 open TypesImpl36AddrInNetlistQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__36__AddrInNetlist_proof : TypesImpl__36__AddrInNetlist := by
   unfold TypesImpl__36__AddrInNetlist
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

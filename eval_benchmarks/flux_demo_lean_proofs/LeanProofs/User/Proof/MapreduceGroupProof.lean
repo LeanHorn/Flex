@@ -66,8 +66,9 @@ end MapreduceGroupQualifs
 open MapreduceGroupQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def MapreduceGroup_proof : MapreduceGroup := by
   unfold MapreduceGroup
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end LoopAQualifs
 open LoopAQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def LoopA_proof : LoopA := by
   unfold LoopA
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

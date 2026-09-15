@@ -66,8 +66,9 @@ end TypesImpl34FromPosixQualifs
 open TypesImpl34FromPosixQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__34__FromPosix_proof : TypesImpl__34__FromPosix := by
   unfold TypesImpl__34__FromPosix
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

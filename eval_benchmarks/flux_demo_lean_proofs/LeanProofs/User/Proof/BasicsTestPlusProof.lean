@@ -66,8 +66,9 @@ end BasicsTestPlusQualifs
 open BasicsTestPlusQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def BasicsTestPlus_proof : BasicsTestPlus := by
   unfold BasicsTestPlus
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

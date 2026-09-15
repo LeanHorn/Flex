@@ -66,8 +66,9 @@ end Impl5UpcastQualifs
 open Impl5UpcastQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Impl__5__Upcast_proof : Impl__5__Upcast := by
   unfold Impl__5__Upcast
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

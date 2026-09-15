@@ -66,8 +66,9 @@ end TypesFreshLibcTimespecQualifs
 open TypesFreshLibcTimespecQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesFreshLibcTimespec_proof : TypesFreshLibcTimespec := by
   unfold TypesFreshLibcTimespec
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

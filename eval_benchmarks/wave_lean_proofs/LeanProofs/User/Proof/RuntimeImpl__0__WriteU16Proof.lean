@@ -66,8 +66,9 @@ end RuntimeImpl0WriteU16Qualifs
 open RuntimeImpl0WriteU16Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RuntimeImpl__0__WriteU16_proof : RuntimeImpl__0__WriteU16 := by
   unfold RuntimeImpl__0__WriteU16
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

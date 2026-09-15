@@ -66,8 +66,9 @@ end TestShlAQualifs
 open TestShlAQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestShlA_proof : TestShlA := by
   unfold TestShlA
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

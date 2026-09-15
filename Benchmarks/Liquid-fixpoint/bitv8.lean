@@ -36,5 +36,6 @@ def bitv8_vc : Prop :=
             ∀ res_ : BitVec 16, res_ = x_ + y_ →
               res_.toInt = 3)
 
+set_option flex.benchPhases true
 theorem bitv8_proof : bitv8_vc := by
   solve_fixpoint

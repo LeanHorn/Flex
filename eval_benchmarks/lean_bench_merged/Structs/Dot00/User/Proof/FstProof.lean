@@ -66,8 +66,9 @@ end FstQualifs
 open FstQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Fst_proof : Fst := by
   unfold Fst
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

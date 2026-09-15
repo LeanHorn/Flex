@@ -66,8 +66,9 @@ end StatsNoopInstrumentationOutputSyscallPerfResultsQualifs
 open StatsNoopInstrumentationOutputSyscallPerfResultsQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def StatsNoopInstrumentationOutputSyscallPerfResults_proof : StatsNoopInstrumentationOutputSyscallPerfResults := by
   unfold StatsNoopInstrumentationOutputSyscallPerfResults
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

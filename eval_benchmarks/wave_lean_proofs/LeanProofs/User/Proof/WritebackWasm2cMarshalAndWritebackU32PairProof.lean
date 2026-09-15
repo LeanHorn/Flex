@@ -66,8 +66,9 @@ end WritebackWasm2cMarshalAndWritebackU32PairQualifs
 open WritebackWasm2cMarshalAndWritebackU32PairQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def WritebackWasm2cMarshalAndWritebackU32Pair_proof : WritebackWasm2cMarshalAndWritebackU32Pair := by
   unfold WritebackWasm2cMarshalAndWritebackU32Pair
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -1,16 +1,16 @@
 % Table 1: Non-trivial VCs and Proof Failures
 \begin{table}[t]
 \centering\small
-\begin{tabular}{lrrrrr}
+\begin{tabular}{lrrrrrr}
 \toprule
-Benchmark & \#CHCs & Success & Success (cyclic) & LF time & \sys Time \\
+Benchmark & \#CHCs & Success & \#Cyclic & Success (cyclic) & LF time & \sys Time \\
 \midrule
-\fluxmedium & 148 & 89.2\% & 60 (78.3\%) & — & 9.5m \\
-\wavesuite & 77 & 96.1\% & 10 (70.0\%) & — & 4.0m \\
-\fluxtests & 614 & 96.6\% & 80 (83.8\%) & — & 7.4m \\
-\lfsuite & 47 & 95.7\% & 14 (100.0\%) & — & 58.0s \\
+\fluxmedium & 148 & 89.2\% & 60 & 47 (78.3\%) & — & 9.5m \\
+\wavesuite & 77 & 96.1\% & 10 & 7 (70.0\%) & — & 4.0m \\
+\fluxtests & 614 & 96.6\% & 80 & 67 (83.8\%) & — & 18.0m \\
+\lfsuite & 47 & 95.7\% & 14 & 14 (100.0\%) & — & 2.1m \\
 \midrule
-\textbf{Total} & 886 & 95.3\% & 164 (82.3\%) & — & 21.8m \\
+\textbf{Total} & 886 & 95.3\% & 164 & 135 (82.3\%) & — & 33.6m \\
 \bottomrule
 \end{tabular}
 \caption{Automation coverage of the full solver pipeline (\zap{} followed by

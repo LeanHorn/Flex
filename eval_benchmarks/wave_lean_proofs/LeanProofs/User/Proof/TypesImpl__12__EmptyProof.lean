@@ -66,8 +66,9 @@ end TypesImpl12EmptyQualifs
 open TypesImpl12EmptyQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__12__Empty_proof : TypesImpl__12__Empty := by
   unfold TypesImpl__12__Empty
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

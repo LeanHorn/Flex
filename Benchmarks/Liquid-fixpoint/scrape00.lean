@@ -71,5 +71,6 @@ def scrape00Prop : Prop :=
               κ0 a6 a0 a1 ∧ κ1 a5 a6 a0 a1))
 
 set_option maxRecDepth 1000 in
+set_option flex.benchPhases true
 theorem scrape00Proof : scrape00Prop := by
   solve_fixpoint

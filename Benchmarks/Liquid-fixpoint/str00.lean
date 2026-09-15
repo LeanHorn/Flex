@@ -21,5 +21,6 @@ import Flex
 def scrape03Prop : Prop :=
   ∀ x : String, x = "cat" → ∀ y : String, y = "dog" → x = "cat" ∧ y = "dog"
 
+set_option flex.benchPhases true
 theorem scrape03Proof : scrape03Prop := by
   solve_fixpoint

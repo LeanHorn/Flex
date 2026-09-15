@@ -66,8 +66,9 @@ end TestDigitQualifs
 open TestDigitQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestDigit_proof : TestDigit := by
   unfold TestDigit
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end F64ToF32Qualifs
 open F64ToF32Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def F64ToF32_proof : F64ToF32 := by
   unfold F64ToF32
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

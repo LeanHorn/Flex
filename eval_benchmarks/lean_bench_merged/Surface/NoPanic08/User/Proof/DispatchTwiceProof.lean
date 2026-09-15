@@ -66,8 +66,9 @@ end DispatchTwiceQualifs
 open DispatchTwiceQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def DispatchTwice_proof : DispatchTwice := by
   unfold DispatchTwice
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

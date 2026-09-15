@@ -66,8 +66,9 @@ end RangeImpl3IntoIterQualifs
 open RangeImpl3IntoIterQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RangeImpl__3__IntoIter_proof : RangeImpl__3__IntoIter := by
   unfold RangeImpl__3__IntoIter
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end RangeSpreadI32Qualifs
 open RangeSpreadI32Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RangeSpreadI32_proof : RangeSpreadI32 := by
   unfold RangeSpreadI32
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end KnuthShuffleQualifs
 open KnuthShuffleQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def KnuthShuffle_proof : KnuthShuffle := by
   unfold KnuthShuffle
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

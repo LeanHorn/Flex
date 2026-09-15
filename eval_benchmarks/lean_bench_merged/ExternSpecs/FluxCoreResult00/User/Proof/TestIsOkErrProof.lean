@@ -66,8 +66,9 @@ end TestIsOkErrQualifs
 open TestIsOkErrQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestIsOkErr_proof : TestIsOkErr := by
   unfold TestIsOkErr
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

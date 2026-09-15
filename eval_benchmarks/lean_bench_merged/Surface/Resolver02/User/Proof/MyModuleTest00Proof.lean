@@ -66,8 +66,9 @@ end MyModuleTest00Qualifs
 open MyModuleTest00Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def MyModuleTest00_proof : MyModuleTest00 := by
   unfold MyModuleTest00
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

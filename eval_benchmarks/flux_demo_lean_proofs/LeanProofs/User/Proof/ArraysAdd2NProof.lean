@@ -66,8 +66,9 @@ end ArraysAdd2NQualifs
 open ArraysAdd2NQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def ArraysAdd2N_proof : ArraysAdd2N := by
   unfold ArraysAdd2N
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

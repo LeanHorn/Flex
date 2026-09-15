@@ -66,8 +66,9 @@ end FdmapImpl0DeleteQualifs
 open FdmapImpl0DeleteQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def FdmapImpl__0__Delete_proof : FdmapImpl__0__Delete := by
   unfold FdmapImpl__0__Delete
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

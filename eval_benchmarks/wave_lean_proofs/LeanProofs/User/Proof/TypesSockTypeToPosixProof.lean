@@ -66,8 +66,9 @@ end TypesSockTypeToPosixQualifs
 open TypesSockTypeToPosixQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesSockTypeToPosix_proof : TypesSockTypeToPosix := by
   unfold TypesSockTypeToPosix
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

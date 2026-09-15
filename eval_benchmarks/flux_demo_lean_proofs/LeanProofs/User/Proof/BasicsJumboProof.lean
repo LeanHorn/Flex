@@ -66,8 +66,9 @@ end BasicsJumboQualifs
 open BasicsJumboQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def BasicsJumbo_proof : BasicsJumbo := by
   unfold BasicsJumbo
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

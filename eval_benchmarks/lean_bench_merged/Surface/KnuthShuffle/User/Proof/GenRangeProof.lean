@@ -66,8 +66,9 @@ end GenRangeQualifs
 open GenRangeQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def GenRange_proof : GenRange := by
   unfold GenRange
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

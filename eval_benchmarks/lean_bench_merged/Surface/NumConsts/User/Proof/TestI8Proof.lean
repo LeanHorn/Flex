@@ -66,8 +66,9 @@ end TestI8Qualifs
 open TestI8Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestI8_proof : TestI8 := by
   unfold TestI8
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

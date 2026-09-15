@@ -66,8 +66,9 @@ end SelectQualifs
 open SelectQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Select_proof : Select := by
   unfold Select
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

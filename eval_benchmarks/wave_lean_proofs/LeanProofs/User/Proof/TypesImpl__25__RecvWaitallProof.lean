@@ -66,8 +66,9 @@ end TypesImpl25RecvWaitallQualifs
 open TypesImpl25RecvWaitallQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__25__RecvWaitall_proof : TypesImpl__25__RecvWaitall := by
   unfold TypesImpl__25__RecvWaitall
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

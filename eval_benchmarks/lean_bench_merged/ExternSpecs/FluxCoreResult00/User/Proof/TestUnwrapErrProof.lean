@@ -66,8 +66,9 @@ end TestUnwrapErrQualifs
 open TestUnwrapErrQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestUnwrapErr_proof : TestUnwrapErr := by
   unfold TestUnwrapErr
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end UseFooQualifs
 open UseFooQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def UseFoo_proof : UseFoo := by
   unfold UseFoo
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

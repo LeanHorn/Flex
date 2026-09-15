@@ -66,8 +66,9 @@ end TypesPlatformImpl3ParseQualifs
 open TypesPlatformImpl3ParseQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesPlatformImpl__3__Parse_proof : TypesPlatformImpl__3__Parse := by
   unfold TypesPlatformImpl__3__Parse
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

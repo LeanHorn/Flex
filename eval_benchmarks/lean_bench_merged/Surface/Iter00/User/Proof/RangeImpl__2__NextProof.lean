@@ -66,8 +66,9 @@ end RangeImpl2NextQualifs
 open RangeImpl2NextQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RangeImpl__2__Next_proof : RangeImpl__2__Next := by
   unfold RangeImpl__2__Next
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end TestSplitFirstEmptyQualifs
 open TestSplitFirstEmptyQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestSplitFirstEmpty_proof : TestSplitFirstEmpty := by
   unfold TestSplitFirstEmpty
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

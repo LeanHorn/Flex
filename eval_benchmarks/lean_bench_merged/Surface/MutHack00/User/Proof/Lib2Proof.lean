@@ -66,8 +66,9 @@ end Lib2Qualifs
 open Lib2Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Lib2_proof : Lib2 := by
   unfold Lib2
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

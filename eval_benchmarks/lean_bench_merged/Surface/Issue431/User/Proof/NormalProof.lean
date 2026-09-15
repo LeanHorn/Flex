@@ -66,8 +66,9 @@ end NormalQualifs
 open NormalQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Normal_proof : Normal := by
   unfold Normal
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

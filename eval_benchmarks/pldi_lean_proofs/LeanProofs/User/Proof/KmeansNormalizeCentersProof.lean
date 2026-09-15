@@ -66,8 +66,9 @@ end KmeansNormalizeCentersQualifs
 open KmeansNormalizeCentersQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def KmeansNormalizeCenters_proof : KmeansNormalizeCenters := by
   unfold KmeansNormalizeCenters
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

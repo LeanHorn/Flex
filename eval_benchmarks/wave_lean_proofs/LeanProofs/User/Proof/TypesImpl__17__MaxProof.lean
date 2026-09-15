@@ -66,8 +66,9 @@ end TypesImpl17MaxQualifs
 open TypesImpl17MaxQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__17__Max_proof : TypesImpl__17__Max := by
   unfold TypesImpl__17__Max
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

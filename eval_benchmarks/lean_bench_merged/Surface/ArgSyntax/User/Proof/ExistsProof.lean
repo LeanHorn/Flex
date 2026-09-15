@@ -66,8 +66,9 @@ end ExistsQualifs
 open ExistsQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Exists_proof : Exists := by
   unfold Exists
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

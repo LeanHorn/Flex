@@ -66,8 +66,9 @@ end WrappersWasiPathRenameQualifs
 open WrappersWasiPathRenameQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def WrappersWasiPathRename_proof : WrappersWasiPathRename := by
   unfold WrappersWasiPathRename
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

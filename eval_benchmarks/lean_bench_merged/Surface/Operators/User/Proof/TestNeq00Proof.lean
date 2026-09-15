@@ -66,8 +66,9 @@ end TestNeq00Qualifs
 open TestNeq00Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestNeq00_proof : TestNeq00 := by
   unfold TestNeq00
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

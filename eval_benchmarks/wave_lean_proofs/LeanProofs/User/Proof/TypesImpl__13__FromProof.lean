@@ -66,8 +66,9 @@ end TypesImpl13FromQualifs
 open TypesImpl13FromQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__13__From_proof : TypesImpl__13__From := by
   unfold TypesImpl__13__From
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

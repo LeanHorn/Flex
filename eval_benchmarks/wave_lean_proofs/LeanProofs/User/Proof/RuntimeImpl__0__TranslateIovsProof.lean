@@ -70,8 +70,9 @@ end RuntimeImpl0TranslateIovsQualifs
 open RuntimeImpl0TranslateIovsQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RuntimeImpl__0__TranslateIovs_proof : RuntimeImpl__0__TranslateIovs := by
   unfold RuntimeImpl__0__TranslateIovs
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end LoopC1Qualifs
 open LoopC1Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def LoopC1_proof : LoopC1 := by
   unfold LoopC1
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end Impl1SendQualifs
 open Impl1SendQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Impl__1__Send_proof : Impl__1__Send := by
   unfold Impl__1__Send
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

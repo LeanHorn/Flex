@@ -66,8 +66,9 @@ end Impl1AreaQualifs
 open Impl1AreaQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Impl__1__Area_proof : Impl__1__Area := by
   unfold Impl__1__Area
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

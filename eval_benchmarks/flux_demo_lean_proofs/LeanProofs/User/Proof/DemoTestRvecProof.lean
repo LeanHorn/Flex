@@ -66,8 +66,9 @@ end DemoTestRvecQualifs
 open DemoTestRvecQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def DemoTestRvec_proof : DemoTestRvec := by
   unfold DemoTestRvec
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

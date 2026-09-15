@@ -66,8 +66,9 @@ end TestRcQualifs
 open TestRcQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestRc_proof : TestRc := by
   unfold TestRc
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

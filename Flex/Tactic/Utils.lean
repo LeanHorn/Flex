@@ -10,17 +10,22 @@ register_option flex.benchPhases : Bool := {
   descr    := "Emit per-phase heartbeat deltas for the RQ3 evaluation."
 }
 
-/-- Measure the heartbeats consumed by `act` and, iff
-    `flex.benchPhases` is set, print `[phase] <tac>:<phase>=<hb/1000>`.
+/-- Measure the heartbeats AND wall-clock ms consumed by `act` and, iff
+    `flex.benchPhases` is set, print `[phase] <tac>:<phase>=<hb/1000> ms=<ms>`.
+    The `<tac>:<phase>=<hb>` prefix is kept byte-for-byte from the original
+    heartbeats-only format (consumed by `scripts/run_rq3.py`'s `PHASE_RE`);
+    the ` ms=<ms>` suffix is new and simply ignored by that older regex.
     Generic over the tactic/meta monad (needs options + IO lifting). -/
 @[inline] def benchPhase {m : Type → Type} {α : Type}
     [Monad m] [MonadLiftT IO m] [MonadOptions m]
     (tac phase : String) (act : m α) : m α := do
   if flex.benchPhases.get (← getOptions) then
     let h0 ← (IO.getNumHeartbeats : IO Nat)
+    let t0 ← (IO.monoMsNow : IO Nat)
     let r ← act
     let h1 ← (IO.getNumHeartbeats : IO Nat)
-    (IO.println s!"[phase] {tac}:{phase}={(h1 - h0) / 1000}" : IO Unit)
+    let t1 ← (IO.monoMsNow : IO Nat)
+    (IO.println s!"[phase] {tac}:{phase}={(h1 - h0) / 1000} ms={t1 - t0}" : IO Unit)
     pure r
   else
     act

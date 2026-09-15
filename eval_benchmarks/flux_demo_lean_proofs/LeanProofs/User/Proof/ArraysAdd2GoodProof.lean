@@ -66,8 +66,9 @@ end ArraysAdd2GoodQualifs
 open ArraysAdd2GoodQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def ArraysAdd2Good_proof : ArraysAdd2Good := by
   unfold ArraysAdd2Good
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

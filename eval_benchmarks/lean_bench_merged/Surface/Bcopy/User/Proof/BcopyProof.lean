@@ -66,8 +66,9 @@ end BcopyQualifs
 open BcopyQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Bcopy_proof : Bcopy := by
   unfold Bcopy
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

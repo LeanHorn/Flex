@@ -66,8 +66,9 @@ end TestCountI32Qualifs
 open TestCountI32Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestCountI32_proof : TestCountI32 := by
   unfold TestCountI32
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

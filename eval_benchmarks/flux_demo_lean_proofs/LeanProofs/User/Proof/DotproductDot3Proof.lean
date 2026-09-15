@@ -66,8 +66,9 @@ end DotproductDot3Qualifs
 open DotproductDot3Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def DotproductDot3_proof : DotproductDot3 := by
   unfold DotproductDot3
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

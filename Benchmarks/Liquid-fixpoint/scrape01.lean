@@ -65,5 +65,6 @@ def scrape01Prop : Prop :=
           ∧ (a4 < a1 → ∀ a5 : Int, a5 = a3 + 1 → ∀ a6 : Int, a6 = a4 + 1 →
               κ0 a6 a0 a1 ∧ κ1 a5 a6 a0 a1))
 
+set_option flex.benchPhases true
 theorem scrape01Proof : scrape01Prop := by
   solve_fixpoint

@@ -66,8 +66,9 @@ end WrappersWasiClockTimeGetQualifs
 open WrappersWasiClockTimeGetQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def WrappersWasiClockTimeGet_proof : WrappersWasiClockTimeGet := by
   unfold WrappersWasiClockTimeGet
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

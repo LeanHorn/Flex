@@ -66,8 +66,9 @@ end Tuple00Qualifs
 open Tuple00Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Tuple00_proof : Tuple00 := by
   unfold Tuple00
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

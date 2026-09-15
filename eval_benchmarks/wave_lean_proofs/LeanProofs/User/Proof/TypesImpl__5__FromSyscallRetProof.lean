@@ -66,8 +66,9 @@ end TypesImpl5FromSyscallRetQualifs
 open TypesImpl5FromSyscallRetQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__5__FromSyscallRet_proof : TypesImpl__5__FromSyscallRet := by
   unfold TypesImpl__5__FromSyscallRet
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

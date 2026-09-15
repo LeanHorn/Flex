@@ -66,8 +66,9 @@ end TestGetInBoundsQualifs
 open TestGetInBoundsQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestGetInBounds_proof : TestGetInBounds := by
   unfold TestGetInBounds
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

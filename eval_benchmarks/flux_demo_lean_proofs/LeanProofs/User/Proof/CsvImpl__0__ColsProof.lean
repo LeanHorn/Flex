@@ -66,8 +66,9 @@ end CsvImpl0ColsQualifs
 open CsvImpl0ColsQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def CsvImpl__0__Cols_proof : CsvImpl__0__Cols := by
   unfold CsvImpl__0__Cols
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

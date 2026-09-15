@@ -66,8 +66,9 @@ end TestStringLen3Qualifs
 open TestStringLen3Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestStringLen3_proof : TestStringLen3 := by
   unfold TestStringLen3
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

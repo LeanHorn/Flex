@@ -66,8 +66,9 @@ end TypesImpl32WriteQualifs
 open TypesImpl32WriteQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__32__Write_proof : TypesImpl__32__Write := by
   unfold TypesImpl__32__Write
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end IsFebDayQualifs
 open IsFebDayQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def IsFebDay_proof : IsFebDay := by
   unfold IsFebDay
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

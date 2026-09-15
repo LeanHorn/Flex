@@ -56,5 +56,6 @@ def sumRecProp : Prop :=
     -- Use: κ1(r, y) ⇒ 0 ≤ r
     ∧ (∀ y : Int, ∀ r : Int, κ1 r y → 0 ≤ r)
 
+set_option flex.benchPhases true
 theorem sumRecProof : sumRecProp := by
   solve_fixpoint

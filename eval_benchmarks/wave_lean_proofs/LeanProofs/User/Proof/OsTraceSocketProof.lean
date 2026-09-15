@@ -66,8 +66,9 @@ end OsTraceSocketQualifs
 open OsTraceSocketQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def OsTraceSocket_proof : OsTraceSocket := by
   unfold OsTraceSocket
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

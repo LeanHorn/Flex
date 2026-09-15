@@ -66,8 +66,9 @@ end RuntimeImpl0ReadU64Qualifs
 open RuntimeImpl0ReadU64Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RuntimeImpl__0__ReadU64_proof : RuntimeImpl__0__ReadU64 := by
   unfold RuntimeImpl__0__ReadU64
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

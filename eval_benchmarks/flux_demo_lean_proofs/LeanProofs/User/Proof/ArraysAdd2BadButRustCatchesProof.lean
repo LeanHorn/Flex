@@ -66,8 +66,9 @@ end ArraysAdd2BadButRustCatchesQualifs
 open ArraysAdd2BadButRustCatchesQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def ArraysAdd2BadButRustCatches_proof : ArraysAdd2BadButRustCatches := by
   unfold ArraysAdd2BadButRustCatches
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end Impl0GetMutQualifs
 open Impl0GetMutQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Impl__0__GetMut_proof : Impl__0__GetMut := by
   unfold Impl__0__GetMut
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

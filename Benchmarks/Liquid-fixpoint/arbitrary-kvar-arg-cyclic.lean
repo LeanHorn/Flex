@@ -37,5 +37,6 @@ def arbitraryKvarArgCyclic : Prop :=
             ∧ (k1 a1.fld00 (a1.fld01 + 1) p0.fld00 p0.fld01)
             ∧ (k2 (a1.fld01 + 1) p0.fld00 p0.fld01)))
 
+set_option flex.benchPhases true
 theorem arbitraryKvarArgCyclic_proof : arbitraryKvarArgCyclic := by
   solve_fixpoint

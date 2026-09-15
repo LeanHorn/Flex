@@ -66,8 +66,9 @@ end TestI64Qualifs
 open TestI64Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestI64_proof : TestI64 := by
   unfold TestI64
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

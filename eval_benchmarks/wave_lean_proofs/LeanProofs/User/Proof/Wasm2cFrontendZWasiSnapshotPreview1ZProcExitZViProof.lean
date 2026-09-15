@@ -66,8 +66,9 @@ end Wasm2cFrontendZWasiSnapshotPreview1ZProcExitZViQualifs
 open Wasm2cFrontendZWasiSnapshotPreview1ZProcExitZViQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Wasm2cFrontendZWasiSnapshotPreview1ZProcExitZVi_proof : Wasm2cFrontendZWasiSnapshotPreview1ZProcExitZVi := by
   unfold Wasm2cFrontendZWasiSnapshotPreview1ZProcExitZVi
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

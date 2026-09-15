@@ -66,8 +66,9 @@ end TestSkipSliceQualifs
 open TestSkipSliceQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestSkipSlice_proof : TestSkipSlice := by
   unfold TestSkipSlice
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

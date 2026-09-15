@@ -66,8 +66,9 @@ end VecDequeImpl1WrapSubQualifs
 open VecDequeImpl1WrapSubQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VecDequeImpl__1__WrapSub_proof : VecDequeImpl__1__WrapSub := by
   unfold VecDequeImpl__1__WrapSub
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

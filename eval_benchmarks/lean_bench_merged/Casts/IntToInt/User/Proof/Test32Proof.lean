@@ -66,8 +66,9 @@ end Test32Qualifs
 open Test32Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Test32_proof : Test32 := by
   unfold Test32
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

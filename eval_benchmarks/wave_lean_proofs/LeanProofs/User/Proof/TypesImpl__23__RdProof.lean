@@ -66,8 +66,9 @@ end TypesImpl23RdQualifs
 open TypesImpl23RdQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__23__Rd_proof : TypesImpl__23__Rd := by
   unfold TypesImpl__23__Rd
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

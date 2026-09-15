@@ -66,8 +66,9 @@ end BazQualifs
 open BazQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Baz_proof : Baz := by
   unfold Baz
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

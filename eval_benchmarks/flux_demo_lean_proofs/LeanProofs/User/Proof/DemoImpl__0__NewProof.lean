@@ -66,8 +66,9 @@ end DemoImpl0NewQualifs
 open DemoImpl0NewQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def DemoImpl__0__New_proof : DemoImpl__0__New := by
   unfold DemoImpl__0__New
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

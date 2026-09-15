@@ -66,8 +66,9 @@ end TestBothBoundedSuOkQualifs
 open TestBothBoundedSuOkQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestBothBoundedSuOk_proof : TestBothBoundedSuOk := by
   unfold TestBothBoundedSuOk
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

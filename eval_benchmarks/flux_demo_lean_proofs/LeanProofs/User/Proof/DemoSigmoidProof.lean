@@ -66,8 +66,9 @@ end DemoSigmoidQualifs
 open DemoSigmoidQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def DemoSigmoid_proof : DemoSigmoid := by
   unfold DemoSigmoid
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

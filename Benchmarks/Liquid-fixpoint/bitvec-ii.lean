@@ -11,5 +11,6 @@ def bitvec_ii_vc : Prop :=
       ∀ y : BitVec 32, x = y →
         x.signExtend 64 = y.signExtend 64)
 
+set_option flex.benchPhases true
 theorem bitvec_ii_proof : bitvec_ii_vc := by
   solve_fixpoint

@@ -66,8 +66,9 @@ end UninitImpl0FromFullyUninitQualifs
 open UninitImpl0FromFullyUninitQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def UninitImpl__0__FromFullyUninit_proof : UninitImpl__0__FromFullyUninit := by
   unfold UninitImpl__0__FromFullyUninit
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

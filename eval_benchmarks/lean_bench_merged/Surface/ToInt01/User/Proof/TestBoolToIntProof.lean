@@ -66,8 +66,9 @@ end TestBoolToIntQualifs
 open TestBoolToIntQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestBoolToInt_proof : TestBoolToInt := by
   unfold TestBoolToInt
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

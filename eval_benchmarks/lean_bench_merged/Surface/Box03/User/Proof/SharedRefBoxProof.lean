@@ -66,8 +66,9 @@ end SharedRefBoxQualifs
 open SharedRefBoxQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def SharedRefBox_proof : SharedRefBox := by
   unfold SharedRefBox
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

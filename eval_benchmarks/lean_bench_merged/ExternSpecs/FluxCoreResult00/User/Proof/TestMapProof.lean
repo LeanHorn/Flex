@@ -66,8 +66,9 @@ end TestMapQualifs
 open TestMapQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestMap_proof : TestMap := by
   unfold TestMap
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

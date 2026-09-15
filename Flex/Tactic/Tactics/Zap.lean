@@ -1,4 +1,12 @@
 import Lean
+import Flex.Tactic.Utils
+
+open Lean Elab Tactic Meta in
+/-- `simp [*]`, timed under `flex.benchPhases` as phase `top:simp` — the
+    cleanup step between `zap` and `solve` in the RQ3 benchmark proof shape
+    (`(try zap) ; (try benchSimpStar) ; (try solve)`). -/
+elab "benchSimpStar" : tactic => do
+  benchPhase "top" "simp" (evalTactic (← `(tactic| simp [*])))
 
 open Lean Elab Tactic Meta in
 private partial def zapCore : TacticM Unit := do

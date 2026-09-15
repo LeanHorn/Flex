@@ -66,8 +66,9 @@ end Impl2FromQualifs
 open Impl2FromQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Impl__2__From_proof : Impl__2__From := by
   unfold Impl__2__From
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end RunClosureQualifs
 open RunClosureQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RunClosure_proof : RunClosure := by
   unfold RunClosure
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

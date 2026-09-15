@@ -66,8 +66,9 @@ end Impl0EnqueueQualifs
 open Impl0EnqueueQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Impl__0__Enqueue_proof : Impl__0__Enqueue := by
   unfold Impl__0__Enqueue
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

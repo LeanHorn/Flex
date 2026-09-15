@@ -66,8 +66,9 @@ end WrappersWasiFdDatasyncQualifs
 open WrappersWasiFdDatasyncQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def WrappersWasiFdDatasync_proof : WrappersWasiFdDatasync := by
   unfold WrappersWasiFdDatasync
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

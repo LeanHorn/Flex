@@ -66,8 +66,9 @@ end NeverQualifs
 open NeverQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Never_proof : Never := by
   unfold Never
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

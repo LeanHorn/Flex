@@ -66,8 +66,9 @@ end RawVecImpl1CapacityQualifs
 open RawVecImpl1CapacityQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RawVecImpl__1__Capacity_proof : RawVecImpl__1__Capacity := by
   unfold RawVecImpl__1__Capacity
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end RingbufferImpl2IsFullQualifs
 open RingbufferImpl2IsFullQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RingbufferImpl__2__IsFull_proof : RingbufferImpl__2__IsFull := by
   unfold RingbufferImpl__2__IsFull
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

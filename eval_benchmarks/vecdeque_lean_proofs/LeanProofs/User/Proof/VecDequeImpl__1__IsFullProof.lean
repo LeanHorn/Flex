@@ -66,8 +66,9 @@ end VecDequeImpl1IsFullQualifs
 open VecDequeImpl1IsFullQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VecDequeImpl__1__IsFull_proof : VecDequeImpl__1__IsFull := by
   unfold VecDequeImpl__1__IsFull
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

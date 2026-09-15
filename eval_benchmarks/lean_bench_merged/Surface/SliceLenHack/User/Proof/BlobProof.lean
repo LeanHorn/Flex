@@ -66,8 +66,9 @@ end BlobQualifs
 open BlobQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Blob_proof : Blob := by
   unfold Blob
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

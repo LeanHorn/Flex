@@ -66,8 +66,9 @@ end VecDequeImpl3LenQualifs
 open VecDequeImpl3LenQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VecDequeImpl__3__Len_proof : VecDequeImpl__3__Len := by
   unfold VecDequeImpl__3__Len
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

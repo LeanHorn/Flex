@@ -66,8 +66,9 @@ end PollPollParseFdsQualifs
 open PollPollParseFdsQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def PollPollParseFds_proof : PollPollParseFds := by
   unfold PollPollParseFds
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

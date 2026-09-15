@@ -66,8 +66,9 @@ end VecDequeImpl3FrontMutQualifs
 open VecDequeImpl3FrontMutQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VecDequeImpl__3__FrontMut_proof : VecDequeImpl__3__FrontMut := by
   unfold VecDequeImpl__3__FrontMut
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

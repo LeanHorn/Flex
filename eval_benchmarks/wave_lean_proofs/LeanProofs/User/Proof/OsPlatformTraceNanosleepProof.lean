@@ -66,8 +66,9 @@ end OsPlatformTraceNanosleepQualifs
 open OsPlatformTraceNanosleepQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def OsPlatformTraceNanosleep_proof : OsPlatformTraceNanosleep := by
   unfold OsPlatformTraceNanosleep
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

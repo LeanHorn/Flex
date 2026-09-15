@@ -66,8 +66,9 @@ end LogicalNotTQualifs
 open LogicalNotTQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def LogicalNotT_proof : LogicalNotT := by
   unfold LogicalNotT
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

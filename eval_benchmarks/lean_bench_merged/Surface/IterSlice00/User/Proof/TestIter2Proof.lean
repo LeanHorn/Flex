@@ -66,8 +66,9 @@ end TestIter2Qualifs
 open TestIter2Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestIter2_proof : TestIter2 := by
   unfold TestIter2
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

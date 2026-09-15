@@ -66,8 +66,9 @@ end AnfVarQualifs
 open AnfVarQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def AnfVar_proof : AnfVar := by
   unfold AnfVar
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

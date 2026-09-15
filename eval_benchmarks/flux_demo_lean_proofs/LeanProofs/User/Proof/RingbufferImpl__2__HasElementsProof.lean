@@ -66,8 +66,9 @@ end RingbufferImpl2HasElementsQualifs
 open RingbufferImpl2HasElementsQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RingbufferImpl__2__HasElements_proof : RingbufferImpl__2__HasElements := by
   unfold RingbufferImpl__2__HasElements
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

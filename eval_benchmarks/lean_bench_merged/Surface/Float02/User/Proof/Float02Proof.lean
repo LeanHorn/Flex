@@ -66,8 +66,9 @@ end Float02Qualifs
 open Float02Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Float02_proof : Float02 := by
   unfold Float02
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

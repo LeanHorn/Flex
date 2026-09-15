@@ -66,8 +66,9 @@ end HeapsortHeapSortQualifs
 open HeapsortHeapSortQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def HeapsortHeapSort_proof : HeapsortHeapSort := by
   unfold HeapsortHeapSort
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

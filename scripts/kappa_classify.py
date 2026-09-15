@@ -77,6 +77,25 @@ def classify(acyclic: list[str], cyclic: list[str]) -> str:
     return "none"
 
 
+# `benchPhase` (Flex/Tactic/Utils.lean, gated by `flex.benchPhases`) emits
+# `[phase] <tac>:<phase>=<hb> ms=<ms>`. Each Liquid-fixpoint benchmark runs as
+# its own `lake env lean <file>` process (see run_benchmarks.py), so unlike
+# the flux-suite logs there's no cross-VC attribution to do: every `[phase]`
+# line in a benchmark's chunk belongs to that benchmark.
+PHASE_RE = re.compile(r"\[phase\]\s+(\w+):(\w+)=(\d+)\s+ms=(\d+)")
+
+
+def sum_phases(text: str) -> dict[str, dict[str, int]]:
+    """{'tac:phase': {'hb': N, 'ms': N}}, summing duplicate keys in `text`."""
+    result: dict[str, dict[str, int]] = {}
+    for m in PHASE_RE.finditer(text):
+        key = f"{m.group(1)}:{m.group(2)}"
+        entry = result.setdefault(key, {"hb": 0, "ms": 0})
+        entry["hb"] += int(m.group(3))
+        entry["ms"] += int(m.group(4))
+    return result
+
+
 def main() -> None:
     if len(sys.argv) > 1:
         text = Path(sys.argv[1]).read_text()

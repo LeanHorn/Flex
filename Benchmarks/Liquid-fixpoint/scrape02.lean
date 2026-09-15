@@ -63,5 +63,6 @@ def scrape02 : Prop :=
                           ∀ a27 a28 a29 : Int, k4 a24 a27 a28 a29 reftgen a0))))
 
 -- set_option maxHeartbeats 6400000 in
+set_option flex.benchPhases true
 theorem scrape02_proof : scrape02 := by
   solve_fixpoint

@@ -66,8 +66,9 @@ end MkPair1Qualifs
 open MkPair1Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def MkPair1_proof : MkPair1 := by
   unfold MkPair1
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

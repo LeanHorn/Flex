@@ -66,8 +66,9 @@ end LtQualifs
 open LtQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Lt_proof : Lt := by
   unfold Lt
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

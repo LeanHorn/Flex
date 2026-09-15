@@ -12,5 +12,6 @@ def icfp17Ex2Prop : Prop :=
           ∧ (∀ v : Int, κx v x n p → κy v x))
       ∧ (∀ y : Int, κy y x → ∀ v : Int, v = y + 1 → 0 ≤ v)
 
+set_option flex.benchPhases true
 theorem icfp17Ex2Proof : icfp17Ex2Prop := by
   solve_fixpoint

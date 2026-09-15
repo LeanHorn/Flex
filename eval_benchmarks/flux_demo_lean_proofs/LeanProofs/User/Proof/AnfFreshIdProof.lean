@@ -66,8 +66,9 @@ end AnfFreshIdQualifs
 open AnfFreshIdQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def AnfFreshId_proof : AnfFreshId := by
   unfold AnfFreshId
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

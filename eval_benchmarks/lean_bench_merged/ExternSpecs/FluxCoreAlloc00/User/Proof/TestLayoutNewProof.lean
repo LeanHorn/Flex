@@ -66,8 +66,9 @@ end TestLayoutNewQualifs
 open TestLayoutNewQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestLayoutNew_proof : TestLayoutNew := by
   unfold TestLayoutNew
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

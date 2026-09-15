@@ -66,8 +66,9 @@ end RawVecImpl3DropQualifs
 open RawVecImpl3DropQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RawVecImpl__3__Drop_proof : RawVecImpl__3__Drop := by
   unfold RawVecImpl__3__Drop
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

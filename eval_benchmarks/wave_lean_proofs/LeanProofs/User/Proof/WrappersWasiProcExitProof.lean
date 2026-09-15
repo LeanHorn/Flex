@@ -66,8 +66,9 @@ end WrappersWasiProcExitQualifs
 open WrappersWasiProcExitQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def WrappersWasiProcExit_proof : WrappersWasiProcExit := by
   unfold WrappersWasiProcExit
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

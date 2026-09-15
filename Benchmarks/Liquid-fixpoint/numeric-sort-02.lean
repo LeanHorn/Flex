@@ -25,5 +25,6 @@ def numericSort02Prop : Prop :=
       -- Use: κ1(r, zero) ⇒ zero ≤ r
       ∧ (∀ y : Int, ∀ r : Int, κ1 r zero → zero ≤ r)
 
+set_option flex.benchPhases true
 theorem numericSort02Proof : numericSort02Prop := by
   solve_fixpoint

@@ -66,8 +66,9 @@ end AddMultTestQualifs
 open AddMultTestQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def AddMultTest_proof : AddMultTest := by
   unfold AddMultTest
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end TestFromValidQualifs
 open TestFromValidQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestFromValid_proof : TestFromValid := by
   unfold TestFromValid
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

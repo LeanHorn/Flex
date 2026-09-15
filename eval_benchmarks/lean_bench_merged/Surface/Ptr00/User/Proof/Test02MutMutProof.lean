@@ -66,8 +66,9 @@ end Test02MutMutQualifs
 open Test02MutMutQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Test02MutMut_proof : Test02MutMut := by
   unfold Test02MutMut
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

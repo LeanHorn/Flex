@@ -66,8 +66,9 @@ end AppendQualifs
 open AppendQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Append_proof : Append := by
   unfold Append
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

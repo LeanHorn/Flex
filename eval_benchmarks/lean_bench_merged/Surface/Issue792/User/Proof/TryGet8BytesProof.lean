@@ -66,8 +66,9 @@ end TryGet8BytesQualifs
 open TryGet8BytesQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TryGet8Bytes_proof : TryGet8Bytes := by
   unfold TryGet8Bytes
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

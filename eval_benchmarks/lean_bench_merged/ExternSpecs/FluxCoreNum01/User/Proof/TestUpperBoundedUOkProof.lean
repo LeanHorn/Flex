@@ -66,8 +66,9 @@ end TestUpperBoundedUOkQualifs
 open TestUpperBoundedUOkQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestUpperBoundedUOk_proof : TestUpperBoundedUOk := by
   unfold TestUpperBoundedUOk
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

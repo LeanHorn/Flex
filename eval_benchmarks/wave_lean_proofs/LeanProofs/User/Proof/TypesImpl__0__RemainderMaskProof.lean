@@ -66,8 +66,9 @@ end TypesImpl0RemainderMaskQualifs
 open TypesImpl0RemainderMaskQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__0__RemainderMask_proof : TypesImpl__0__RemainderMask := by
   unfold TypesImpl__0__RemainderMask
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end Test001ClientQualifs
 open Test001ClientQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Test001Client_proof : Test001Client := by
   unfold Test001Client
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

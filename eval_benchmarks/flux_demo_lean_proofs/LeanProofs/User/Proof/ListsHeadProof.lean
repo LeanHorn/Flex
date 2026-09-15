@@ -66,8 +66,9 @@ end ListsHeadQualifs
 open ListsHeadQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def ListsHead_proof : ListsHead := by
   unfold ListsHead
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

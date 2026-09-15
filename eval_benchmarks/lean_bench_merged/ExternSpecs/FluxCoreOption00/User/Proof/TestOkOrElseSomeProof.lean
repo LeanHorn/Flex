@@ -66,8 +66,9 @@ end TestOkOrElseSomeQualifs
 open TestOkOrElseSomeQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestOkOrElseSome_proof : TestOkOrElseSome := by
   unfold TestOkOrElseSome
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

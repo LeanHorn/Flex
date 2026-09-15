@@ -66,8 +66,9 @@ end VecDequeImpl3GrowQualifs
 open VecDequeImpl3GrowQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VecDequeImpl__3__Grow_proof : VecDequeImpl__3__Grow := by
   unfold VecDequeImpl__3__Grow
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end TestEnumer3Qualifs
 open TestEnumer3Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestEnumer3_proof : TestEnumer3 := by
   unfold TestEnumer3
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

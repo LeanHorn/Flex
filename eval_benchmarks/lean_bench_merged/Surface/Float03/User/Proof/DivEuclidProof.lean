@@ -66,8 +66,9 @@ end DivEuclidQualifs
 open DivEuclidQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def DivEuclid_proof : DivEuclid := by
   unfold DivEuclid
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

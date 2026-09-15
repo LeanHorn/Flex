@@ -66,8 +66,9 @@ end Client2Qualifs
 open Client2Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Client2_proof : Client2 := by
   unfold Client2
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

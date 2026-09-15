@@ -66,8 +66,9 @@ end NilQualifs
 open NilQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Nil_proof : Nil := by
   unfold Nil
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

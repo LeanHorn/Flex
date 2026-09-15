@@ -66,8 +66,9 @@ end Impl0TakeShrQualifs
 open Impl0TakeShrQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Impl__0__TakeShr_proof : Impl__0__TakeShr := by
   unfold Impl__0__TakeShr
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

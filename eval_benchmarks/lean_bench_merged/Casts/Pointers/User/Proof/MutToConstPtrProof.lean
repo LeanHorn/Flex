@@ -66,8 +66,9 @@ end MutToConstPtrQualifs
 open MutToConstPtrQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def MutToConstPtr_proof : MutToConstPtr := by
   unfold MutToConstPtr
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

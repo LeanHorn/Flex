@@ -66,8 +66,9 @@ end VectorsInitQualifs
 open VectorsInitQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VectorsInit_proof : VectorsInit := by
   unfold VectorsInit
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

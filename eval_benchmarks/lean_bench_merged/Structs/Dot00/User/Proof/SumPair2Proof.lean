@@ -66,8 +66,9 @@ end SumPair2Qualifs
 open SumPair2Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def SumPair2_proof : SumPair2 := by
   unfold SumPair2
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

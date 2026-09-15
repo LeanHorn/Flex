@@ -66,8 +66,9 @@ end DotQualifs
 open DotQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Dot_proof : Dot := by
   unfold Dot
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

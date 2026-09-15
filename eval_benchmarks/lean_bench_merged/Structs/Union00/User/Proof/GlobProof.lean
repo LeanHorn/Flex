@@ -66,8 +66,9 @@ end GlobQualifs
 open GlobQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Glob_proof : Glob := by
   unfold Glob
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

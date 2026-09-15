@@ -66,8 +66,9 @@ end RingbufferImpl2GetInternalQualifs
 open RingbufferImpl2GetInternalQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def RingbufferImpl__2__GetInternal_proof : RingbufferImpl__2__GetInternal := by
   unfold RingbufferImpl__2__GetInternal
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

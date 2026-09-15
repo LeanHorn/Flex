@@ -66,8 +66,9 @@ end AnfImpl0ToAnfQualifs
 open AnfImpl0ToAnfQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def AnfImpl__0__ToAnf_proof : AnfImpl__0__ToAnf := by
   unfold AnfImpl__0__ToAnf
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

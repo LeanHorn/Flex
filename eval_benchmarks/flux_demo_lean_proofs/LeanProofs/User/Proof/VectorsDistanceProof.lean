@@ -66,8 +66,9 @@ end VectorsDistanceQualifs
 open VectorsDistanceQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def VectorsDistance_proof : VectorsDistance := by
   unfold VectorsDistance
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

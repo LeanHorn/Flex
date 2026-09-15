@@ -66,8 +66,9 @@ end OsTraceSendQualifs
 open OsTraceSendQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def OsTraceSend_proof : OsTraceSend := by
   unfold OsTraceSend
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end TestIntoBothBoundedErrLowQualifs
 open TestIntoBothBoundedErrLowQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestIntoBothBoundedErrLow_proof : TestIntoBothBoundedErrLow := by
   unfold TestIntoBothBoundedErrLow
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

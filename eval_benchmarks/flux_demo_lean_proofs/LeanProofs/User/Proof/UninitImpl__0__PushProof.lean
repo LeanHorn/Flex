@@ -66,8 +66,9 @@ end UninitImpl0PushQualifs
 open UninitImpl0PushQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def UninitImpl__0__Push_proof : UninitImpl__0__Push := by
   unfold UninitImpl__0__Push
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

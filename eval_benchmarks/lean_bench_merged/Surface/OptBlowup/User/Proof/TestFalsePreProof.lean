@@ -66,8 +66,9 @@ end TestFalsePreQualifs
 open TestFalsePreQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestFalsePre_proof : TestFalsePre := by
   unfold TestFalsePre
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

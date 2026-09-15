@@ -66,8 +66,9 @@ end OsTraceSyncQualifs
 open OsTraceSyncQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def OsTraceSync_proof : OsTraceSync := by
   unfold OsTraceSync
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

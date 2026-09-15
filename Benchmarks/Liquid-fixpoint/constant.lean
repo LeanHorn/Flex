@@ -8,5 +8,6 @@ def constantProp : Prop :=
         ∧ (∀ z : Int, κ0 z x → z = f x)
 
 
+set_option flex.benchPhases true
 theorem constantProof : constantProp := by
   solve_fixpoint

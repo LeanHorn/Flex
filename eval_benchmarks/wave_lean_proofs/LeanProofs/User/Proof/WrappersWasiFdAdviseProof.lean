@@ -66,8 +66,9 @@ end WrappersWasiFdAdviseQualifs
 open WrappersWasiFdAdviseQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def WrappersWasiFdAdvise_proof : WrappersWasiFdAdvise := by
   unfold WrappersWasiFdAdvise
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

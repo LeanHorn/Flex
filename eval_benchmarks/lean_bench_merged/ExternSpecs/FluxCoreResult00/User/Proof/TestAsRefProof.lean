@@ -66,8 +66,9 @@ end TestAsRefQualifs
 open TestAsRefQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestAsRef_proof : TestAsRef := by
   unfold TestAsRef
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

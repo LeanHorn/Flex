@@ -66,8 +66,9 @@ end I16U16LosslessQualifs
 open I16U16LosslessQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def I16U16Lossless_proof : I16U16Lossless := by
   unfold I16U16Lossless
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

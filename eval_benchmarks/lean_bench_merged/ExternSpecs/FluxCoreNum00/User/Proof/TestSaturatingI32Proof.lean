@@ -66,8 +66,9 @@ end TestSaturatingI32Qualifs
 open TestSaturatingI32Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestSaturatingI32_proof : TestSaturatingI32 := by
   unfold TestSaturatingI32
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

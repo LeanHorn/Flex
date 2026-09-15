@@ -25,5 +25,6 @@ import Flex
 def sumRec1Prop : Prop :=
   ∀ x : Int, x > 0 → ∀ y : Int, y > x → ∀ v : Int, v = x + y → v > 0
 
+set_option flex.benchPhases true
 theorem sumRec1Proof : sumRec1Prop := by
   solve_fixpoint

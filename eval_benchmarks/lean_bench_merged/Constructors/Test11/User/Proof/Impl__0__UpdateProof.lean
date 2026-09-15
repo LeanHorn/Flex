@@ -66,8 +66,9 @@ end Impl0UpdateQualifs
 open Impl0UpdateQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def Impl__0__Update_proof : Impl__0__Update := by
   unfold Impl__0__Update
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

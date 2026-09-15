@@ -66,8 +66,9 @@ end TestMapBranchQualifs
 open TestMapBranchQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestMapBranch_proof : TestMapBranch := by
   unfold TestMapBranch
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

@@ -66,8 +66,9 @@ end CsvImpl0ConvertQualifs
 open CsvImpl0ConvertQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def CsvImpl__0__Convert_proof : CsvImpl__0__Convert := by
   unfold CsvImpl__0__Convert
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

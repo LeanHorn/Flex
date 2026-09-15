@@ -66,8 +66,9 @@ end TestCheckedNegI32Qualifs
 open TestCheckedNegI32Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestCheckedNegI32_proof : TestCheckedNegI32 := by
   unfold TestCheckedNegI32
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

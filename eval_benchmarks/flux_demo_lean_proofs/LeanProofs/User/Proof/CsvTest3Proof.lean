@@ -66,8 +66,9 @@ end CsvTest3Qualifs
 open CsvTest3Qualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def CsvTest3_proof : CsvTest3 := by
   unfold CsvTest3
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

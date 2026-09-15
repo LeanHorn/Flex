@@ -66,8 +66,9 @@ end UseFilterMapQualifs
 open UseFilterMapQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def UseFilterMap_proof : UseFilterMap := by
   unfold UseFilterMap
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

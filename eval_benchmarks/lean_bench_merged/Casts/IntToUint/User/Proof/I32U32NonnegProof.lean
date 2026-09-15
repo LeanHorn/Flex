@@ -66,8 +66,9 @@ end I32U32NonnegQualifs
 open I32U32NonnegQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def I32U32Nonneg_proof : I32U32Nonneg := by
   unfold I32U32Nonneg
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

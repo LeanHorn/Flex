@@ -66,8 +66,9 @@ end MyModAddQualifs
 open MyModAddQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def MyModAdd_proof : MyModAdd := by
   unfold MyModAdd
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

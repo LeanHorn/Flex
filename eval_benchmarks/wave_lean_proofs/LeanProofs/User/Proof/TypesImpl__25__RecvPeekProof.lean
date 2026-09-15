@@ -66,8 +66,9 @@ end TypesImpl25RecvPeekQualifs
 open TypesImpl25RecvPeekQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__25__RecvPeek_proof : TypesImpl__25__RecvPeek := by
   unfold TypesImpl__25__RecvPeek
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

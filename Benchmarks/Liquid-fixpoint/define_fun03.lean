@@ -14,5 +14,6 @@ def lhMapProp : Prop :=
       moo 10 = moo (1 + 9)
     ∧ foo moo
 
+set_option flex.benchPhases true
 theorem lhMapProof : lhMapProp := by
   solve_fixpoint

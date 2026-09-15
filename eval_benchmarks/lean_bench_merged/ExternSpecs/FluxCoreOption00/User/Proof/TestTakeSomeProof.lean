@@ -66,8 +66,9 @@ end TestTakeSomeQualifs
 open TestTakeSomeQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TestTakeSome_proof : TestTakeSome := by
   unfold TestTakeSome
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

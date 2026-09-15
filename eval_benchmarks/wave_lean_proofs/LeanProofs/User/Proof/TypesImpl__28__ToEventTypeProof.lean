@@ -66,8 +66,9 @@ end TypesImpl28ToEventTypeQualifs
 open TypesImpl28ToEventTypeQualifs
 
 set_option maxHeartbeats 5000000
+set_option flex.benchPhases true
 #time def TypesImpl__28__ToEventType_proof : TypesImpl__28__ToEventType := by
   unfold TypesImpl__28__ToEventType
-  (try zap) ; (try simp [*]) ; (try solve)
+  (try zap) ; (try benchSimpStar) ; (try solve)
 
 end F

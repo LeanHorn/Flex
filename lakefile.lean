@@ -8,7 +8,7 @@ package «Flex» where
 -- `Std` ships with the Lean toolchain, so it needs no `require`.
 -- Flex (solver, benchmarks, and demos) is mathlib-free.
 require aesop from git
-  "https://github.com/leanprover-community/aesop" @ "3426969888a264d3f69b6f30ab50aa11f28eb38d"
+  "https://github.com/leanprover-community/aesop" @ "355695d523e41d0554926416cba2a2b3544fbbc9"
 
 @[default_target]
 lean_lib «Flex» where

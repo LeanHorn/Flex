@@ -100,6 +100,7 @@ attribute [simp] Cstr.interp Cstr.triv Refinement.openBVar Formula.openBVar Term
 attribute [simp] Term.interp REnv.get Exp.openVar Ty.openVar Exp.fv Refinement.fv Formula.fv Term.fv Ty.fv
 attribute [simp] Refinement.openBVar Formula.openBVar Term.openBVar String.length EVar.maxLen
 attribute [simp] List.lookup TEnv.tyFv
+attribute [simp] ToTerm.toTerm
 
 macro "generate" : tactic => `(tactic| (vc_generate ; vc_reify))
 

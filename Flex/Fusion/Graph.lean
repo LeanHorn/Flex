@@ -26,11 +26,6 @@ def exprDeps (e : Expr) : KM (List (KVar × KVar)) := do
   let deps ← flats.mapM exprFlatDeps
   return deps.flatten
 
-/-- Dependencies excluding pairs that involve any κ in `K`. -/
-def exprDepsExcluding (e : Expr) (K : List KVar) : KM (List (KVar × KVar)) := do
-  let deps ← exprDeps e
-  return deps.filter fun (k1, k2) => !K.contains k1 && !K.contains k2
-
 /-- Collect κ-vars from an Expr in left-to-right depth-first order,
     matching the traversal order of `Constraint.kvars`. -/
 partial def exprKVarsOrdered (e : Expr) : KM (List KVar) := do

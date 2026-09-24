@@ -15,9 +15,6 @@ structure KContext where
 
 abbrev KM := ReaderT KContext MetaM
 
-def KM.isKVar (id : MVarId) : KM Bool :=
-  (·.kvars.contains id) <$> read
-
 def KM.getKVar? (id : MVarId) : KM (Option KVar) :=
   (·.kvars.get? id) <$> read
 
@@ -50,14 +47,8 @@ def KM.exprKVars (e : Expr) : KM (List KVar) := do
   let kvars ← KM.getKVarList
   return kvars.filter fun κ => e.containsMVar κ.mvarId
 
--- walk outer `∀`-binders of a flat clause to reach the leaf head.
--- if leaf is κ-application, return that κ; otherwise, return `none`.
-partial def findHeadKVar (fc : Expr) : KM (Option KVar) := do
-  let fc ← whnf fc
-  if fc.isForall then
-    withLocalDeclD fc.bindingName! fc.bindingDomain! fun fvar =>
-      findHeadKVar (fc.bindingBody!.instantiate1 fvar)
-  else
-    match ← KM.isKApp fc with
-    | some (κ, _) => return some κ
-    | none        => return none
+/-- The κ at the head of the flat clause `fc`, found under its outer `∀`s
+    (unfolding definitions to expose them). `none` if the head is not a κ. -/
+def findHeadKVar (fc : Expr) : KM (Option KVar) :=
+  forallTelescopeReducing fc (whnfType := true) fun _ head => do
+    return (← KM.isKApp head).map (·.1)

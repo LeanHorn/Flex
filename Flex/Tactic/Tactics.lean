@@ -1,6 +1,6 @@
 import Flex.Tactic.Tactics.SolveFixpoint
 import Flex.Tactic.Tactics.Hoist
-import Flex.Tactic.Tactics.Zap
+import Flex.Tactic.Tactics.ElimLeaves
 import Flex.Tactic.Tactics.SplitHyps
 import Flex.Tactic.Tactics.RewriteKs
 import Flex.Tactic.Tactics.ReorderKs

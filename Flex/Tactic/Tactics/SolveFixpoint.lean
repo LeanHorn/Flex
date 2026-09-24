@@ -4,7 +4,7 @@ import Aesop
 import Flex.Core
 import Flex.Fusion
 import Flex.Tactic.Utils
-import Flex.Tactic.Tactics.Zap
+import Flex.Tactic.Tactics.ElimLeaves
 import Flex.Tactic.Tactics.SplitHyps
 import Flex.PA.Fixpoint
 

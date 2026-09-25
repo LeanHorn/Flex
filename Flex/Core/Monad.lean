@@ -47,8 +47,10 @@ def KM.exprKVars (e : Expr) : KM (List KVar) := do
   let kvars ← KM.getKVarList
   return kvars.filter fun κ => e.containsMVar κ.mvarId
 
-/-- The κ at the head of the flat clause `fc`, found under its outer `∀`s
-    (unfolding definitions to expose them). `none` if the head is not a κ. -/
+/-
+  κ at the head of the flat clause `fc`, found under its outer `∀`s
+  (unfolding definitions to expose them). `none` if the head is not a κ.
+-/
 def findHeadKVar (fc : Expr) : KM (Option KVar) :=
   forallTelescopeReducing fc (whnfType := true) fun _ head => do
     return (← KM.isKApp head).map (·.1)

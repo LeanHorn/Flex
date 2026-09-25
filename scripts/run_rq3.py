@@ -21,7 +21,7 @@ Each config runs in its OWN `lake env lean` invocation (so the per-phase
   elim_hb                       (Σ of the variant's `[phase]` heartbeats =
                                  the pure acyclic-κ elimination cost)
 
-Output: eval/rq3_results.json (consumed by rq3_plots.py) + a console table.
+Output: eval/rq3_results.json (consumed by rq3_table.py) + a console table.
 
 Usage:
     python3 scripts/run_rq3.py [--jobs 4] [--filter icfp]
@@ -203,8 +203,11 @@ def main() -> int:
         row = out[b]
         def cell(k):
             c = row.get(k, {})
+            # A FAILed run can still have partial phase heartbeats; don't show them.
+            if c.get("status") != "ok":
+                return "FAIL" if c else "—"
             e = c.get("elim_hb")
-            return str(e) if e is not None else ("FAIL" if c.get("status") == "FAIL" else "—")
+            return str(e) if e is not None else "—"
         st = "/".join((row.get(k, {}).get("status", "?") or "?")[0] for k in ("zap", "grind", "aesop"))
         print(f"{b:<22} {str(row['n_acyclic']):>4} {str(row['n_cyclic']):>4} "
               f"{cell('zap'):>8} {cell('grind'):>8} {cell('aesop'):>8}   {st}")

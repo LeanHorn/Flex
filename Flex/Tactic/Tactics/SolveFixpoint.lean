@@ -10,33 +10,25 @@ open Lean Elab Meta Tactic
 
 initialize Lean.registerTraceClass `solveFixpoint
 
+/-- Closers tried in order on a leaf goal. The order is RQ3 baseline A, so
+    don't reorder. `simp_all` is left out: its `maxRecDepth` escapes
+    `attemptTactic`'s catch (logged, not thrown). -/
 private def tryClosers : TacticM Bool := do
-  let b ← attemptTactic (evalTactic (← `(tactic| native_decide)))
-  match b with
-  | Bool.true => logInfo m!"[solve_fixpoint] closed by: native_decide"; pure Bool.true
-  | Bool.false =>
-  let b ← attemptTactic (evalTactic (← `(tactic| grind)))
-  match b with
-  | Bool.true => logInfo m!"[solve_fixpoint] closed by: grind"; pure Bool.true
-  | Bool.false =>
-  let b ← attemptTactic (evalTactic (← `(tactic| aesop)))
-  match b with
-  | Bool.true => logInfo m!"[solve_fixpoint] closed by: aesop"; pure Bool.true
-  | Bool.false =>
-  let b ← attemptTactic (evalTactic (← `(tactic| omega)))
-  match b with
-  | Bool.true => logInfo m!"[solve_fixpoint] closed by: omega"; pure Bool.true
-  | Bool.false =>
-  let b ← attemptTactic (evalTactic (← `(tactic| bv_decide)))
-  match b with
-  | Bool.true => logInfo m!"[solve_fixpoint] closed by: bv_decide"; pure Bool.true
-  | Bool.false =>
-  let b ← attemptTactic (evalTactic (← `(tactic| (constructor <;> grind))))
-  match b with
-  | Bool.true => logInfo m!"[solve_fixpoint] closed by: constructor+grind"; pure Bool.true
-  | Bool.false => pure Bool.false
-  -- `simp_all`'s `maxRecDepth` escapes `attemptTactic`'s catch (logged via
-  -- diagnostics rather than thrown), so the rung is dropped here.
+  let closers : List (TSyntax `tactic) := [
+    (← `(tactic| native_decide)),
+    (← `(tactic| grind)),
+    -- When aesop can't close a goal it may still leave simplified subgoals and
+    -- succeed; don't warn about that.
+    (← `(tactic| aesop (config := { warnOnNonterminal := false }))),
+    (← `(tactic| omega)),
+    (← `(tactic| bv_decide)),
+    (← `(tactic| (constructor <;> grind)))]
+  for tac in closers do
+    if (← attemptTactic (evalTactic tac)) then
+      trace[solveFixpoint] m!"closer succeeded: {tac}"
+      return true
+  return false
+
 
 private partial def closeLoop : TacticM Unit := do
   let goals ← getGoals
@@ -75,22 +67,10 @@ private partial def closeLoop : TacticM Unit := do
             let remaining ← getGoals
             setGoals (g :: remaining)
 
-private def closeResidualGoals : TacticM Unit := do
-  let goals ← getGoals
-  if goals.isEmpty then pure ()
-  else
-    -- `simp_all` removed: its `maxRecDepth` escapes `attemptTactic`'s catch.
-    closeLoop
-
-
 /-!
   ## `solve_fixpoint` tactic
 
-  Fusion for acyclic κ's (copy of `solve_fusion`) PLUS predicate abstraction
-  for cyclic κ's, drawing qualifiers from `@[qualif]`-tagged decls.
-
-  Expected to handle every example in `Demo/Cyclic.lean` and benchmarks with
-  invariants expressible as a conjunction of tagged qualifier instantiations.
+  Zap + Predicate abstraction.
 -/
 def solveFixpointImpl : TacticM Unit := withMainContext do
   -- Unfolding essentially
@@ -122,8 +102,10 @@ def solveFixpointImpl : TacticM Unit := withMainContext do
 
       -- Partition acyclic vs cyclic κ-vars
       let (acyclic, cyclic) ← (exprPartitionKVars body).run kctx
-      IO.println s!"[solve_fixpoint] Acyclic κ: {acyclic.map (·.name)}"
-      IO.println s!"[solve_fixpoint] Cyclic κ:  {cyclic.map (·.name)}"
+      -- Parsed by scripts/kappa_classify.py, which runs Lean with -Dflex.benchPhases=true.
+      if flex.benchPhases.get (← getOptions) then
+        IO.println s!"[solve_fixpoint] Acyclic κ: {acyclic.map (·.name)}"
+        IO.println s!"[solve_fixpoint] Cyclic κ:  {cyclic.map (·.name)}"
 
       -- Fusion for ALL acyclic κs (no proof-term construction — we just assign
       -- κ-mvars and let the kernel re-check the final term). An acyclic κ's σ̂
@@ -134,12 +116,10 @@ def solveFixpointImpl : TacticM Unit := withMainContext do
       let curr ← benchPhase "solve_fixpoint" "fuse" do
         let mut curr := body
         for κ in acyclic do
-          IO.println s!"[solve] --- {κ.name} ---"
           let scoped' ← (exprScope κ curr).run kctx
           let sol     ← (exprSolScoped κ scoped').run kctx
-          IO.println s!"[solve]   sol = {← ppExpr sol}"
           let lam ← solToWitnessExpr sol κ.params κ.paramTypes
-          IO.println s!"[solve]   lam = {← ppExpr lam}"
+          trace[solveFixpoint] m!"fuse {κ.name}: sol = {sol}, lam = {lam}"
           κ.mvarId.assign lam
           curr ← (exprElimStar κ sol curr).run kctx
         pure curr
@@ -148,11 +128,11 @@ def solveFixpointImpl : TacticM Unit := withMainContext do
       let paSet := cyclic
       benchPhase "solve_fixpoint" "pa" do
         if !paSet.isEmpty then
-          IO.println s!"[solve_fixpoint] --- PA on cyclic κ's {paSet.map (·.name)} ---"
+          trace[solveFixpoint] m!"PA on cyclic κs {paSet.map (·.name)}"
           let flatCs ← (exprFlat curr).run kctx
           let paSols ← predicateAbstraction kctx paSet flatCs
           for (κ, sol) in paSols do
-            IO.println s!"[solve_fixpoint]   PA sol for {κ.name} = {← ppExpr sol}"
+            trace[solveFixpoint] m!"PA sol for {κ.name} = {sol}"
             let lam ← solToWitnessExpr sol κ.params κ.paramTypes
             κ.mvarId.assign lam
     )
@@ -169,7 +149,7 @@ def solveFixpointImpl : TacticM Unit := withMainContext do
   if unfilled.isEmpty then
     -- Refresh LCtx — fusion's mvar assignments / earlier tactics may have
     -- mutated the main goal beyond the surrounding `withMainContext` snapshot.
-    benchPhase "solve_fixpoint" "close" (withMainContext closeResidualGoals)
+    benchPhase "solve_fixpoint" "close" (withMainContext closeLoop)
   else
     let residual ← getMainGoal
     -- κs first so the user fills them before tackling the residual,
@@ -182,6 +162,5 @@ syntax "solve" : tactic
 elab_rules : tactic
   | `(tactic| solve) => solveFixpointImpl
 
-/-- Backward-compatible alias — `solve_fixpoint` is the former name of the
-    dispatcher now called `solve` (partition, then `zap` acyclic + `fix` cyclic). -/
+-- Backward-compatible alias — `solve_fixpoint` is the former name of `solve`
 macro "solve_fixpoint" : tactic => `(tactic| solve)

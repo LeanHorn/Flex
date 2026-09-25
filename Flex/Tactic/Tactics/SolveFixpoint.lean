@@ -73,23 +73,7 @@ private partial def closeLoop : TacticM Unit := do
   Zap + Predicate abstraction.
 -/
 def solveFixpointImpl : TacticM Unit := withMainContext do
-  -- Unfolding essentially
-  let goal ← getMainGoal
-  let _    ← attemptTactic
-    (do let newGoal ← goal.withContext do
-          let target   ← goal.getType
-          let unfolded ← unfoldDefinition target
-          goal.replaceTargetDefEq unfolded
-        replaceMainGoal [newGoal])
-  -- Peel ∃ κ : T, .. into κ-MVars via Exists.intro
-  --    After this, the κ-mvars are part of the proof scaffolding and
-  --    `bodyGoal` is the residual proof obligation with κs replaced
-  --    by their mvars.
-  let goal ← getMainGoal
-  let (kvarMap, kvarsInOrder, bodyGoal) ← peelExistentialsAndIntro goal
-  replaceMainGoal [bodyGoal]
-
-  let kctx : KContext := { kvars := kvarMap }
+  let (kctx, kvarsInOrder) ← peelKVars
 
   -- `withMainContext` here refreshes the LCtx after `peelExistentialsAndIntro`
   -- (and any prior tactic) mutated the main goal — without this, downstream
@@ -118,9 +102,8 @@ def solveFixpointImpl : TacticM Unit := withMainContext do
         for κ in acyclic do
           let scoped' ← (exprScope κ curr).run kctx
           let sol     ← (exprSolScoped κ scoped').run kctx
-          let lam ← solToWitnessExpr sol κ.params κ.paramTypes
-          trace[solveFixpoint] m!"fuse {κ.name}: sol = {sol}, lam = {lam}"
-          κ.mvarId.assign lam
+          trace[solveFixpoint] m!"fuse {κ.name}: sol = {sol}"
+          κ.assignSol sol
           curr ← (exprElimStar κ sol curr).run kctx
         pure curr
 
@@ -133,8 +116,7 @@ def solveFixpointImpl : TacticM Unit := withMainContext do
           let paSols ← predicateAbstraction kctx paSet flatCs
           for (κ, sol) in paSols do
             trace[solveFixpoint] m!"PA sol for {κ.name} = {sol}"
-            let lam ← solToWitnessExpr sol κ.params κ.paramTypes
-            κ.mvarId.assign lam
+            κ.assignSol sol
     )
     (fun e => do
       logInfo m!"[solve_fixpoint] ✗ Solver failed: {e.toMessageData}"

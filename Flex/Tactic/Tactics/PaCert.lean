@@ -29,20 +29,7 @@ open Lean Elab Meta Tactic
   aborts with a hint to run `fusion` first.
 -/
 def paCertImpl : TacticM Unit := withMainContext do
-  -- Unfold a top-level `def`-wrapped goal (e.g. `FibFibFast`).
-  let goal ← getMainGoal
-  let _ ← attemptTactic
-    (do let newGoal ← goal.withContext do
-          let target   ← goal.getType
-          let unfolded ← unfoldDefinition target
-          goal.replaceTargetDefEq unfolded
-        replaceMainGoal [newGoal])
-
-  -- Peel `∃ κ : T, …` into κ-mvars via Exists.intro; `bodyGoal : c` (κ-mvars).
-  let goal ← getMainGoal
-  let (kvarMap, kvarsInOrder, bodyGoal) ← peelExistentialsAndIntro goal
-  replaceMainGoal [bodyGoal]
-  let kctx : KContext := { kvars := kvarMap }
+  let (kctx, kvarsInOrder) ← peelKVars
 
   -- Refresh the LCtx after `peelExistentialsAndIntro` mutated the main goal.
   withMainContext do
@@ -68,8 +55,7 @@ def paCertImpl : TacticM Unit := withMainContext do
     -- stays SYNTACTICALLY κ-headed so `walkPAProof` can still detect the heads.
     let sols ← finalizeSolutions aStar
     for (κ, sol) in sols do
-      let lam ← solToWitnessExpr sol κ.params κ.paramTypes
-      κ.mvarId.assign lam
+      κ.assignSol sol
 
     -- Emit the §5 bridge proof of the body; collect κ-free residuals = c′.
     let residualOut ← IO.mkRef (#[] : Array MVarId)

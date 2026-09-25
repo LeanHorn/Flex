@@ -25,21 +25,7 @@ open Lean Elab Meta Tactic
   present (or any κ PA fails to solve) is surfaced as a user goal `⊢ T`. -/
 
 private def fixpointImpl : TacticM Unit := withMainContext do
-  -- Unfold a top-level def wrapping the ∃-chain, if any (best-effort).
-  let goal ← getMainGoal
-  let _ ← attemptTactic
-    (do let newGoal ← goal.withContext do
-          let target   ← goal.getType
-          let unfolded ← unfoldDefinition target
-          goal.replaceTargetDefEq unfolded
-        replaceMainGoal [newGoal])
-
-  -- Peel `∃ κ : T, …` into fresh κ-mvars via `Exists.intro`; the body becomes
-  -- the residual proof goal with each κ replaced by its mvar.
-  let goal ← getMainGoal
-  let (kvarMap, kvarsInOrder, bodyGoal) ← peelExistentialsAndIntro goal
-  replaceMainGoal [bodyGoal]
-  let kctx : KContext := { kvars := kvarMap }
+  let (kctx, kvarsInOrder) ← peelKVars
 
   -- `withMainContext` refreshes the LCtx after `peelExistentialsAndIntro`
   -- mutated the main goal — downstream traversal must see the new context.
@@ -59,8 +45,7 @@ private def fixpointImpl : TacticM Unit := withMainContext do
           let paSols ← predicateAbstraction kctx cyclic flatCs
           for (κ, sol) in paSols do
             logInfo m!"[fixpoint] PA sol for {κ.name} := {← ppExpr sol}"
-            let lam ← solToWitnessExpr sol κ.params κ.paramTypes
-            κ.mvarId.assign lam)
+            κ.assignSol sol)
     (fun e => logInfo m!"[fixpoint] ✗ solver failed: {e.toMessageData}")
 
   -- Surface unfilled κ-mvars as user goals; otherwise close residual leaf

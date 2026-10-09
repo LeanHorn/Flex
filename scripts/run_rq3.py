@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RQ2 driver: acyclic-κ elimination — deterministic (fusion/Zap) vs proof search.
+"""RQ3 driver: acyclic-κ elimination — deterministic (fusion/Zap) vs proof search.
 
 For each benchmark with ≥1 acyclic κ, run THREE configs on the SAME VC. Each runs
 *only* the acyclic-κ elimination tactic and then leaves the rest of the VC as
@@ -9,11 +9,11 @@ For each benchmark with ≥1 acyclic κ, run THREE configs on the SAME VC. Each 
   grind = `unfold VC; fusion_grind; all_goals sorry`   (κ-head clauses via grind)
   aesop = `unfold VC; fusion_aesop; all_goals sorry`   (κ-head clauses via aesop)
 
-`fusion_grind`/`fusion_aesop` are the isolated, eval-only tactics in
-`Flex/Eval/FusionSearch.lean` (a copy of the `fusion` pipeline whose
-κ-head leaves are discharged by search instead of `emitKLeaf`). If a search
-variant cannot discharge a κ-head clause it ERRORS — that failure (status=FAIL)
-is itself a data point.
+`fusion_grind`/`fusion_aesop` are eval aliases in
+`Flex/Tactic/Tactics/Eval/`, backed by `zap_with`.
+They share `zapImpl` with `zap`, using proof search at κ-head leaves
+instead of `nav`. Search failure is recorded as status=FAIL and is itself
+a data point.
 
 Each config runs in its OWN `lake env lean` invocation (so the per-phase
 `[phase]` lines belong unambiguously to that config). Metrics per config:
@@ -21,7 +21,7 @@ Each config runs in its OWN `lake env lean` invocation (so the per-phase
   elim_hb                       (Σ of the variant's `[phase]` heartbeats =
                                  the pure acyclic-κ elimination cost)
 
-Output: eval/rq3_results.json (consumed by rq3_plots.py) + a console table.
+Output: eval/rq3_results.json (consumed by rq3_table.py) + a console table.
 
 Usage:
     python3 scripts/run_rq3.py [--jobs 4] [--filter icfp]
@@ -73,7 +73,7 @@ KCOUNTS = {
     "Quicksort": (2, 0),
 }
 
-THM_RE = re.compile(r"(?m)^theorem\s+(\w+)\s*:\s*([\w'.]+)\s*:=\s*by\b")
+THM_RE = re.compile(r"(?m)^theorem\s+([\w'.]+)\s*:\s*([\w'.]+)\s*:=\s*by\b")
 BL2_RE = re.compile(
     r"BENCHLINE2\s+(\S+)\s+status=(\S+)\s+hb=(\d+)\s+ms=(\d+)\s+"
     r"depth=(\d+)\s+nconst=(\d+)\s+kerus=(\d+)")
@@ -126,7 +126,7 @@ def build_file(group: str, bench: str, config: str, tac: str) -> tuple[str, str]
     thm = f"{sanitize(bench)}_{config}"
     proof = f"by unfold {vc}; {tac}; all_goals sorry"
     src = (
-        f"import Flex.Eval.FusionSearch\n"   # isolated eval-only tactics
+        f"import Flex.Tactic.Tactics.Eval\n"   # fusion_grind / fusion_aesop
         f"{head}\n{prelude_body()}\n\n"
         f'benchx "{thm}" in\n'
         f"theorem {thm} : {vc} := {proof}\n"
@@ -175,7 +175,7 @@ def main() -> int:
 
     benches = [(g, b) for g, b in SUBSET if not args.filter or args.filter in b]
     tasks = [(g, b, key, tac) for g, b in benches for key, tac in CONFIGS]
-    print(f"RQ2: {len(benches)} benchmarks × {len(CONFIGS)} configs "
+    print(f"RQ3: {len(benches)} benchmarks × {len(CONFIGS)} configs "
           f"= {len(tasks)} runs ({args.jobs} parallel)\n")
 
     out: dict[str, dict] = {}
@@ -203,8 +203,11 @@ def main() -> int:
         row = out[b]
         def cell(k):
             c = row.get(k, {})
+            # A FAILed run can still have partial phase heartbeats; don't show them.
+            if c.get("status") != "ok":
+                return "FAIL" if c else "—"
             e = c.get("elim_hb")
-            return str(e) if e is not None else ("FAIL" if c.get("status") == "FAIL" else "—")
+            return str(e) if e is not None else "—"
         st = "/".join((row.get(k, {}).get("status", "?") or "?")[0] for k in ("zap", "grind", "aesop"))
         print(f"{b:<22} {str(row['n_acyclic']):>4} {str(row['n_cyclic']):>4} "
               f"{cell('zap'):>8} {cell('grind'):>8} {cell('aesop'):>8}   {st}")

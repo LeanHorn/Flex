@@ -3,7 +3,6 @@ import Aesop
 
 import Flex.Core
 import Flex.Fusion
-import Flex.Elab
 import Flex.PA
 import Flex.Tactic.Utils
 

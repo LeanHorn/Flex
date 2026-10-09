@@ -62,66 +62,6 @@ partial def buildEqProof
       residualOut.modify (·.push m.mvarId!)
       return m
 
-/-- Nav `lamBody` (a β-reduced sol expression: an ∃-∧-∨ tree ending in an
-    Eq-conjunction or False), emitting the proof term that inhabits it.
-    Consumes `binders` at ∃-nodes, `guards` at guard-Ands, and `orPath`
-    bits at ∨-nodes. -/
-partial def emitKLeaf
-    (lamBody : Expr)
-    (binders : List (Name × Expr × FVarId))
-    (guards  : List (Name × Expr × FVarId))
-    (orPath  : List Bool)
-    (residualOut : IO.Ref (Array MVarId)) :
-    MetaM Expr := do
-  -- Or — consume one orPath bit, navigate
-  if lamBody.isAppOfArity ``Or 2 then
-    let l := lamBody.appFn!.appArg!
-    let r := lamBody.appArg!
-    match orPath with
-    | [] =>
-      throwError "emitKLeaf: orPath exhausted at Or-node:{indentExpr lamBody}"
-    | false :: restPath =>
-      let inner ← emitKLeaf l binders guards restPath residualOut
-      return mkOrInl l r inner
-    | true :: restPath =>
-      let inner ← emitKLeaf r binders guards restPath residualOut
-      return mkOrInr l r inner
-  -- Exists — consume one binder
-  else if lamBody.isAppOfArity ``Exists 2 then
-    let α := lamBody.appFn!.appArg!
-    let pred := lamBody.appArg!
-    match binders with
-    | [] =>
-      throwError "emitKLeaf: no binders left at Exists-node:{indentExpr lamBody}"
-    | (_, _, fvId) :: rest =>
-      let witness := mkFVar fvId
-      let nextBody := pred.beta #[witness]
-      let inner ← emitKLeaf nextBody rest guards orPath residualOut
-      mkExistsIntro α pred witness inner
-  -- And — distinguish guard-And from Eq-conjunction leaf via guards-emptiness.
-  -- Sol1's structure puts all guards before the eq-leaf, so once guards is
-  -- empty (and binders/orPath too), any remaining And is the eq-conjunction.
-  else if let some (p, q) := lamBody.and? then
-    match guards with
-    | (_, _, fvId) :: rest =>
-      let h := mkFVar fvId
-      let inner ← emitKLeaf q binders rest orPath residualOut
-      return mkAndIntro p q h inner
-    | [] =>
-      -- guards exhausted: this And is the eq-conjunction leaf
-      buildEqProof lamBody residualOut
-  -- Single Eq leaf (κ-arity = 1)
-  else if lamBody.isAppOfArity ``Eq 3 then
-    buildEqProof lamBody residualOut
-  -- True leaf (κ-arity = 0)
-  else if lamBody.isConstOf ``True then
-    return mkConst ``True.intro
-  -- False or unknown: residual
-  else
-    let m ← mkFreshExprMVar (some lamBody) (kind := .syntheticOpaque)
-    residualOut.modify (·.push m.mvarId!)
-    return m
-
 /-- Collapse inert structure (`False ∨ _`, `_ ∨ False`, `True ∧ _`, `_ ∧ True`,
     `False ∧ _`, `_ ∧ False`, `True ∨ _`, `_ ∨ True`) in a proposition `e`,
     recursing through `∧ ∨ ∃ ∀ →` with the core congruence lemmas. Returns

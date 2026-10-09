@@ -1,6 +1,5 @@
 import Flex.Core
 import Flex.Fusion
-import Flex.Elab
 import Flex.Tactic.Utils
 import Flex.Tactic.Tactics.RewriteKs
 

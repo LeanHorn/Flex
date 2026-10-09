@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Parse solve_fixpoint output and classify kappa variable usage.
 
-Each call to solve_fixpoint emits a consecutive pair of lines:
+With `flex.benchPhases` on, each call to solve_fixpoint prints a consecutive
+pair of lines (with the option off it prints nothing, so pass
+`-Dflex.benchPhases=true` to Lean):
   [solve_fixpoint] Acyclic κ: [...]
   [solve_fixpoint] Cyclic κ:  [...]
 
@@ -17,7 +19,7 @@ Classifications:
 Usage:
     python3 scripts/kappa_classify.py < output.txt
     python3 scripts/kappa_classify.py output.txt
-    lake env lean file.lean 2>&1 | python3 scripts/kappa_classify.py
+    lake env lean -Dflex.benchPhases=true file.lean 2>&1 | python3 scripts/kappa_classify.py
 """
 
 from __future__ import annotations
@@ -26,11 +28,8 @@ import re
 import sys
 from pathlib import Path
 
-ACYCLIC_RE = re.compile(r"\[solve_fixpoint\] Acyclic κ:\s*\[([^\]]*)\]")
-CYCLIC_RE  = re.compile(r"\[solve_fixpoint\] Cyclic κ:\s*\[([^\]]*)\]")
-
 # Matches either line so we can scan in document order.
-EITHER_RE  = re.compile(
+EITHER_RE = re.compile(
     r"\[solve_fixpoint\] (Acyclic|Cyclic) κ:\s*\[([^\]]*)\]"
 )
 

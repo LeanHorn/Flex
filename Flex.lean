@@ -5,9 +5,6 @@ import Flex.Core
 -- Fusion algorithm
 import Flex.Fusion
 
---  Elaboration helpers for peeling existentials and building witness expressions.
-import Flex.Elab
-
 -- Proof producing local refinement type inference
 import Flex.Zap
 

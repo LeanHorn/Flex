@@ -70,17 +70,14 @@ class Result:
         self.elapsed = elapsed
 
 
-def check_file(path: Path, strict_sorry: bool, runner=None,
-               bench_env=None) -> Result:
-    if runner is None:
-        runner = lambda path: ["lake", "env", "lean", str(path)]
+def check_file(path: Path, strict_sorry: bool) -> Result:
     start = time.monotonic()
+    # Flex is mathlib-free: every file compiles with plain `lake env lean`.
     proc = subprocess.run(
-        runner(path),
+        ["lake", "env", "lean", str(path)],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
-        env=bench_env,
     )
     elapsed = time.monotonic() - start
     out = proc.stdout + proc.stderr
@@ -98,6 +95,8 @@ def check_file(path: Path, strict_sorry: bool, runner=None,
                 break
         if first_error is None:
             first_error = f"exit code {proc.returncode}"
+    elif strict_sorry and has_sorry:
+        first_error = "uses `sorry` (--strict-sorry)"  # so --verbose shows why
 
     ok = not has_error and not (strict_sorry and has_sorry)
     return Result(path, ok, has_sorry, first_error, elapsed)
@@ -114,10 +113,6 @@ def main() -> int:
     ap.add_argument("--verbose", action="store_true",
                     help="print the first error line for each failing file")
     args = ap.parse_args()
-
-    # Flex is mathlib-free: every file compiles with plain `lake env lean`.
-    runner = lambda path: ["lake", "env", "lean", str(path)]
-    bench_env = None
 
     # Collect files per group, sorted for stable output.
     jobs: list[tuple[str, Path]] = []
@@ -139,8 +134,7 @@ def main() -> int:
     results: dict[Path, Result] = {}
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
         futures = {
-            ex.submit(check_file, path, args.strict_sorry, runner, bench_env):
-                (group, path)
+            ex.submit(check_file, path, args.strict_sorry): (group, path)
             for group, path in jobs
         }
         for fut in as_completed(futures):
@@ -166,7 +160,7 @@ def main() -> int:
                 print(f"  {TICK} {name:<40} {timing}{tag}")
             else:
                 total_fail += 1
-                if res.has_sorry and res.first_error is None:
+                if res.has_sorry:
                     total_sorry += 1
                 print(f"  {CROSS} {name:<40} {timing}")
                 if args.verbose and res.first_error:
@@ -182,7 +176,7 @@ def main() -> int:
     if total_sorry:
         print(YELLOW(f"  ({total_sorry} file(s) use `sorry`)"))
 
-    return total_fail
+    return min(total_fail, 255)  # exit status wraps mod 256: 256 failures would read as 0
 
 
 if __name__ == "__main__":

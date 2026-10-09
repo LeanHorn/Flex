@@ -2,7 +2,6 @@ import Lean
 
 import Flex.Core
 import Flex.Fusion
-import Flex.Elab.ToExpr
 import Flex.Tactic.Utils
 import Flex.Tactic.Tactics.RewriteKs
 import Flex.Tactic.Tactics.Lazy

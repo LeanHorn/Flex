@@ -1,43 +1,5 @@
 import Lean
 
-syntax (name := combine_n) "combine_n " num : tactic
-
-open Lean Meta Elab Tactic in
-@[tactic combine_n] def evalCombineN : Tactic := fun stx => do
-  let n := stx[1].toNat
-
-  let goals ← getGoals
-  if goals.length < n then throwError "Not enough goals."
-
-  let toCombine := goals.take n
-  let rest := goals.drop n
-
-  let types ← toCombine.mapM (fun g => g.getType)
-
-  let newTarget ← types.take (n - 1) |>.foldrM
-    (fun (t : Expr) (acc : Expr) => mkAppM ``And #[t, acc])
-    (types[(n - 1)]!)
-
-  let firstGoal := toCombine.head!
-  let mvarDecl ← firstGoal.getDecl
-
-  let mvarNew ← mkFreshExprMVarAt
-    mvarDecl.lctx
-    mvarDecl.localInstances
-    newTarget
-    MetavarKind.natural
-    `combined_goal
-
-  let mut currentProof := mvarNew
-  for i in [:n-1] do
-    let g := toCombine[i]!
-    g.assign (← mkAppM ``And.left #[currentProof])
-    currentProof ← mkAppM ``And.right #[currentProof]
-  toCombine[(n-1)]!.assign currentProof
-
-  setGoals (mvarNew.mvarId! :: rest)
-
-
 theorem and_exists_hoist {α : Sort u} {P : Prop} {Q : α → Prop} :
     (P ∧ (∃ x, Q x)) ↔ ∃ x, P ∧ Q x := by
   constructor
@@ -163,11 +125,6 @@ elab "hoist_exists" : tactic => do
   let newGoal ← g'.replaceTargetDefEq renamed
   replaceMainGoal [newGoal]
 
--- `under_exists => tacs`
--- Runs `tacs` with all existential witnesses replaced by fresh metavars.
--- If all subgoals are solved, the witnesses are determined and we're done.
--- If subgoals remain, they are combined with ∧, abstracted over any
--- undetermined witnesses, and re-wrapped as nested ∃ goals.
 syntax (name := underExists) "under_exists" "=>" tacticSeq : tactic
 
 open Lean Meta Elab Tactic in

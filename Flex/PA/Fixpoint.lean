@@ -43,7 +43,7 @@ partial def solveFixpoint
     synthesis. Per κ, β-apply every surviving candidate at κ's canonical fvar
     placeholders (`FVarId.mk "z0"`, …), then conjoin.
 
-    Output shape matches what `solToWitnessExpr` in `Elab/ToExpr.lean` expects. -/
+    Output shape matches what `solToWitnessExpr` in `Core/Elab.lean` expects. -/
 def finalizeSolutions (assignment : List (KVar × List (Expr × List Nat)))
     : MetaM (List (KVar × Expr)) := do
   assignment.mapM fun (κ, cands) => do

@@ -3,7 +3,8 @@
 
 For every .lean file in Benchmarks/Liquid-fixpoint/ (and optionally
 Benchmarks/FluxRS/ and Demo/) this script:
-  1. Runs `lake env lean <file>` and captures stdout+stderr.
+  1. Runs `lake env lean -Dflex.benchPhases=true <file>` (the option makes
+     solve_fixpoint print its κ lines) and captures stdout+stderr.
   2. Passes the output through the kappa classifier.
   3. Prints a summary table.
 
@@ -63,7 +64,7 @@ LABEL_COLOR = {
 def run_file(path: Path) -> dict:
     start = time.monotonic()
     proc = subprocess.run(
-        ["lake", "env", "lean", str(path)],
+        ["lake", "env", "lean", "-Dflex.benchPhases=true", str(path)],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -71,12 +72,9 @@ def run_file(path: Path) -> dict:
     elapsed = time.monotonic() - start
     output = proc.stdout + proc.stderr
 
-    if proc.returncode != 0 and "error:" in output:
-        invocations = []
-        error = True
-    else:
-        invocations = parse_invocations(output)
-        error = False
+    # Lean exits non-zero on any error; a crash may print no `error:` at all.
+    error = proc.returncode != 0
+    invocations = [] if error else parse_invocations(output)
 
     # per-category tally across all invocations in this file
     tally: dict[str, int] = {"none": 0, "acyclic_only": 0, "cyclic_only": 0, "both": 0}
@@ -169,11 +167,13 @@ def main() -> int:
                 for label, cnt in tally.items()
                 if cnt > 0
             ]
-            tally_str = "  ".join(parts) if parts else "none"
+            # "none" is a category (a call with no κs), so say so when there is no call.
+            tally_str = "  ".join(parts) if parts else "no solve_fixpoint call"
 
             # color by the "most interesting" category present
             dominant = next(
-                (l for l in ("both", "cyclic_only", "acyclic_only", "none") if tally.get(l, 0) > 0),
+                (label for label in ("both", "cyclic_only", "acyclic_only", "none")
+                 if tally.get(label, 0) > 0),
                 "none",
             )
             color = LABEL_COLOR.get(dominant, str)
@@ -195,7 +195,7 @@ def main() -> int:
         color = LABEL_COLOR["error"]
         print(f"  {color(f'error         ')} {total_errors:>4}  (files that failed to compile)")
 
-    return total_errors
+    return min(total_errors, 255)  # exit status wraps mod 256: 256 errors would read as 0
 
 
 if __name__ == "__main__":

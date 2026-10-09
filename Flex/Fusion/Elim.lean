@@ -37,18 +37,8 @@ partial def exprElimStar (κ : KVar) (sol : Expr) (e : Expr) : KM Expr := do
     Caller is responsible for assigning κ-mvar AFTER consuming the new
     constraint — never before, or `whnf` will eagerly expand `?κ` and the
     next iteration's elim1 will see no raw `?κ` to substitute. -/
-
 def exprElim1 (κ : KVar) (e : Expr) : KM (Expr × Expr) := do
   let scoped' ← exprScope κ e
   let sol     ← exprSolScoped κ scoped'
   let newE    ← exprElimStar κ sol e
   return (sol, newE)
-
-def exprElim (kvars : List KVar) (e : Expr) : KM (List (KVar × Expr) × Expr) := do
-  let mut acc := e
-  let mut sols : List (KVar × Expr) := []
-  for κ in kvars do
-    let (sol, acc') ← exprElim1 κ acc
-    sols := sols ++ [(κ, sol)]
-    acc := acc'
-  return (sols, acc)

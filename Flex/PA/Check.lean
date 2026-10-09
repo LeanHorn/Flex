@@ -4,11 +4,9 @@ import Flex.Tactic.Utils
 
 open Lean Meta Elab Tactic
 
--- Run `k` and discard any messages it logs (errors, warnings, traces).
--- PA candidate-checking calls `grind`/`omega`/etc. inside `first`-style
--- ladders; failed branches log diagnostics that survive plain `try/catch`
--- because they go through Lean's message log, not the exception path.
--- We snapshot the log before, restore it after, regardless of outcome.
+/-- Run `k` and throw away every message it logged, whether it succeeded or
+    not. Needed because `grind`/`omega` report failures through the message
+    log, not as exceptions, so `try`/`first` alone would leak them. -/
 private def withSilencedMessages {α} (k : TermElabM α) : TermElabM α := do
   let saved ← Core.getMessageLog
   try
@@ -19,83 +17,41 @@ private def withSilencedMessages {α} (k : TermElabM α) : TermElabM α := do
     Core.setMessageLog saved
     throw e
 
--- Attempt to prove `prop` via the standard tactic ladder.
--- Returns `true` iff all goals are closed AND the resulting proof term
--- contains no `sorry`. Lean's `(constructor <;> grind)` silently uses
--- `sorry` for unsolved sub-goals, so `goals.isEmpty` alone is unsound:
--- `Tactic.run` reports goals=0, mvar.isAssigned=true, but the proof has
--- `sorry` inside.
-def checkExprVC (prop : Expr) : TermElabM Bool := withSilencedMessages do
-  let mvar   ← mkFreshExprMVar (some prop) (kind := .syntheticOpaque)
-  let mvarId := mvar.mvarId!
-  try
-    let goals ← Tactic.run mvarId do
-      evalTactic (← `(tactic|
-        (intros
-         first
-           | omega
-           | grind
-           -- `aesop` drives `simp` normalization that unfolds recursive
-           -- `@[grind]` defs (e.g. `fib_spec_fib`) without bound; the
-           -- resulting `maxRecDepth` is logged as a diagnostic rather than
-           -- thrown, so `withSilencedMessages`/`try` can't swallow it and it
-           -- fails the whole build. It also over-weakens PA solutions on
-           -- several benchmarks (12 regressions when enabled). Keep dropped.
-           | (constructor <;> grind))))
-    if !goals.isEmpty then return false
-    let proof ← instantiateMVars mvar
-    return !proof.hasSorry
-  catch _ =>
-    return false
+/-- The tactic oracle used by all of PA. Change it here only.
+    No `aesop`: it can hit `maxRecDepth` (uncatchable) and over-weakens solutions. -/
+syntax "pa_oracle" : tactic
+macro_rules
+  | `(tactic| pa_oracle) => `(tactic| first | omega | grind | (constructor <;> grind))
 
--- Proof-RETURNING oracle (§5 `prove`/`Provable`). Same contract as
--- `checkExprVC` — silence messages, run the tactic ladder, reject `sorry` —
--- but on success returns the proof *term* (Some) instead of a Bool. The
--- certifying PA glue (`walkPAProof`) calls this at each κ-head leaf to
--- discharge every survivor conjunct `q[ρ](x̄)`, then `And.intro`s the proofs.
---
--- The goal here is the bare atom `q[ρ](x̄)`; its hypotheses Γ (the ∀-binders
--- and guards) are already ambient fvars threaded in by the walk, so NO
--- `intros` is needed. The tactic ladder MUST match `checkExprVC`'s so that
--- any candidate that survived weakening re-proves at glue time (a superset
--- ladder is sound; a weaker one could drop a survivor and break the bridge).
-def proveLeaf (goal : Expr) : TermElabM (Option Expr) := withSilencedMessages do
-  let mvar   ← mkFreshExprMVar (some goal) (kind := .syntheticOpaque)
-  let mvarId := mvar.mvarId!
-  try
-    let goals ← Tactic.run mvarId do
-      evalTactic (← `(tactic|
-        (first
-          | omega
-          | grind
-          | (constructor <;> grind))))
-    if !goals.isEmpty then return none
-    let proof ← instantiateMVars mvar
-    -- Reject `sorry` (silently inserted by `constructor <;> grind` for
-    -- unsolved subgoals) and any still-unassigned mvar.
-    if proof.hasSorry || proof.hasExprMVar then return none
-    return some proof
-  catch _ =>
-    return none
+/-- Try to prove `goal` with `tac`. Returns the proof term, or `none` if the
+    tactic failed or left anything unproved. -/
+def proveLeafWith (tac : TSyntax `tactic) (goal : Expr) : TermElabM (Option Expr) :=
+  withSilencedMessages do
+    let mvar ← mkFreshExprMVar (some goal) (kind := .syntheticOpaque)
+    try
+      let goals   ← Tactic.run mvar.mvarId! (evalTactic tac)
+      if !goals.isEmpty then return none
+      let proof   ← instantiateMVars mvar
+      -- No goals left is not enough: `constructor <;> grind` hides unsolved
+      -- subgoals behind `sorry`.
+      if proof.hasSorry || proof.hasExprMVar then return none
+      return some proof
+    catch _ =>
+      return none
 
--- Sat-guard for PA: returns `true` iff the LHS hypothesis of the
--- implication-shaped `propWithFalseConclusion` is contradictory — i.e.
--- the same clause but with the conclusion replaced by `False` is provable.
--- Caller passes a goal whose head leaf has already been replaced with
--- `False` (via `specializeClauseAsNeg`).
-def checkExprUnsat (propWithFalseConclusion : Expr) : TermElabM Bool := withSilencedMessages do
-  let mvar   ← mkFreshExprMVar (some propWithFalseConclusion) (kind := .syntheticOpaque)
-  let mvarId := mvar.mvarId!
-  try
-    let goals ← Tactic.run mvarId do
-      evalTactic (← `(tactic|
-        (intros
-         first
-           | omega
-           | grind
-           | (constructor <;> grind))))
-    if !goals.isEmpty then return false
-    let proof ← instantiateMVars mvar
-    return !proof.hasSorry
-  catch _ =>
-    return false
+/-- Prove one qualifier `q(x̄)` with the PA oracle and return the proof term.
+    Used by `walkPAProof` to build the certificate. The hypotheses are already
+    in the local context, so no `intros` (unlike `checkExprVC`). -/
+def proveLeaf (goal : Expr) : TermElabM (Option Expr) := do
+  proveLeafWith (← `(tactic| pa_oracle)) goal
+
+/-- Can the oracle prove the clause `prop`? Same check as `proveLeaf`, but
+    the goal is a whole clause, so `intros` first. -/
+def checkExprVC (prop : Expr) : TermElabM Bool := do
+  return (← proveLeafWith (← `(tactic| (intros; pa_oracle))) prop).isSome
+
+/-- Sat-guard: is the clause body contradictory? The caller has already
+    replaced the head with `False` (`specializeClauseAsNeg`), so this is just
+    `checkExprVC` on that clause. -/
+def checkExprUnsat (propWithFalseConclusion : Expr) : TermElabM Bool :=
+  checkExprVC propWithFalseConclusion

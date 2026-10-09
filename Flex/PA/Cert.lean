@@ -17,10 +17,10 @@ open Lean Meta Elab Term Tactic
   `And.intro` over per-survivor oracle proofs, and every κ-free leaf is left
   as a residual obligation (a query of `c′`).
 
-  Structurally `walkPAProof` mirrors Zap's `walkProof`
-  (`Flex/Zap/Nav.lean`) — ∀↦λ, ∧↦`And.intro`, κ-free leaf↦residual
+  Structurally `walkPAProof` mirrors Zap's `cert`
+  (`Flex/Zap/Cert.lean`) — ∀↦λ, ∧↦`And.intro`, κ-free leaf↦residual
   mvar — differing only at the κ-head leaf, where Zap emits its strongest
-  ∃-tree solution (`emitKLeaf`) and PA emits the survivor conjunction
+  ∃-tree solution (`nav`) and PA emits the survivor conjunction
   (`emitPALeaf`). No binder/guard bookkeeping is needed: each survivor
   conjunct is an atom proved by the ambient-context oracle `proveLeaf`.
 -/

@@ -1,7 +1,7 @@
 import Flex.CHC
 
 /-! Real Spacer integration checks. These require `z3` on PATH, like the existing
-lean-auto demos. Protocol and process-failure tests live in `CHCRunner.lean`. -/
+lean-auto demos. Protocol and process-failure tests live in `Runner.lean`. -/
 namespace CHCSpacerDemo
 
 open Lean Meta Qq Flex.CHC

@@ -121,7 +121,7 @@ def main() -> int:
         if not directory.is_dir():
             print(YELLOW(f"! {group}: directory not found ({directory})"))
             continue
-        for f in sorted(directory.glob("*.lean")):
+        for f in sorted(directory.rglob("*.lean")):
             if args.filter and args.filter not in str(f):
                 continue
             jobs.append((group, f))
@@ -151,7 +151,7 @@ def main() -> int:
         print(BOLD(f"{group}/"))
         for path in group_jobs:
             res = results[path]
-            name = path.name
+            name = str(path.relative_to(directory))
             timing = DIM(f"{res.elapsed:5.1f}s")
             if res.ok:
                 tag = ""

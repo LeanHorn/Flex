@@ -55,7 +55,8 @@ This includes all core types, tactics, elaboration, and the solver.
 For lean-smt, additionally import `Flex.Tactic.Oracles.Smt`.
 
 SMTLib-to-Lean is available as an explicit `import Smt2Lean`. It is not imported
-by `Flex` and does not change `fix` or add CHC invariant synthesis yet.
+by `Flex`. The CHC export, solver, and witness APIs below require `import Flex.CHC`;
+automatic integration into `fix` remains a separate step.
 
 To check the dependency integration and existing examples:
 
@@ -126,7 +127,7 @@ Nat, other theories, arbitrary function calls, nested quantifiers in guards,
 proof-dependent/higher-order constraints, nonlinear products, division/modulo,
 and `BEq` comparisons are rejected. Use propositional equality instead of `==`.
 SMT Bool represents both Lean Bool and Prop; the relation map retains that
-distinction for the later witness-instantiation adapter.
+distinction for the witness adapter described below.
 
 The implementation separates the public result types in
 [`Types.lean`](Flex/CHC/Types.lean), the allowed theory in
@@ -134,13 +135,13 @@ The implementation separates the public result types in
 [`Prepare.lean`](Flex/CHC/Prepare.lean), script formatting in
 [`Script.lean`](Flex/CHC/Script.lean), and the export pipeline in
 [`Export.lean`](Flex/CHC/Export.lean).
-[`Demo/CHCExport.lean`](Demo/CHCExport.lean) checks round trips back to Lean,
+[`Demo/CHC/Export.lean`](Demo/CHC/Export.lean) checks round trips back to Lean,
 source scopes and signatures, deterministic output, state preservation, and
 unsupported inputs. It runs as part of the standard regression script and does
 not require an external solver:
 
 ```sh
-lake build Demo.CHCExport
+lake build Demo.CHC.Export
 ```
 
 ## Running Spacer
@@ -177,9 +178,8 @@ from the script or executable path.
 The shared response decoder reuses SMTLib-to-Lean's `SolverResponse.parse`.
 It rejects nonzero process exits, solver errors, malformed output, and `sat`
 without a model, while accepting an explicitly empty model. Model definitions
-remain source text with provenance; reconstructing, type-checking, and assigning
-them as Lean witnesses belongs to the next integration step. This API does not
-close a Lean goal or add a `fix` option yet.
+remain source text with provenance. The witness API below reconstructs and assigns
+them separately. Running Spacer does not close a Lean goal or add a `fix` option.
 
 The implementation separates process handling in
 [`Process.lean`](Flex/CHC/Process.lean), shared response handling in
@@ -188,10 +188,92 @@ The implementation separates process handling in
 
 ```sh
 # Deterministic protocol/process tests (Python 3; no Z3 required).
-lake lean Demo/CHCRunner.lean
+lake lean Demo/CHC/Runner.lean
 # Real counter, Bool/Int, empty-model, and unsatisfiable cases (requires Z3).
-lake lean Demo/CHCSpacer.lean
+lake lean Demo/CHC/Spacer.lean
 ```
+
+## Importing and assigning CHC witnesses
+
+After exporting `problem` and running Spacer, prepare its complete model with
+`importWitnesses`, then explicitly assign the resulting predicates:
+
+```lean
+  let result ← Flex.CHC.Spacer.run problem
+  let witnesses ← Flex.CHC.importWitnesses problem result
+  -- Inspect witnesses[i].value here; preparation has assigned no κs.
+  Flex.CHC.assignWitnesses problem witnesses
+  -- The constraint body is still an open proof goal.
+```
+
+Each `Witness` stores its solver symbol, original κ metavariable ID, and a closed
+Lean expression of the original predicate type. Import matches definitions by
+symbol and returns them in existential order, retaining unused arguments and
+nullary predicates. Every exported predicate must have a model definition.
+Additional model helpers are expanded by SMTLib-to-Lean's existing importer.
+
+The importer represents SMT Bool as Lean Prop. The adapter restores the original
+parameter types: a Lean Bool argument `b` is supplied to the imported predicate as
+`b = true`, while an original Prop argument is passed unchanged. It checks the
+model signature, captured export metadata, current witness-slot type, and adapted
+expression. Unsupported model definitions are rejected by the shared importer.
+
+Preparation restores the caller's meta state on both success and failure.
+Assignment rechecks the complete witness collection before changing any κ;
+missing entries, wrong types, altered identities, and already assigned or
+delayed-assigned slots are errors. A failed assignment restores the state from
+before the call, including any assignments that were already present.
+
+These checks establish well-typed candidates, not that the predicates satisfy the
+constraints. The residual body must still be proved in Lean. Automatic `fix`
+integration and fallback are the next step.
+
+[`Witness.lean`](Flex/CHC/Witness.lean) implements these two operations.
+[`Demo/CHC/Witness.lean`](Demo/CHC/Witness.lean) tests model adaptation and atomic
+assignment without launching a solver. [`Demo/CHC/Instantiate.lean`](Demo/CHC/Instantiate.lean)
+tests the full Spacer-to-witness path and closes the resulting constraints with
+ordinary Lean proofs, checking that no `sorry` or trusted SMT axiom is used:
+
+```sh
+lake lean Demo/CHC/Witness.lean
+lake lean Demo/CHC/Instantiate.lean  # requires Z3
+```
+
+## Comparing CHC solvers on the demos
+
+[`scripts/benchmark_chc.py`](scripts/benchmark_chc.py) measures the 20 propositions
+in `Demo/Basic.lean` and the 8 in `Demo/Cyclic.lean`. The solver paths export the
+original constraints, ask Spacer or Eldarica for every predicate, import and
+assign their models, then split conjunctions/introduce binders and run `omega`
+with `grind` as fallback. They do not invoke Flex's PA, fusion, or zap. Eldarica
+is invoked through a benchmark adapter using the shared process runner and model
+importer; it is not yet a production `fix` backend.
+
+```sh
+# Z3 and Eldarica must be installed; --eldarica also accepts an absolute path.
+python3 scripts/benchmark_chc.py --eldarica eld
+# Alternatively, compare only Spacer and the current Flex pipeline.
+python3 scripts/benchmark_chc.py --backends fix spacer
+```
+
+The baseline is `solve_fixpoint`, including its fusion and PA stages. Both demo
+modules are imported for every run, so their qualifier declarations are available
+to that baseline. A successful run must produce a closed proof of the original
+proposition, pass a kernel check, use only standard Lean axioms, and avoid reusing
+the demos' existing proofs. Export, solver, import, and VC failures remain visible
+as separate outcomes; `sat` alone does not count as a completed proof.
+
+The script runs serially, with one warm-up and three measured repetitions in a
+seeded shuffled order. Timings exclude imports, dependency builds, and witness
+pretty printing; they include a fresh solver process, model reconstruction, VC
+discharge, and the final proof audit. The solver column measures the complete
+adapter call, including startup and response parsing, rather than engine CPU
+time. [`eval/CHCCases.lean`](eval/CHCCases.lean) contains the measured pipeline.
+Compact per-case medians, individual runs, and environment metadata are written
+to `eval/chc_results.csv`, `eval/chc_results_runs.csv`, and
+`eval/chc_results.metadata.json`. Failed or incomplete repetition groups have no
+speedup entry. The shared exporter currently rejects `ex_nat`, `ex_bool`
+(`decide`), `ex_pair`, `ex_prod`, and `ex_userfn` (`double`).
 
 ## Basic example
 

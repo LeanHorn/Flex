@@ -2,17 +2,18 @@
 import Flex.Core
 
 open Lean Meta
-/-- Flatten: split `And` at top level, distribute `∀` over `And`. -/
-partial def exprFlat (e : Expr) : KM (List Expr) := do
-  -- reduce to weak head normal form
-  let e ← whnf e
+/-- Flatten: split `And` at top level, distribute `∀` over `And`.
+The default exposes definitions with `whnf`. Exporters can supply a reducer that
+preserves theory operators for a downstream translator. -/
+partial def exprFlat (e : Expr) (expose : Expr → MetaM Expr := whnf) : KM (List Expr) := do
+  let e ← expose e
 
   -- flat(true) ≃ ∅
   if e.isConstOf ``True then
     return []
   -- flat(cₗ ∧ cᵣ) ≃ flat(cₗ) ⋃ flat(cᵣ)
   else if let some (l, r) := e.and? then
-    return (← exprFlat l) ++ (← exprFlat r)
+    return (← exprFlat l expose) ++ (← exprFlat r expose)
   -- flat(∀ x : b. c)
   -- NOTE: this works with multiple guards
   -- so, c can be p₁ → p₂ → ... → pₙ → c
@@ -23,7 +24,7 @@ partial def exprFlat (e : Expr) : KM (List Expr) := do
     withLocalDeclD e.bindingName! e.bindingDomain! fun fvar => do
       -- flatCs ≃ flatten(c'),
       -- where c' is instantiation of c with free variable x
-      let flatBodies ← exprFlat (e.bindingBody!.instantiate1 fvar)
+      let flatBodies ← exprFlat (e.bindingBody!.instantiate1 fvar) expose
       -- {∀ x : b. p ⇒ c'' | c'' ∈ flatCs}
       flatBodies.mapM fun fb => do
         let abstr := fb.abstract #[fvar]

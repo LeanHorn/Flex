@@ -24,6 +24,24 @@ run_elab do
     discard <| check.toIO { fileName := "dependency-compatibility", fileMap := default } { env }
   ).runIO
 
+-- Standalone values must remain usable after the native callback ends.
+run_elab do
+  let env ← getEnv
+  let output ← IO.mkRef (#[] : Array Smt2Lean.ReconstructedDefinition)
+  (Smt2Lean.Backend.parseAndInspectQuery
+      "(set-logic ALL) (define-fun inv ((x Int) (unused Bool)) Bool (>= x 0)) (check-sat)"
+      fun query => do
+    let (definitions, _, _) ← (Smt2Lean.Translate.reconstructDefinitions query).toIO
+      { fileName := "standalone-compatibility", fileMap := default } { env }
+    output.set definitions
+  ).runIO
+  let #[definition] ← output.get | throwError "expected one standalone definition"
+  unless definition.name == "inv" &&
+      (← isDefEq definition.type q(Int → Prop → Prop)) &&
+      (← isDefEq definition.value q(fun (x : Int) (_ : Prop) => x ≥ 0)) do
+    throwError "standalone reconstruction lost its name, parameter order, or body"
+  checkWithKernel definition.value
+
 set_option auto.smt.timeout 1
 
 def counter : Prop := ∃ k : Int → Prop,

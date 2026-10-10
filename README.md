@@ -68,7 +68,82 @@ The regression suite includes `Demo/DependencyCompatibility.lean`, which imports
 both libraries, parses and reconstructs an SMT definition, and exercises the
 existing SMT proof and synthesis routes in the same environment.
 
-### Example
+## Exporting constraints for CHC solvers
+
+Import `Flex.CHC` to use `Flex.CHC.exportConstraints`. It takes an already peeled
+constraint body and its `KVar`s in existential order, and returns an
+`ExportedProblem` containing SMT commands, a clause count, and a relation map.
+Each map entry preserves the original κ identity and Lean type, its generated
+SMT symbol, and its ordered argument sorts, including unused parameters.
+
+```lean
+import Flex.CHC
+
+open Lean Meta Qq
+
+run_elab do
+  -- An isolated goal for this example; an integrating tactic can use its
+  -- existing result from peelKVars instead.
+  let goal ← mkFreshExprMVar q(∃ k : Int → Prop,
+    k 0 ∧ (∀ x, k x → k (x + 1)) ∧ (∀ x, k x → 0 ≤ x))
+  let (_, kvars, bodyGoal) ← peelExistentialsAndIntro goal.mvarId!
+  let problem ← Flex.CHC.exportConstraints kvars (← bodyGoal.getType)
+  logInfo problem.toSMTLib
+```
+
+Run with `lake lean`, which loads the native parser plugin. This produces:
+
+```smt2
+(set-logic HORN)
+(declare-fun k_0 (Int) Bool)
+(assert (k_0 0))
+(assert (forall ((v_0 Int)) (=> (k_0 v_0) (k_0 (+ v_0 1)))))
+(assert (forall ((v_0 Int)) (=> (k_0 v_0) (<= 0 v_0))))
+(check-sat)
+```
+
+The exporter reuses Flex's flattening, lean-smt's expression translators and
+query builder, and SMTLib-to-Lean's native CHC validator. It neither launches a
+solver nor assigns κ witnesses. The script asserts the constraints themselves;
+it does not negate a proof goal. Solver-specific options and model requests
+belong to the later runner. The module is an explicit import, so ordinary
+`import Flex` does not acquire this native dependency.
+
+The initial fragment supports first-order `Int`, `Bool`, and `Prop` parameters,
+Boolean connectives, integer comparisons, addition/subtraction, multiplication
+by an integer literal, ordinary `ite`, and local `let` expressions. Standard
+arithmetic instances are required. Universal value binders are moved ahead of
+guards without capturing variables; unused value binders are omitted because
+these types are nonempty. Unused predicate arguments and declarations are kept.
+The script groups universal binders in one SMT-LIB `forall`, avoiding Spacer's
+rejection of nested mixed Bool/Int binders. Runners should use `toSMTLib` to retain
+this formatting.
+
+Inputs must be closed except for the supplied, unassigned κs. Ambient parameters
+and hypotheses must occur as explicit binders and guards in the constraint body;
+they are never silently turned into existentially interpreted SMT constants.
+Nat, other theories, arbitrary function calls, nested quantifiers in guards,
+proof-dependent/higher-order constraints, nonlinear products, division/modulo,
+and `BEq` comparisons are rejected. Use propositional equality instead of `==`.
+SMT Bool represents both Lean Bool and Prop; the relation map retains that
+distinction for the later witness-instantiation adapter.
+
+The implementation separates the public result types in
+[`Types.lean`](Flex/CHC/Types.lean), the allowed theory in
+[`Fragment.lean`](Flex/CHC/Fragment.lean), binder and guard preparation in
+[`Prepare.lean`](Flex/CHC/Prepare.lean), script formatting in
+[`Script.lean`](Flex/CHC/Script.lean), and the export pipeline in
+[`Export.lean`](Flex/CHC/Export.lean).
+[`Demo/CHCExport.lean`](Demo/CHCExport.lean) checks round trips back to Lean,
+source scopes and signatures, deterministic output, state preservation, and
+unsupported inputs. It runs as part of the standard regression script and does
+not require an external solver:
+
+```sh
+lake build Demo.CHCExport
+```
+
+## Basic example
 
 ```lean4
 import Flex

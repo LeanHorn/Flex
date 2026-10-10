@@ -33,19 +33,25 @@ This clones the repo into `.lake/packages/Flex/` using your local Git credential
 lake build
 ```
 
-> **Note:** Flex is mathlib-free — the only dependency is `aesop` (built from source on the first build).
+> **Note:** Flex depends on `aesop`, pinned `lean-auto`, and pinned `lean-smt`.
+> Its modules do not import Mathlib, but the pinned lean-smt package declares
+> Mathlib as a transitive dependency. `flex_auto` needs `z3` on `PATH`;
+> lean-smt downloads its own cvc5 native library during the first build.
+> `MATHLIB_NO_CACHE_ON_UPDATE=1 lake --keep-toolchain update` avoids fetching
+> unused Mathlib build caches. The Lean toolchain remains `v4.29.0-rc8`.
 
 ---
 
 ## Importing
 
-A single import gives you everything:
+A single import gives you the core API, Lean tactics, and lean-auto wrapper:
 
 ```lean4
 import Flex
 ```
 
 This includes all core types, tactics, elaboration, and the solver.
+For lean-smt, additionally import `Flex.Tactic.Oracles.Smt`.
 
 ### Example
 

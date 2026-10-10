@@ -67,12 +67,13 @@ def conjProofs : List (Expr × Expr) → Expr
 def emitPALeaf
     (κ : KVar)
     (survivors : List (Expr × List Nat))
-    (args : Array Expr) :
+    (args : Array Expr)
+    (oracle : PAOracle := proveLeaf) :
     TermElabM Expr := do
   let pairs ← survivors.mapM fun (q, slots) => do
     let chosen : Array Expr := (slots.map fun i => args[i]!).toArray
     let φ ← Expr.instQualifier q chosen
-    match ← proveLeaf φ with
+    match ← oracle φ with
     | some p => pure (φ, p)
     | none   =>
       throwError "pa_cert: oracle failed to prove survivor{indentExpr φ}\n\
@@ -95,11 +96,12 @@ def emitPALeaf
 partial def walkPAProof
     (assign : List (KVar × List (Expr × List Nat)))
     (goal : Expr)
-    (residualOut : IO.Ref (Array MVarId)) :
+    (residualOut : IO.Ref (Array MVarId))
+    (oracle : PAOracle := proveLeaf) :
     TermElabM Expr := do
   -- (a) κ-headed leaf — check before ∀/∧ since the leaf is an application.
   if let some (κ, survivors, args) := paHead? assign goal then
-    return ← emitPALeaf κ survivors args
+    return ← emitPALeaf κ survivors args oracle
   -- A κ-mvar head not under PA (non-cut) — abort with guidance.
   if goal.getAppFn.isMVar then
     throwError "pa_cert: head metavariable{indentExpr goal.getAppFn}\nis not a \
@@ -111,12 +113,12 @@ partial def walkPAProof
     let bi   := goal.bindingInfo!
     return ← withLocalDecl name bi dom fun fv => do
       let body  := goal.bindingBody!.instantiate1 fv
-      let inner ← walkPAProof assign body residualOut
+      let inner ← walkPAProof assign body residualOut oracle
       mkLambdaFVars #[fv] inner
   -- (c) ∧ — split, recurse, And.intro.
   if let some (l, r) := goal.and? then
-    let pL ← walkPAProof assign l residualOut
-    let pR ← walkPAProof assign r residualOut
+    let pL ← walkPAProof assign l residualOut oracle
+    let pR ← walkPAProof assign r residualOut oracle
     return mkAndIntro l r pL pR
   -- (d) κ-free leaf — residual mvar (a query of c′). Created in the ambient
   --     LCtx, so it carries its context Γ (binders + guard hyps) as a goal.

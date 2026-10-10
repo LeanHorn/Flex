@@ -98,6 +98,7 @@ partial def weakenOnce
     (kctx       : KContext)
     (flatCs     : List Expr)
     (assignment : List (KVar × List (Expr × List Nat)))
+    (oracle : PAOracle := proveLeaf)
     : TermElabM (List (KVar × List (Expr × List Nat))) := do
   -- A2: `currentSols` is rebuilt INSIDE the per-clause loop so each clause
   -- sees the latest `out` (post earlier-clause refinements within this iter).
@@ -112,14 +113,14 @@ partial def weakenOnce
     -- don't touch `out`. Other clauses processed in this iter shrink `out`,
     -- usually breaking the inconsistency on the next pass.
     let negVC ← (specializeClauseAsNeg headKVar currentSols fc).run kctx
-    let vacuous ← checkExprUnsat negVC
+    let vacuous ← checkExprUnsat negVC oracle
     match vacuous with
     | true  => pure ()
     | false =>
       let mut kept : List (Expr × List Nat) := []
       for (q, slots) in candidates do
         let vc ← (specializeClauseForHead headKVar q slots currentSols fc).run kctx
-        if ← checkExprVC vc then
+        if ← checkExprVC vc oracle then
           kept := kept.concat (q, slots)
       out := out.map fun (κ, qs) =>
         if κ == headKVar then (κ, kept) else (κ, qs)

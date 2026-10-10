@@ -7,15 +7,15 @@ import Flex.PA.Weaken
 
 open Lean Meta Elab Term Tactic
 
-/-- Build the initial Houdini assignment: every cyclic κ maps to the union
-    of every `@[qualif]`-tagged lambda instantiated over every type-compatible
+/-- Build the initial Houdini assignment from `@[qualif]` definitions and any
+    per-call scraped lambdas, each instantiated over every type-compatible
     ordered slot-tuple of `κ.paramTypes`.
 
     For 4-arg `k0` with 4 tagged qualifiers, this produces on the order of
     4 + 12 + 12 + 12 = 40 candidates. -/
-def buildInitialAssignment (cyclicKs : List KVar)
+def buildInitialAssignment (cyclicKs : List KVar) (extraQualifiers : Array Expr := #[])
     : MetaM (List (KVar × List (Expr × List Nat))) := do
-  let qs ← getQualifiers
+  let qs := (← getQualifiers) ++ extraQualifiers
   cyclicKs.mapM fun κ => do
     let mut cands : List (Expr × List Nat) := []
     for q in qs do
@@ -30,14 +30,15 @@ partial def solveFixpoint
     (kctx       : KContext)
     (flatCs     : List Expr)
     (assignment : List (KVar × List (Expr × List Nat)))
+    (oracle : PAOracle := proveLeaf)
     : TermElabM (List (KVar × List (Expr × List Nat))) := do
-  let next ← weakenOnce kctx flatCs assignment
+  let next ← weakenOnce kctx flatCs assignment oracle
   let beforeCount := assignment.foldl (fun acc (_, cs) => acc + cs.length) 0
   let afterCount  := next.foldl       (fun acc (_, cs) => acc + cs.length) 0
   if afterCount == beforeCount then
     return next
   else
-    solveFixpoint kctx flatCs next
+    solveFixpoint kctx flatCs next oracle
 
 /-- Turn the final Houdini assignment into one `Expr` per κ, ready for witness
     synthesis. Per κ, β-apply every surviving candidate at κ's canonical fvar

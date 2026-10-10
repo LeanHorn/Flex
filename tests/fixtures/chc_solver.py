@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic subprocess fixtures for Demo/CHCRunner.lean; no solver needed."""
+"""Deterministic subprocess fixtures for Demo/CHC/Runner.lean; no solver needed."""
 
 import os
 import signal

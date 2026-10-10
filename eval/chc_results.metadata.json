@@ -1,0 +1,131 @@
+{
+  "started_at": "2026-10-10T23:08:53.904625+00:00",
+  "platform": "macOS-26.2-arm64-arm-64bit",
+  "lean": "Lean (version 4.33.1, arm64-apple-darwin24.6.0, commit 819816b2e0a3bf405af45ae5c7af2491d8f5bee6, Release)",
+  "z3": "Z3 version 4.15.4 - 64 bit",
+  "eldarica": "Eldarica v2.3",
+  "eldarica_executable": "/tmp/flex-eldarica",
+  "repeats": 3,
+  "warmups": 1,
+  "seed": 20261011,
+  "cases": [
+    "ex1",
+    "ex2",
+    "ex3",
+    "ex4",
+    "ex5",
+    "ex6",
+    "ex7",
+    "ex8",
+    "ex9",
+    "ex10",
+    "ex11",
+    "ex12",
+    "ex13",
+    "ex14",
+    "ex_nat",
+    "ex_bool",
+    "ex_pair",
+    "ex_prod",
+    "ex_userfn",
+    "ex_stress",
+    "cyc0",
+    "pa1",
+    "pa2",
+    "pa3",
+    "pa4",
+    "pa5",
+    "pa6",
+    "pa7"
+  ],
+  "backends": [
+    "fix",
+    "spacer",
+    "eldarica"
+  ],
+  "solver_timeout_ms": 10000,
+  "batch_timeout_seconds": 600,
+  "timing": "serial in-process Lean wall time, including fresh solver startup and kernel audit; excludes imports, builds, witness pretty printing",
+  "baseline": "solve_fixpoint with Demo.Basic and Demo.Cyclic imported (including Cyclic qualifiers)",
+  "sources_sha256": {
+    "Demo/Basic.lean": "c5362a64428fe452efc2871cd2c96b2160e9ec8fde40e8253dd5f6fe6c2fa16e",
+    "Demo/Cyclic.lean": "da49f78b42a4cc3fbd919b7bce9ef277f61639d27ac3475d82c8576e633f77f8",
+    "eval/CHCCases.lean": "3bc265fe9dd16490b6c705765c38d37b5d8382bc5f0b31e875040efe03b0bfbc",
+    "scripts/benchmark_chc.py": "9bcd84d45aa81f02fbfb144891ec9dc87dce829bf0b9d838eba53e0b24610e7c",
+    "lake-manifest.json": "3abc859ec09e2d1a37a39373b1d3bb570391cfdfa4f3fade72d37eb25c3b286a"
+  },
+  "complete": true,
+  "exit_code": 0,
+  "timed_out": false,
+  "received": 336,
+  "expected": 336,
+  "example_witnesses": {
+    "pa6/eldarica": [
+      "k_0 := fun a a_1 => a = 0 \u2227 a_1 \u2265 0",
+      "k_1 := fun a a_1 => a = a_1 \u2227 a \u2265 0",
+      "k_2 := fun a a_1 a_2 => a_2 = a_1 \u2227 a \u2265 0 \u2227 a_1 \u2265 0",
+      "k_3 := fun a a_1 a_2 => a_2 = a_1 \u2227 a \u2265 0 \u2227 a_1 \u2265 0"
+    ],
+    "ex_stress/eldarica": [
+      "k_0 := fun a a_1 a_2 a_3 => ((a \u2265 -1 \u2227 a_1 \u2265 0) \u2227 a_2 \u2265 -1) \u2227 a_3 \u2265 2",
+      "k_1 := fun a a_1 a_2 a_3 => ((a \u2265 -2 \u2227 a_1 \u2265 0) \u2227 a_2 \u2265 -1) \u2227 a_3 \u2265 2",
+      "k_2 := fun a a_1 a_2 a_3 => ((a \u2265 -1 \u2227 a_1 \u2265 0) \u2227 a_2 \u2265 -1) \u2227 a_3 \u2265 2",
+      "k_3 := fun a a_1 a_2 a_3 => ((a \u2265 0 \u2227 a_1 \u2265 0) \u2227 a_2 \u2265 -1) \u2227 a_3 \u2265 2",
+      "k_4 := fun a a_1 a_2 a_3 => ((a \u2265 0 \u2227 a_1 \u2265 0) \u2227 a_2 \u2265 -1) \u2227 a_3 \u2265 2"
+    ],
+    "pa6/spacer": [
+      "k_0 := fun a a_1 => 0 \u2264 a_1 \u2227 a = 0",
+      "k_1 := fun a a_1 => 0 \u2264 a \u2227 a_1 = a",
+      "k_2 := fun a a_1 a_2 => \u00aca \u2264 -1 \u2228 0 \u2264 a_1 \u2227 a_2 = a_1 \u2227 0 \u2264 a_2 \u2227 a = 0",
+      "k_3 := fun a a_1 a_2 => \u00aca \u2264 -1 \u2228 0 \u2264 a_1 \u2227 a_2 = a_1 \u2227 0 \u2264 a_2 \u2227 a = 0"
+    ],
+    "cyc0/spacer": [
+      "k_0 := fun a a_1 => \u00aca \u2264 -1"
+    ],
+    "cyc0/eldarica": [
+      "k_0 := fun a a_1 => a \u2265 0 \u2227 a_1 \u2265 0"
+    ]
+  },
+  "additional_process_overhead_probe": {
+    "description": "Separate serial diagnostic before the final corpus run, using the same imported modules and Process.run. Empty-process is /usr/bin/true; trivial solver inputs contain only set-logic HORN and check-sat. These measurements are not included in corpus medians.",
+    "measurements": [
+      {
+        "command": "empty-process",
+        "elapsed_ms": 480
+      },
+      {
+        "command": "trivial-spacer",
+        "elapsed_ms": 376
+      },
+      {
+        "command": "trivial-eldarica",
+        "elapsed_ms": 545
+      },
+      {
+        "command": "empty-process",
+        "elapsed_ms": 462
+      },
+      {
+        "command": "trivial-spacer",
+        "elapsed_ms": 450
+      },
+      {
+        "command": "trivial-eldarica",
+        "elapsed_ms": 479
+      },
+      {
+        "command": "empty-process",
+        "elapsed_ms": 516
+      },
+      {
+        "command": "trivial-spacer",
+        "elapsed_ms": 396
+      },
+      {
+        "command": "trivial-eldarica",
+        "elapsed_ms": 449
+      }
+    ],
+    "lean_source": "import Demo.Basic\nimport Demo.Cyclic\nimport Flex.CHC\n\nopen Lean Elab Command\nset_option Elab.async false\n\nrun_elab do\n  for _ in [:3] do\n    for (label, executable, args, input) in [\n        (\"empty-process\", \"/usr/bin/true\", #[], \"\"),\n        (\"trivial-spacer\", \"z3\", #[\"-in\", \"-smt2\", \"-model\", \"fp.engine=spacer\"],\n          \"(set-logic HORN)\\n(check-sat)\\n\"),\n        (\"trivial-eldarica\", \"/tmp/flex-eldarica\", #[\"-in\", \"-hsmt\", \"-ssol\"],\n          \"(set-logic HORN)\\n(check-sat)\\n\")] do\n      let result \u2190 Flex.CHC.Process.run { executable, args } input\n      logInfo m!\"OVERHEAD {label}: {result.elapsedMs} ms ({repr result.completion})\"\n"
+  }
+}

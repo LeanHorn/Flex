@@ -15,10 +15,11 @@ def valueSort (type : Expr) : MetaM ValueSort := do
   throwError "CHC export: unsupported value type {type}; expected Int, Bool, or Prop"
 
 /-- Scope the upstream handlers to the audited fragment. A user's registered
-translator must not silently extend the language of this exporter. -/
-def withTranslators (action : MetaM α) : MetaM α := do
+translator must not silently extend the language of this exporter. The temporary
+environment permits extension updates during asynchronous theorem elaboration;
+the caller's environment is restored before returning. -/
+def withTranslators (action : MetaM α) : MetaM α := withoutModifyingEnv do
   let extension := Smt.Attribute.smtExt
-  let previous := (extension.getState (← getEnv)).getD ``Smt.Translator {}
   modifyEnv fun env => extension.modifyState env fun state =>
     state.insert ``Smt.Translator {
       ``Smt.Translate.Int.translateType, ``Smt.Translate.Int.translateInt,
@@ -26,10 +27,7 @@ def withTranslators (action : MetaM α) : MetaM α := do
       ``Smt.Translate.Bool.translateBool, ``Smt.Translate.Bool.translateProp,
       ``Smt.Translate.Prop.translateType, ``Smt.Translate.Prop.translateProp,
       ``Smt.Translate.Prop.translateIte }
-  try action
-  finally
-    modifyEnv fun env => extension.modifyState env fun state =>
-      state.insert ``Smt.Translator previous
+  action
 
 private def application (term : Smt.Term) : Smt.Term × Array Smt.Term :=
   go term #[]

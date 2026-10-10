@@ -33,12 +33,13 @@ This clones the repo into `.lake/packages/Flex/` using your local Git credential
 lake build
 ```
 
-> **Note:** Flex depends on `aesop`, pinned `lean-auto`, and pinned `lean-smt`.
-> Its modules do not import Mathlib, but the pinned lean-smt package declares
-> Mathlib as a transitive dependency. `flex_auto` needs `z3` on `PATH`;
-> lean-smt downloads its own cvc5 native library during the first build.
-> `MATHLIB_NO_CACHE_ON_UPDATE=1 lake --keep-toolchain update` avoids fetching
-> unused Mathlib build caches. The Lean toolchain remains `v4.29.0-rc8`.
+> **Note:** Flex uses Lean `v4.33.1` and pins `aesop`, `lean-auto`, `lean-smt`,
+> `cvc5`, and [SMTLib-to-Lean](https://github.com/LeanHorn/SMTLib-to-Lean).
+> The shared dependencies use SMTLib-to-Lean's revisions. `flex_auto` needs
+> `z3` on `PATH`; lean-smt downloads its cvc5 native library during the first
+> build. Mathlib is a transitive dependency.
+> `MATHLIB_NO_CACHE_ON_UPDATE=1 lake update` skips automatic Mathlib cache downloads; importing
+> SMTLib-to-Lean still requires building or fetching its Mathlib dependencies.
 
 ---
 
@@ -52,6 +53,20 @@ import Flex
 
 This includes all core types, tactics, elaboration, and the solver.
 For lean-smt, additionally import `Flex.Tactic.Oracles.Smt`.
+
+SMTLib-to-Lean is available as an explicit `import Smt2Lean`. It is not imported
+by `Flex` and does not change `fix` or add CHC invariant synthesis yet.
+
+To check the dependency integration and existing examples:
+
+```bash
+lake build Flex
+python3 scripts/regression.py --strict-sorry --jobs 4 --verbose
+```
+
+The regression suite includes `Demo/DependencyCompatibility.lean`, which imports
+both libraries, parses and reconstructs an SMT definition, and exercises the
+existing SMT proof and synthesis routes in the same environment.
 
 ### Example
 

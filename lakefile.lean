@@ -4,19 +4,23 @@ open Lake DSL
 package «Flex» where
   version := v!"0.1.0"
 
--- aesop supplies goal closers; lean-auto and lean-smt supply opt-in SMT oracles.
--- `Std` ships with the Lean toolchain, so it needs no `require`.
--- Flex's imported modules are mathlib-free; this lean-smt revision declares
--- mathlib as a transitive package dependency but its `Smt` import does not use it.
+-- Share SMTLib-to-Lean's dependency revisions under Lean v4.33.1.
+-- Explicit pins keep the proof oracles and future model importer on the same
+-- lean-smt/cvc5 API. SMTLib-to-Lean is available without importing it in Flex.
 require aesop from git
-  "https://github.com/leanprover-community/aesop" @ "3426969888a264d3f69b6f30ab50aa11f28eb38d"
+  "https://github.com/leanprover-community/aesop" @ "3448c0bcc5ce01b2d1546e483ec3620e32df3d0e"
 
--- v4.29.0-hammer, verified against Flex's v4.29.0-rc8 toolchain.
 require auto from git
-  "https://github.com/leanprover-community/lean-auto" @ "d5600411d5e766a7cb1e47e3b3393ed64c42efc2"
+  "https://github.com/leanprover-community/lean-auto.git" @ "eb9c694863439fb55800228bc4c7babe42b089bf"
 
 require smt from git
-  "https://github.com/ufmg-smite/lean-smt.git" @ "7d1d8239e78daa5197f9a71948776c4627049f5f"
+  "https://github.com/ufmg-smite/lean-smt.git" @ "5bdc51674065a074ece67b04e10024e9f426ec1f"
+
+require cvc5 from git
+  "https://github.com/abdoo8080/lean-cvc5.git" @ "7e3365990661b697ccb30e92d6912f4cc6589322"
+
+require smt2lean from git
+  "https://github.com/LeanHorn/SMTLib-to-Lean.git" @ "969b582aae0fa6fa3a252a7280b52225c77ea573"
 
 @[default_target]
 lean_lib «Flex» where

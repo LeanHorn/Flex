@@ -122,6 +122,7 @@ example :
       Check κ []
         (.letin (.iconst 99) (.app (.ann exId (ty_xk "k")) (.bvar 0)))
         (IntN 99) := by
+  simp only [IntN, ToTerm.toTerm]
   generate
   zap
   grind
@@ -218,7 +219,7 @@ def exAddExp : Exp :=
 def exAddTy : Ty := IntN 7
 
 example (κ : KEnv) : topVC κ [] exAddExp exAddTy := by
-  simp [topVC, exAddExp, exAddTy]
+  simp [topVC, exAddExp, exAddTy, IntN, ToTerm.toTerm]
 
 /-! ## `unreachable`: a dead `else`-branch typechecks via ex falso
 

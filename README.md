@@ -106,7 +106,7 @@ The exporter reuses Flex's flattening, lean-smt's expression translators and
 query builder, and SMTLib-to-Lean's native CHC validator. It neither launches a
 solver nor assigns κ witnesses. The script asserts the constraints themselves;
 it does not negate a proof goal. Solver-specific options and model requests
-belong to the later runner. The module is an explicit import, so ordinary
+belong to the runner described below. The module is an explicit import, so ordinary
 `import Flex` does not acquire this native dependency.
 
 The initial fragment supports first-order `Int`, `Bool`, and `Prop` parameters,
@@ -141,6 +141,56 @@ not require an external solver:
 
 ```sh
 lake build Demo.CHCExport
+```
+
+## Running Spacer
+
+With `import Flex.CHC` and `z3` on PATH, pass an exported problem to
+`Flex.CHC.Spacer.run`. For example, add this after creating `problem` in the
+export example above:
+
+```lean
+  let result ← Flex.CHC.Spacer.run problem { timeoutMs := 5000 }
+  match result.outcome with
+  | .sat definitions =>
+    for definition in definitions do logInfo definition.text
+  | .unsat => logInfo "The exported constraints have no satisfying interpretation."
+  | .unknown _ => logInfo "Spacer could not decide the constraints."
+  | .timedOut => logInfo "Spacer exceeded the wall-clock timeout."
+  | .error message => throwError message
+```
+
+For the counter example, Spacer returns a definition equivalent to
+`fun x : Int => 0 ≤ x`. The configuration accepts `executable` (default `"z3"`)
+and a positive `timeoutMs` (default `10000`). The runner invokes
+`z3 -in -smt2 -model fp.engine=spacer` directly, using one process and one solve.
+Z3's `-model` option produces a model only after `sat`, so `unsat` does not trigger
+a failing model request. `unknown` remains distinct from a wall-clock timeout.
+
+`result.process` retains stdout, stderr, process completion, and elapsed
+milliseconds. The deadline covers input, solving, and output collection. On
+POSIX systems, cancellation terminates the solver's process group; after a
+200 ms grace period, `/bin/kill` supplies SIGKILL if needed. Cleanup reaps the
+child and joins the pipe readers before returning. No shell command is built
+from the script or executable path.
+
+The shared response decoder reuses SMTLib-to-Lean's `SolverResponse.parse`.
+It rejects nonzero process exits, solver errors, malformed output, and `sat`
+without a model, while accepting an explicitly empty model. Model definitions
+remain source text with provenance; reconstructing, type-checking, and assigning
+them as Lean witnesses belongs to the next integration step. This API does not
+close a Lean goal or add a `fix` option yet.
+
+The implementation separates process handling in
+[`Process.lean`](Flex/CHC/Process.lean), shared response handling in
+[`Solver.lean`](Flex/CHC/Solver.lean), and the backend adapter in
+[`Spacer.lean`](Flex/CHC/Spacer.lean). Run its tests with:
+
+```sh
+# Deterministic protocol/process tests (Python 3; no Z3 required).
+lake lean Demo/CHCRunner.lean
+# Real counter, Bool/Int, empty-model, and unsatisfiable cases (requires Z3).
+lake lean Demo/CHCSpacer.lean
 ```
 
 ## Basic example

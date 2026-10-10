@@ -20,7 +20,7 @@ require cvc5 from git
   "https://github.com/abdoo8080/lean-cvc5.git" @ "7e3365990661b697ccb30e92d6912f4cc6589322"
 
 require smt2lean from git
-  "https://github.com/LeanHorn/SMTLib-to-Lean.git" @ "5b90810d81b3781495c40de671c37c75727931f6"
+  "https://github.com/LeanHorn/SMTLib-to-Lean.git" @ "89667053aa420284b6794b6d6caabd551c1f7c79"
 
 @[default_target]
 lean_lib «Flex» where

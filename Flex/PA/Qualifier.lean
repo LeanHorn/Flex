@@ -25,4 +25,4 @@ def Expr.instQualifier (q : Expr) (args : Array Expr) : MetaM Expr := do
   let applied := mkAppN q args
   match ← unfoldDefinition? applied with
   | some unfolded => return unfolded.headBeta
-  | none          => return applied
+  | none          => return applied.headBeta

@@ -146,7 +146,10 @@ def main() -> int:
         "baseline": "solve_fixpoint with Demo.Basic and Demo.Cyclic imported (including Cyclic qualifiers)",
         "sources_sha256": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
                            for name in ["Demo/Basic.lean", "Demo/Cyclic.lean", "eval/CHCCases.lean",
-                                        "scripts/benchmark_chc.py", "lake-manifest.json"]},
+                                        "scripts/benchmark_chc.py", "lake-manifest.json", "lakefile.lean",
+                                        "Flex/CHC/Process.lean", "Flex/CHC/Process/Native.lean",
+                                        "Flex/CHC/Process/Portable.lean", "Flex/CHC/Process/Types.lean",
+                                        "native/chc_process.cpp"]},
         "complete": False,
     }
     rng = random.Random(args.seed)

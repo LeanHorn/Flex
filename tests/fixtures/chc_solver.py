@@ -5,6 +5,7 @@ import os
 import signal
 import sys
 import time
+from pathlib import Path
 
 
 def main() -> None:
@@ -27,6 +28,39 @@ def main() -> None:
     elif mode == "utf8":
         # Put a multibyte character across the runner's 4096-byte read boundary.
         sys.stdout.buffer.write(b"a" * 4095 + "€🙂".encode())
+    elif mode == "invalid-utf8":
+        sys.stdout.buffer.write(b"\xff\xfe")
+        sys.stderr.write("invalid encoding fixture\n")
+    elif mode == "argv":
+        # The runner must pass argv directly, including shell metacharacters.
+        sys.stdout.write("\n".join(sys.argv[2:]))
+    elif mode == "close-stdin":
+        os.close(sys.stdin.fileno())
+        print("stdin closed", flush=True)
+        time.sleep(0.1)
+    elif mode == "signal-exit":
+        os.kill(os.getpid(), signal.SIGTERM)
+    elif mode == "cancel":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        Path(sys.argv[2]).write_text(str(os.getpid()))
+        time.sleep(60)
+    elif mode == "descendant-pipe":
+        # The parent exits, but its descendant retains both output pipes.
+        # A heartbeat distinguishes a killed descendant from a live process
+        # whose pipes were merely abandoned; checking kill(0) would see zombies.
+        child = os.fork()
+        if child:
+            print(child, flush=True)
+            return
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        heartbeat = Path(sys.argv[2])
+        until = time.monotonic() + 60
+        with heartbeat.open("w") as output:
+            while time.monotonic() < until:
+                output.write(".")
+                output.flush()
+                time.sleep(0.02)
+        os._exit(0)
     elif mode in ("timeout", "blocked-stdin"):
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         print(os.getpid(), flush=True)

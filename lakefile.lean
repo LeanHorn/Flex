@@ -25,6 +25,26 @@ require smt2lean from git
 @[default_target]
 lean_lib «Flex» where
 
+input_file chcProcess.cpp where
+  path := "native" / "chc_process.cpp"
+  text := true
+
+target chcProcess.o pkg : System.FilePath := do
+  let source ← chcProcess.cpp.fetch
+  -- As with lean-cvc5, use the host C++ headers and Lean's libc++ ABI.
+  -- Lean's bundled C sysroot does not include the C++ standard library headers.
+  buildO (pkg.buildDir / "native" / "chc_process.o") source
+    #["-I", (← getLeanIncludeDir).toString]
+    #["-std=c++17", "-stdlib=libc++", "-O2", "-fPIC", "-Wall", "-Wextra"]
+    (compiler := if System.Platform.isWindows then "cc" else "clang")
+
+-- Declared after Flex so Lake selects this narrower library for the FFI module.
+-- Precompilation makes the native implementation available to tactics and #eval.
+lean_lib FlexCHCNative where
+  roots := #[`Flex.CHC.Process.Native]
+  precompileModules := true
+  moreLinkObjs := #[chcProcess.o]
+
 lean_lib «Demo» where
 
 lean_lib «Benchmarks» where

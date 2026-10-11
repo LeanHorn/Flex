@@ -169,11 +169,13 @@ Z3's `-model` option produces a model only after `sat`, so `unsat` does not trig
 a failing model request. `unknown` remains distinct from a wall-clock timeout.
 
 `result.process` retains stdout, stderr, process completion, and elapsed
-milliseconds. The deadline covers input, solving, and output collection. On
-POSIX systems, cancellation terminates the solver's process group; after a
-200 ms grace period, `/bin/kill` supplies SIGKILL if needed. Cleanup reaps the
-child and joins the pipe readers before returning. No shell command is built
-from the script or executable path.
+milliseconds. The deadline covers startup, input, solving, and output collection.
+On POSIX systems, a small native adapter uses `posix_spawnp` and pumps all three
+pipes concurrently. Timeout or Lean task cancellation kills the process group
+directly and reaps the child before returning. Each request starts a fresh solver;
+there is no persistent worker, socket, or process registry. Windows retains the
+Lean process implementation. No shell command is built from the script or
+executable path.
 
 The shared response decoder reuses SMTLib-to-Lean's `SolverResponse.parse`.
 It rejects nonzero process exits, solver errors, malformed output, and `sat`
@@ -184,7 +186,15 @@ them separately. Running Spacer does not close a Lean goal or add a `fix` option
 The implementation separates process handling in
 [`Process.lean`](Flex/CHC/Process.lean), shared response handling in
 [`Solver.lean`](Flex/CHC/Solver.lean), and the backend adapter in
-[`Spacer.lean`](Flex/CHC/Spacer.lean). Run its tests with:
+[`Spacer.lean`](Flex/CHC/Spacer.lean).
+
+The native implementation is isolated in [`native/chc_process.cpp`](native/chc_process.cpp)
+behind [`Process/Native.lean`](Flex/CHC/Process/Native.lean). Lake builds and loads
+this module automatically using a host C++17 compiler and libc++ (the same
+toolchain requirement as lean-cvc5); the rest of Flex's compilation settings
+are unchanged.
+
+Run its tests with:
 
 ```sh
 # Deterministic protocol/process tests (Python 3; no Z3 required).
@@ -274,6 +284,44 @@ to `eval/chc_results.csv`, `eval/chc_results_runs.csv`, and
 `eval/chc_results.metadata.json`. Failed or incomplete repetition groups have no
 speedup entry. The shared exporter currently rejects `ex_nat`, `ex_bool`
 (`decide`), `ex_pair`, `ex_prod`, and `ex_userfn` (`double`).
+
+### Native spawning comparison
+
+The macOS arm64 rerun with Lean 4.33.1, Z3 4.15.4, and native Eldarica 2.3
+collected all 336 records (one warm-up and three measured repetitions).
+The table sums per-case median pipeline times over cases proved in both runs;
+it excludes failed cases, imports, and builds. The original results are preserved.
+
+| Demo | Backend | Proved cases | Previous | Native spawn | Speedup |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Basic | Spacer | 13/20 | 11.234 s | 1.030 s | 10.90× |
+| Basic | Eldarica | 15/20 | 13.140 s | 1.365 s | 9.63× |
+| Cyclic | Spacer | 8/8 | 7.144 s | 0.639 s | 11.18× |
+| Cyclic | Eldarica | 8/8 | 7.129 s | 0.679 s | 10.51× |
+
+Coverage is unchanged: the five export failures remain, and Spacer still fails
+VC discharge on `ex14` and `ex_stress`. Median subprocess time across proved
+cases dropped from 814 to 16 ms for Spacer and from 818 to 27 ms for Eldarica;
+these times include solver execution. A separate `/usr/bin/true` probe using
+the previous run's exact source dropped from a 480 ms median to 1 ms.
+
+These are historical comparisons: the unchanged `fix` baseline was 21–28%
+slower in the rerun (Basic: 2.226 → 2.700 s; Cyclic: 1.807 → 2.303 s).
+Within the new run, both CHC backends prove all eight Cyclic cases about 3.4–3.6×
+faster in aggregate than `fix`. For example, `pa6` takes 122 ms with either
+solver versus 907 ms with `fix`; Eldarica proves `ex_stress` in 218 ms versus
+1326 ms with `fix`. Simple cases can still favor `fix` (`ex1`: 17 ms versus
+41/49 ms with Spacer/Eldarica).
+
+See [per-case before/after comparisons](eval/chc_results_posix_comparison.csv),
+[new medians](eval/chc_results_posix.csv), [individual runs](eval/chc_results_posix_runs.csv),
+and [versions, source hashes, and startup probe](eval/chc_results_posix.metadata.json).
+The native runner and all 84 regression files passed the strict `sorry` check.
+To reproduce the new run without overwriting the original:
+
+```sh
+python3 scripts/benchmark_chc.py --eldarica /path/to/eld --output eval/chc_results_posix.csv
+```
 
 ## Basic example
 

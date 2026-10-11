@@ -32,3 +32,4 @@ docs/
 eval/oracle_results.json
 eval/scratch/
 eval/tmp*.lean
+eval/oracle_results_shared.json

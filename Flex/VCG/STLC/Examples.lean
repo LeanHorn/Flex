@@ -374,7 +374,7 @@ theorem loopMain_vc (κ : KEnv) : topVC κ [] loopMain (.refine .int (.fmla .ff)
 /-- By `vcgen_partial_correct`, `loop 0` never returns a value, whatever the fuel. -/
 example (n : Nat) : ¬ ∃ v m, Eval n loopMain (.val v m) := by
   rintro ⟨v, m, hev⟩
-  obtain ⟨_, _, hr⟩ := vcgen_partial_correct (κ := fun _ _ => True)
+  obtain ⟨_, hr⟩ := vcgen_partial_correct (κ := fun _ _ => True)
     (by simp [loopMain, loop, loopTy, Exp.WFBVars, Ty.WFBVars, Ty.WFBVarCtx,
               Refinement.hasBVar, Formula.hasBVar])
     (by simp [Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar])

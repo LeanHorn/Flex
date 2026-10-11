@@ -12,38 +12,79 @@ open STLC
 
 namespace STLC
 
-/-- `implyBindCstr` over a refined binding interprets as a `push`-form
-    quantified bind, provided `x` is fresh for `r`. -/
-theorem implyBindCstr_interp (κ : KEnv) (x : EVar) (b : Base) (r : Refinement)
-    (c : Cstr) (γ : REnv) (hx : x ∉ r.fv) :
-    (implyBindCstr x (.refine b r) c).interp κ γ ↔
+/-- A binding type with a refined hypothesis is that refinement type. -/
+theorem Ty.hyp?_eq_some {t : Ty} {b : Base} {r : Refinement}
+    (h : t.hyp? = some (b, r)) : t = .refine b r := by
+  cases t with
+  | refine b' r' =>
+    cases b' with
+    | tfvar a =>
+      rcases a with ⟨n, _ | _⟩
+      · simp at h; obtain ⟨rfl, rfl⟩ := h; rfl
+      · simp at h
+    | tbvar _ => simp at h
+    | _ => simp at h; obtain ⟨rfl, rfl⟩ := h; rfl
+  | arrow _ _ => simp at h
+  | «forall» _ _ => simp at h
+
+/-- `implyBindCstr` over a binding with hypothesis `r` at sort `b` interprets
+    as a `push`-form quantified bind, provided `x` is fresh for `r`. -/
+theorem implyBindCstr_interp_some {κ : KEnv} {x : EVar} {t : Ty} {b : Base} {r : Refinement}
+    {c : Cstr} {γ : REnv} (ht : t.hyp? = some (b, r)) (hx : x ∉ r.fv) :
+    (implyBindCstr x t c).interp κ γ ↔
     ∀ v : b.interp, Refinement.interp κ r (γ.push (Val.inj b v)) →
       c.interp κ (REnv.update b γ x v) := by
-  simp only [implyBindCstr, Cstr.interp]
+  simp only [implyBindCstr, ht, Cstr.interp]
   constructor <;> intro h v
   · intro hr
     exact h v ((Refinement.interp_openBVar κ r γ x (Val.inj b v) 0 (Nat.zero_le _) hx).mpr hr)
   · intro hr
     exact h v ((Refinement.interp_openBVar κ r γ x (Val.inj b v) 0 (Nat.zero_le _) hx).mp hr)
 
-/-- Semantic (`push`-form) reading of a bind; keeps the soundness proofs'
-    `cases s` structure. -/
+/-- `implyBindCstr` over a binding with no hypothesis is the identity. -/
+theorem implyBindCstr_interp_none {κ : KEnv} {x : EVar} {t : Ty} {c : Cstr} {γ : REnv}
+    (ht : t.hyp? = none) : (implyBindCstr x t c).interp κ γ ↔ c.interp κ γ := by
+  simp only [implyBindCstr, ht]
+
+/-- Semantic (`push`-form) reading of a bind. -/
 def implyBindSem (κ : KEnv) (x : EVar) (t : Ty) (c : Cstr) (γ : REnv) : Prop :=
-  match t with
-  | .refine b r => ∀ v : b.interp,
+  match t.hyp? with
+  | some (b, r) => ∀ v : b.interp,
                      Refinement.interp κ r (γ.push (Val.inj b v)) →
                        c.interp κ (REnv.update b γ x v)
-  | .arrow _ _  => c.interp κ γ
+  | none        => c.interp κ γ
 
 /-- `implyBindCstr` interprets as `implyBindSem`, for *any* binding type
     (provided `x` is fresh for the binding's refinement). -/
 theorem implyBindCstr_interp_gen (κ : KEnv) (x : EVar) (t : Ty) (c : Cstr)
     (γ : REnv) (hx : x ∉ t.fv) :
     (implyBindCstr x t c).interp κ γ ↔ implyBindSem κ x t c γ := by
-  cases t with
-  | refine b r =>
-      exact implyBindCstr_interp κ x b r c γ (by simpa [Ty.fv] using hx)
-  | arrow s t => simp only [implyBindCstr, implyBindSem]
+  cases ht : t.hyp? with
+  | none => simp only [implyBindSem, ht]; exact implyBindCstr_interp_none ht
+  | some p =>
+    obtain ⟨b, r⟩ := p
+    have htr := Ty.hyp?_eq_some ht
+    subst htr
+    simp only [implyBindSem, ht]
+    exact implyBindCstr_interp_some ht (by simpa [Ty.fv] using hx)
+
+/-- Eliminate a bind in a model of the extended context: if `γ` models
+    `(x, t) :: Γ` then `implyBindCstr x t c` yields `c` at `γ` itself (instantiate
+    the bound value with the one stored at `x`). -/
+theorem implyBind_elim {κ : KEnv} {γ : REnv} {x : EVar} {t : Ty} {c : Cstr} {Γ : TEnv}
+    (hm : ModelsEnv κ γ ((x, t) :: Γ)) (hx : x ∉ t.fv)
+    (h : (implyBindCstr x t c).interp κ γ) : c.interp κ γ := by
+  cases ht : t.hyp? with
+  | none => exact (implyBindCstr_interp_none ht).mp h
+  | some p =>
+    obtain ⟨b, r⟩ := p
+    have htr := Ty.hyp?_eq_some ht
+    subst htr
+    obtain ⟨⟨hb, hsat⟩, _⟩ := (ModelsEnv.cons_some ht).mp hm
+    have hb' := (implyBindCstr_interp_some ht (by simpa [Ty.fv] using hx)).mp h
+    rw [REnv.lookup_eq_inj_get b γ x hb] at hsat
+    have h2 := hb' (REnv.get b γ x) hsat
+    rwa [REnv.update_self b γ x hb] at h2
 
 end STLC
 
@@ -69,6 +110,8 @@ theorem Exp.WFBVars_openVar (e : Exp) (k : Nat) (x : EVar) :
   | add e₁ e₂ ih₁ ih₂ => simp [Exp.openVar, Exp.WFBVars, ih₁, ih₂]
   | unreach => simp [Exp.openVar, Exp.WFBVars]
   | fix e ih => simp [Exp.openVar, Exp.WFBVars, ih]
+  | tabs _ e ih => simp [Exp.openVar, Exp.WFBVars, ih]
+  | tapp e t ih => simp [Exp.openVar, Exp.WFBVars, ih]
 
 
 theorem sub_sound (κ : KEnv) (Γ : TEnv) (s t : Ty) (c : Cstr) :
@@ -83,7 +126,7 @@ theorem sub_sound (κ : KEnv) (Γ : TEnv) (s t : Ty) (c : Cstr) :
     have hx1 : x ∉ r1.fv := by simp only [List.mem_append, not_or] at hfr; exact hfr.1.2
     -- The emitted constraint is already the *opened* form the rule expects; close
     -- the extension binder with `Entail.ext` and open r₁'s ν back to `x`.
-    refine Subtyp.refine hfr (Entail.ext ?_)
+    refine Subtyp.refine hfr (Entail.ext (b := .int) (r := r1) rfl ?_)
     intro γ hm v h1
     have hc := hent γ hm; simp only [Cstr.interp] at hc
     exact hc v ((Refinement.interp_openBVar κ r1 γ x (Val.inj .int v) 0 (Nat.zero_le _) hx1).mpr h1)
@@ -93,7 +136,7 @@ theorem sub_sound (κ : KEnv) (Γ : TEnv) (s t : Ty) (c : Cstr) :
     let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ r1.fv ++ r2.fv)
     have hfr : x ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ r1.fv ++ r2.fv := EVar.fresh_not_mem _
     have hx1 : x ∉ r1.fv := by simp only [List.mem_append, not_or] at hfr; exact hfr.1.2
-    refine Subtyp.refine hfr (Entail.ext ?_)
+    refine Subtyp.refine hfr (Entail.ext (b := .bool) (r := r1) rfl ?_)
     intro γ hm v h1
     have hc := hent γ hm; simp only [Cstr.interp] at hc
     exact hc v ((Refinement.interp_openBVar κ r1 γ x (Val.inj .bool v) 0 (Nat.zero_le _) hx1).mpr h1)
@@ -117,27 +160,22 @@ theorem sub_sound (κ : KEnv) (Γ : TEnv) (s t : Ty) (c : Cstr) :
     apply Subtyp.arrow (x := w) _ hw
     · apply sub_sound κ ((w, s2) :: Γ) _ _ c₂ hc₂
       intro γ hm
-      have hΓγ : ModelsEnv κ γ Γ := by
-        cases s2 with | refine _ _ => exact hm.2.2 | arrow _ _ => exact hm
       rw [←hsub] at hent
-      have hcγ := hent γ hΓγ
+      have hcγ := hent γ hm.tail
       simp only [Cstr.interp] at hcγ
-      cases s2 with
-      | refine b r =>
-        have hwr : w ∉ r.fv := by
-          have := hw; simp only [Ty.fv, List.mem_append, not_or] at this
-          exact this.1.1.2
-        have hb := (implyBindCstr_interp κ w b r c₂ γ hwr).mp hcγ.2
-        have hsat := hm.2.1
-        rw [REnv.lookup_eq_inj_get b γ w hm.1] at hsat
-        have h := hb (REnv.get b γ w) hsat
-        rw [REnv.update_self b γ w hm.1] at h ; exact h
-      | arrow _ _ => exact hcγ.2
+      have hws : w ∉ s2.fv := by
+        have := hw; simp only [List.mem_append, not_or] at this
+        exact this.1.1.2
+      exact implyBind_elim hm hws hcγ.2
     · apply sub_sound κ Γ s2 s1 c₁ hc₁
       intro γ hm
       rw [←hsub] at hent
       exact (hent γ hm).1
-  | .refine _ _ , .arrow _ _ | .arrow _ _, .refine _ _ | .refine .int _, .refine .bool _ | .refine .bool _, .refine .int _=>
+  | .refine _ _ , .arrow _ _ | .arrow _ _, .refine _ _ | .refine .int _, .refine .bool _ | .refine .bool _, .refine .int _
+  | .forall _ _, _ | .refine _ _, .forall _ _ | .arrow _ _, .forall _ _
+  | .refine (.tbvar _) _, .refine _ _ | .refine (.tfvar _) _, .refine _ _
+  | .refine .int _, .refine (.tbvar _) _ | .refine .int _, .refine (.tfvar _) _
+  | .refine .bool _, .refine (.tbvar _) _ | .refine .bool _, .refine (.tfvar _) _ =>
     simp_all [sub]
   termination_by s.skel + t.skel
 
@@ -151,16 +189,13 @@ mutual
     | .bvar i =>
       simp_all [synth]
     | .fvar x =>
-      simp_all [synth]
-      rcases hsynth with ⟨t', ⟨hl, hc, hs⟩⟩
-      match t' with
-      | .refine .int r | .refine .bool r =>
-        simp_all ; rw [←hs, ←self]
-        constructor
-        assumption
-      | .arrow _ _ =>
-        simp_all ; rw [←hs, ←self] ; rw [←hs] at hl
-        constructor ; assumption
+      simp only [synth] at hsynth
+      cases hl : Γ.lookup x with
+      | none => simp [hl] at hsynth
+      | some t' =>
+        simp only [hl, Option.map_some, Option.some.injEq, Prod.mk.injEq] at hsynth
+        obtain ⟨-, rfl⟩ := hsynth
+        exact Synth.var hl
     | .iconst i | .bconst b =>
       simp_all [synth]
       rw [←hsynth.2]
@@ -175,7 +210,7 @@ mutual
           List.lookup x Γ = some (.refine .bool rx) ∧
           List.lookup y Γ = some (.refine .bool ry) := by grind
       simp_all ; rw [←hsynth.2] ; constructor <;> assumption
-    | .lam e | .letin e1 e2 | .ite _ _ _ | .fix _ =>
+    | .lam e | .letin e1 e2 | .ite _ _ _ | .fix _ | .tabs _ _ | .tapp _ _ =>
       simp_all [synth]
     | .app e1 (.fvar y) =>
       simp_all [synth]
@@ -227,9 +262,9 @@ mutual
     | .unreach | (.add .unreach _) | (.add (.fvar _) .unreach)
     | (.leq .unreach _) | (.leq (.fvar _) .unreach) | (.not .unreach)
     | (.and .unreach _) | (.and (.fvar _) .unreach) | (.app _ .unreach)
-    | (.add (.fix _) _) | (.add (.fvar _) (.fix _))
-    | (.leq (.fix _) _) | (.leq (.fvar _) (.fix _)) | (.not (.fix _))
-    | (.and (.fix _) _) | (.and (.fvar _) (.fix _)) | (.app _ (.fix _))
+    | (.add (.fix _) _) | (.add (.tabs _ _) _) | (.add (.tapp _ _) _) | (.add (.fvar _) (.fix _)) | (.add (.fvar _) (.tabs _ _)) | (.add (.fvar _) (.tapp _ _))
+    | (.leq (.fix _) _) | (.leq (.tabs _ _) _) | (.leq (.tapp _ _) _) | (.leq (.fvar _) (.fix _)) | (.leq (.fvar _) (.tabs _ _)) | (.leq (.fvar _) (.tapp _ _)) | (.not (.fix _)) | (.not (.tabs _ _)) | (.not (.tapp _ _))
+    | (.and (.fix _) _) | (.and (.tabs _ _) _) | (.and (.tapp _ _) _) | (.and (.fvar _) (.fix _)) | (.and (.fvar _) (.tabs _ _)) | (.and (.fvar _) (.tapp _ _)) | (.app _ (.fix _)) | (.app _ (.tabs _ _)) | (.app _ (.tapp _ _))
       => simp_all [synth]
   termination_by 2*e.skel
 
@@ -301,7 +336,8 @@ mutual
       refine Check.ite hr (EVar.fresh_not_mem _) ?_ ?_
       · simp only [List.append_assoc]
         apply check_sound _ _ _ _ _ hc₁
-        apply Entail.ext
+        refine Entail.ext (b := .bool)
+          (r := .fmla (.eq .bool (.fvar .bool cn) (.const .bool true))) rfl ?_
         intro γ hm
         have hb := (hent γ hm).1
         rw [implyBindCstr_interp_gen κ _ _ c₁ γ
@@ -311,7 +347,8 @@ mutual
         simpa only [implyBindSem] using hb
       · simp only [List.append_assoc]
         apply check_sound _ _ _ _ _ hc₂
-        apply Entail.ext
+        refine Entail.ext (b := .bool)
+          (r := .fmla (.eq .bool (.fvar .bool cn) (.const .bool false))) rfl ?_
         intro γ hm
         have hb := (hent γ hm).2
         rw [implyBindCstr_interp_gen κ _ _ c₂ γ
@@ -321,7 +358,7 @@ mutual
         simpa only [implyBindSem] using hb
     | .lam e =>
       match t with
-      | .refine _ r =>
+      | .refine _ _ | .forall _ _ =>
         simp_all [check, synth]
       | .arrow s1 t1 =>
         simp_all [check]
@@ -338,26 +375,13 @@ mutual
             Check κ ((x₀, s1) :: Γ) (Exp.openVar 0 x₀ e) (Ty.openVar 0 x₀ t1) := by
           apply check_sound κ _ _ _ _ hc₁
           intro γ hmγ
-          have hΓγ : ModelsEnv κ γ Γ := by
-            cases s1 with
-            | refine _ _ => exact hmγ.2.2
-            | arrow _ _  => exact hmγ
-          have hcγ : c.interp κ γ := hent γ hΓγ
+          have hcγ : c.interp κ γ := hent γ hmγ.tail
           rw [← hcheck] at hcγ
           have hx₀s : x₀ ∉ s1.fv := by
             have h := EVar.fresh_not_mem L₀
             simp only [L₀, List.mem_append, not_or] at h
             exact h.2.2.1
-          rw [implyBindCstr_interp_gen κ x₀ s1 c₁ γ hx₀s] at hcγ
-          simp only [implyBindSem] at hcγ
-          cases s1 with
-          | refine b r =>
-            have hsat : Refinement.interp κ r (γ.push (γ.lookup x₀)) := hmγ.2.1
-            rw [REnv.lookup_eq_inj_get b γ x₀ hmγ.1] at hsat
-            have h := hcγ (REnv.get b γ x₀) hsat
-            rw [REnv.update_self b γ x₀ hmγ.1] at h
-            exact h
-          | arrow _ _ => exact hcγ
+          exact implyBind_elim hmγ hx₀s hcγ
         have hfresh₀ : x₀ ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s1.fv ++ t1.fv := by
           have h := EVar.fresh_not_mem L₀
           simp only [L₀, List.mem_append, not_or] at h ⊢
@@ -384,26 +408,13 @@ mutual
       have hbody₀ : Check κ ((x₀, s) :: Γ) (Exp.openVar 0 x₀ e2) t := by
         apply check_sound _ _ _ _ _ hcheck₂
         intro γ hmγ
-        have hΓγ : ModelsEnv κ γ Γ := by
-          cases s with
-          | refine _ _ => exact hmγ.2.2
-          | arrow _ _  => exact hmγ
-        have hcγ : c.interp κ γ := hent γ hΓγ
+        have hcγ : c.interp κ γ := hent γ hmγ.tail
         rw [← hcheck] at hcγ
         have hx₀s : x₀ ∉ s.fv := by
           have h := EVar.fresh_not_mem L₀
           simp only [L₀, List.mem_append, not_or] at h
           exact h.2.2.1
-        have himply := (implyBindCstr_interp_gen κ x₀ s c₂ γ hx₀s).mp hcγ.2
-        simp only [implyBindSem] at himply
-        cases s with
-        | refine b r =>
-          have hsat : Refinement.interp κ r (γ.push (γ.lookup x₀)) := hmγ.2.1
-          rw [REnv.lookup_eq_inj_get b γ x₀ hmγ.1] at hsat
-          have h := himply (REnv.get b γ x₀) hsat
-          rw [REnv.update_self b γ x₀ hmγ.1] at h
-          exact h
-        | arrow _ _ => exact himply
+        exact implyBind_elim hmγ hx₀s hcγ.2
       have hfresh₀ : x₀ ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ e2.fv ++ s.fv ++ t.fv  := by
         have h := EVar.fresh_not_mem L₀
         simp only [L₀, List.mem_append, not_or] at h ⊢
@@ -468,12 +479,13 @@ mutual
     | (.app _ (.add _ _)) | (.app _ (.ite _ _ _)) | (.app _ (.leq _ _)) | (.app _ (.not _))
     | (.app _ (.and _ _)) | (.app _ (.ann _ _)) | (.app _ (.app _ _)) | (.app _ (.letin _ _)) | (.app _ (.lam _)) | (.app _ (.bconst _))
     | (.app _ (.iconst _)) | (.app _ (.bvar _)) | (.app _ .unreach)
-    | (.ite (.fix _) _ _) | (.not (.fix _)) | (.and (.fvar _) (.fix _)) | (.and (.fix _) _)
-    | (.leq (.fix _) _) | (.leq (.fvar _) (.fix _)) | (.app _ (.fix _)) =>
+    | (.ite (.fix _) _ _) | (.ite (.tabs _ _) _ _) | (.ite (.tapp _ _) _ _) | (.not (.fix _)) | (.not (.tabs _ _)) | (.not (.tapp _ _)) | (.and (.fvar _) (.fix _)) | (.and (.fvar _) (.tabs _ _)) | (.and (.fvar _) (.tapp _ _)) | (.and (.fix _) _) | (.and (.tabs _ _) _) | (.and (.tapp _ _) _)
+    | (.leq (.fix _) _) | (.leq (.tabs _ _) _) | (.leq (.tapp _ _) _) | (.leq (.fvar _) (.fix _)) | (.leq (.fvar _) (.tabs _ _)) | (.leq (.fvar _) (.tapp _ _)) | (.app _ (.fix _)) | (.app _ (.tabs _ _)) | (.app _ (.tapp _ _))
+    | .tabs _ _ | .tapp _ _ =>
       simp_all [check, synth]
     | .fix e =>
       match t with
-      | .refine _ _ => simp_all [check, synth]
+      | .refine _ _ | .forall _ _ => simp_all [check, synth]
       | .arrow s1 t1 =>
         simp only [check] at hcheck
         have hfF := EVar.fresh_not_mem (TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s1.fv ++ t1.fv)
@@ -487,23 +499,10 @@ mutual
           subst hc
           refine Check.fix hfF hxF (check_sound κ _ _ _ _ hc₁ ?_)
           intro γ hmγ
-          have hΓγ : ModelsEnv κ γ Γ := by
-            cases s1 with
-            | refine _ _ => exact hmγ.2.2
-            | arrow _ _  => exact hmγ
-          have hcγ := hent γ hΓγ
+          have hcγ := hent γ hmγ.tail.tail
           have hxs : x ∉ s1.fv := by
             simp only [List.mem_append, not_or] at hxF; exact hxF.1.1.2
-          rw [implyBindCstr_interp_gen κ x s1 c₁ γ hxs] at hcγ
-          simp only [implyBindSem] at hcγ
-          cases s1 with
-          | refine b r =>
-            have hsat : Refinement.interp κ r (γ.push (γ.lookup x)) := hmγ.2.1
-            rw [REnv.lookup_eq_inj_get b γ x hmγ.1] at hsat
-            have h := hcγ (REnv.get b γ x) hsat
-            rw [REnv.update_self b γ x hmγ.1] at h
-            exact h
-          | arrow _ _ => exact hcγ
+          exact implyBind_elim hmγ hxs hcγ
         · simp at hcheck
   termination_by 2 * e.skel + 1
 end

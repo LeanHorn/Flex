@@ -40,6 +40,9 @@ inductive Eval : Nat → Exp → Outcome → Prop
   | lam   {n body}  : Eval n (.lam body) (.val (.clos body) n)
   | fix   {n body}  : Eval n (.fix body) (.val (.fclos body) n)
   | ann   {n e t o} : Eval n e o → Eval n (.ann e t) o
+  /-- Types are erased: type abstraction and application evaluate their body. -/
+  | tabs  {n κ e o} : Eval n e o → Eval n (.tabs κ e) o
+  | tapp  {n e t o} : Eval n e o → Eval n (.tapp e t) o
   | letin {n e₁ e₂ v₁ n₁ o} :
       Eval n e₁ (.val v₁ n₁) →
       Eval n₁ (e₂.openVal 0 v₁) o →
@@ -115,6 +118,8 @@ theorem Eval.det {n : Nat} {e : Exp} {o₁ o₂ : Outcome}
     (h₁ : Eval n e o₁) (h₂ : Eval n e o₂) : o₁ = o₂ := by
   induction h₁ generalizing o₂ with
   | ann _ ih => cases h₂ with | ann h => exact ih h
+  | tabs _ ih => cases h₂ with | tabs h => exact ih h
+  | tapp _ ih => cases h₂ with | tapp h => exact ih h
   | letin _ _ ih₁ ih₂ =>
     cases h₂ with
     | letin h₁' h₂' => cases ih₁ h₁'; exact ih₂ h₂'

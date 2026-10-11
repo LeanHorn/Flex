@@ -100,7 +100,7 @@ theorem EVar.not_free_in_open : x ∈ e.fv → x ∈ (Exp.openVar k y e).fv := b
     | ite e₀ e₁ e₂ ih1 ih2 ih3 =>
         simp_all [Exp.fv, Exp.openVar]
         grind
-    | ann e t ih          =>
+    | ann e t ih | tapp e t ih | tabs t e ih =>
         simp_all [Exp.fv, Exp.openVar]
     | unreach             => simp_all [Exp.fv]
 
@@ -190,9 +190,15 @@ theorem Hastype.lc_at {κ Γ e t} (_h : Hastype κ Γ e t) : Exp.lc_at 0 e := by
 theorem Ty.WFBVars_self (x : EVar) (t : Ty) (_h : Ty.WFBVars t) : Ty.WFBVars (self x t) := by
   cases t with
   | refine b r =>
-    cases b <;>
+    cases b with
+    | tfvar a =>
+      rcases a with ⟨n, _ | _⟩
+      · simp [self, Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar, Term.hasBVar]
+      · simpa [self] using _h
+    | _ =>
       simp [self, Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar, Term.hasBVar]
   | arrow s t => simp [self, _h]
+  | «forall» k t => simpa [self] using _h
 
 /-- WFBVars of the concrete result types for primitives. -/
 theorem Ty.WFBVars_prim (n : Int) : Ty.WFBVars (prim n) := by

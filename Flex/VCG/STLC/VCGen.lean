@@ -14,9 +14,9 @@ open STLC
 namespace STLC
 
 def implyBindCstr (x : EVar) (t : Ty) (c : Cstr) : Cstr :=
-  match t with
-  | .refine b r => .all x b (.imp (r.openBVar 0 x) c)
-  | .arrow _ _  => c
+  match t.hyp? with
+  | some (b, r) => .all x b (.imp (r.openBVar 0 x) c)
+  | none        => c
 
 end STLC
 

@@ -65,6 +65,7 @@ def Refinement.fv (r : Refinement) : List EVar :=
   match r with
   | .fmla φ      => φ.fv
   | .kapp _ args => args.flatMap (fun a => Term.fv a.2)
+  | .conj r₁ r₂  => Refinement.fv r₁ ++ Refinement.fv r₂
 
 /-- Open the `BVar` at level `k` (base-agnostic, shifting; see `Term.openBVar`).
     ν-instantiation is the `k = 0` case: `r.openBVar 0 x` replaces ν (`bvar _ 0`)
@@ -74,6 +75,7 @@ def Refinement.openBVar (k : Nat) (x : EVar)
   match r with
   | .fmla φ       => .fmla (φ.openBVar k x)
   | .kapp kn args => .kapp kn (args.map (fun a => ⟨a.1, Term.openBVar k x a.2⟩))
+  | .conj r₁ r₂   => .conj (r₁.openBVar k x) (r₂.openBVar k x)
 
 /-- Refinement type for an integer constant: `{ν : Int | ν = n}` (ν = `BVar 0`). -/
 @[simp] def prim (n : Int) : Ty :=
@@ -89,11 +91,11 @@ def Refinement.openBVar (k : Nat) (x : EVar)
     here — keeping the synthesized type kvar-free. For function types, returns
     `t` unchanged. -/
 @[simp] def self : EVar → Ty → Ty
-  | x, .refine .int  _ => .refine .int  (.fmla
-      (.eq .int (.bvar .int  0) (.fvar .int  x)))
-  | x, .refine .bool _ => .refine .bool (.fmla
-      (.eq .bool (.bvar .bool 0) (.fvar .bool x)))
+  -- ⋆-kinded type variables are never compared (λ_RF's `self(_, _, ⋆)`)
+  | _, .refine (.tfvar (a, .star)) r => .refine (.tfvar (a, .star)) r
+  | x, .refine b _     => .refine b (.fmla (.eq b (.bvar b 0) (.fvar b x)))
   | _, .arrow t1 t2    => .arrow t1 t2
+  | _, .forall k t     => .forall k t
 
 /-! ## 4. Ty operations (locally nameless)
 
@@ -105,6 +107,7 @@ def Refinement.openBVar (k : Nat) (x : EVar)
 def Ty.fv : Ty → List EVar
   | .refine _ r => r.fv
   | .arrow s t  => Ty.fv s ++ Ty.fv t
+  | .forall _ t => Ty.fv t
 
 /-- Open a `Ty`'s outermost binder at level `k` with free name `x`. Opens the
     refinement `BVar` at level `k+1` — the `+1` because ν occupies formula-level
@@ -113,6 +116,7 @@ def Ty.fv : Ty → List EVar
 def Ty.openVar (k : Nat) (x : EVar) : Ty → Ty
   | .refine b r => .refine b (r.openBVar (k+1) x)
   | .arrow s t  => .arrow (s.openVar k x) (t.openVar (k+1) x)
+  | .forall κ t => .forall κ (t.openVar k x)
 
 @[simp]
 theorem Ty.skel_openVar (k : Nat) (x : EVar) (t : Ty) :
@@ -120,6 +124,7 @@ theorem Ty.skel_openVar (k : Nat) (x : EVar) (t : Ty) :
   induction t generalizing k with
   | refine _ _ => rfl
   | arrow s t ihs iht => simp [Ty.openVar, Ty.skel, ihs, iht]
+  | «forall» _ t ih => simp [Ty.openVar, Ty.skel, ih]
 
 /-! ### Well-formedness: BVar base consistency (WFBVarCtx)
 
@@ -157,11 +162,19 @@ def Refinement.hasBVar (b : Base) (k : Nat) (r : Refinement) : Prop :=
   match r with
   | .fmla φ      => Formula.hasBVar b k φ
   | .kapp _ args => ∃ a ∈ args, Term.hasBVar b k a.2
+  | .conj r₁ r₂  => Refinement.hasBVar b k r₁ ∨ Refinement.hasBVar b k r₂
 
 /-- Extract the base of a refinement type; None for arrow types. -/
 def Ty.optBase : Ty → Option Base
   | .refine b _ => some b
   | .arrow _ _  => none
+  | .forall _ _ => none
+
+/-- Shift the type-variable de Bruijn indices of a sort up by one (entering a
+    `Ty.forall`). -/
+def Base.shiftT : Base → Base
+  | .tbvar j => .tbvar (j+1)
+  | b        => b
 
 /-- `Ty.WFBVarCtx ctx t`: at nesting depth k, all `BVar b k` in `t`'s
     refinement formulas satisfy `(some bᵣ :: ctx)[k]? = some (some b)`, where
@@ -172,6 +185,9 @@ def Ty.WFBVarCtx : List (Option Base) → Ty → Prop
       ∀ (b : Base) (k : Nat), Refinement.hasBVar b k r → (some br :: ctx)[k]? = some (some b)
   | ctx, .arrow s t  =>
       Ty.WFBVarCtx ctx s ∧ Ty.WFBVarCtx (s.optBase :: ctx) t
+  -- no term binder; the recorded sorts are re-expressed under the new type binder
+  | ctx, .forall _ t =>
+      Ty.WFBVarCtx (ctx.map (Option.map Base.shiftT)) t
 
 /-- Shorthand: `t` is well-formed with no outer binders. -/
 def Ty.WFBVars (t : Ty) : Prop := Ty.WFBVarCtx [] t
@@ -196,6 +212,8 @@ def Exp.WFBVars : Exp → Prop
   | .ite e₀ e₁ e₂ => Exp.WFBVars e₀ ∧ Exp.WFBVars e₁ ∧ Exp.WFBVars e₂
   | .add e₁ e₂    => Exp.WFBVars e₁ ∧ Exp.WFBVars e₂
   | .fix e        => Exp.WFBVars e
+  | .tabs _ e     => Exp.WFBVars e
+  | .tapp e t     => Ty.WFBVars t ∧ Exp.WFBVars e
 
 theorem TEnv.WFBVars.empty : TEnv.WFBVars [] := by intros x t h ; trivial
 
@@ -275,7 +293,9 @@ theorem Formula.hasBVar_openBVar (φ : Formula) (b : Base) (i k : Nat) (x : EVar
 theorem Refinement.hasBVar_openBVar (r : Refinement) (b : Base) (i k : Nat) (x : EVar) :
     Refinement.hasBVar b i (r.openBVar k x) ↔
       (i < k ∧ Refinement.hasBVar b i r) ∨ (k ≤ i ∧ Refinement.hasBVar b (i+1) r) := by
-  cases r with
+  induction r with
+  | conj r₁ r₂ ih1 ih2 =>
+    simp only [Refinement.openBVar, Refinement.hasBVar, ih1, ih2]; grind
   | fmla φ => exact Formula.hasBVar_openBVar φ b i k x
   | kapp kn args =>
     simp only [Refinement.openBVar, Refinement.hasBVar]
@@ -304,7 +324,7 @@ theorem Ty.optBase_openVar (t : Ty) (k : Nat) (y : EVar) :
 theorem Ty.WFBVarCtx_openVar_last (t : Ty) (ctx : List (Option Base)) (opt : Option Base)
     (y : EVar) (hWF : Ty.WFBVarCtx (ctx ++ [opt]) t) :
     Ty.WFBVarCtx ctx (t.openVar ctx.length y) := by
-  induction t generalizing ctx with
+  induction t generalizing ctx opt with
   | refine b r =>
     -- ν occupies formula-level 0 (base `b`), so the arrow binder opened by
     -- `openVar ctx.length` lives at formula-level `ctx.length + 1`, and the
@@ -335,12 +355,199 @@ theorem Ty.WFBVarCtx_openVar_last (t : Ty) (ctx : List (Option Base)) (opt : Opt
   | arrow s t ihs iht =>
     simp only [Ty.WFBVarCtx] at hWF ⊢
     simp only [Ty.openVar]
-    refine ⟨ihs ctx hWF.1, ?_⟩
+    refine ⟨ihs ctx opt hWF.1, ?_⟩
     -- Codomain uses IH with ctx' = s.optBase :: ctx
-    have ih := iht (s.optBase :: ctx) (by simpa using hWF.2)
+    have ih := iht (s.optBase :: ctx) opt (by simpa using hWF.2)
     simp only [List.length_cons] at ih
     rw [Ty.optBase_openVar]
     exact ih
+  | «forall» kd t ih =>
+    simp only [Ty.WFBVarCtx, Ty.openVar] at hWF ⊢
+    have h := ih (ctx.map (Option.map Base.shiftT)) (opt.map Base.shiftT)
+      (by simpa [List.map_append] using hWF)
+    simpa using h
+
+/-! ## 4b. Type variables: sort substitution, opening, instantiation
+
+  Type variables are sorts of the refinement logic, so substituting for a type
+  variable has to *retype* the deep-embedded refinements: a `Term (tbvar k)`
+  becomes a `Term b'`. A sort substitution `σ` acts on the type-variable sorts
+  only and fixes `int`/`bool` *definitionally*, which is what lets
+  `Term.substB` be defined by plain structural recursion. -/
+
+/-- A sort substitution: acts on the type-variable sorts only. -/
+structure BSubst where
+  bv : Nat → Base
+  fv : TVar → Base
+
+def Base.substB (σ : BSubst) : Base → Base
+  | .int     => .int
+  | .bool    => .bool
+  | .tbvar k => σ.bv k
+  | .tfvar a => σ.fv a
+
+/-- Re-read a refinement-logic value of sort `b` at sort `b'`, through its
+    runtime representation. -/
+@[reducible] def Base.recast (b b' : Base) (c : b.interp) : b'.interp :=
+  Val.proj b' (Val.inj b c)
+
+/-- Retype a term along a sort substitution. -/
+def Term.substB (σ : BSubst) : {b : Base} → Term b → Term (b.substB σ)
+  | _, .const b c => .const _ (Base.recast b (b.substB σ) c)
+  | _, .bvar _ k  => .bvar _ k
+  | _, .fvar _ x  => .fvar _ x
+  | _, .add t₁ t₂ => .add (Term.substB σ t₁) (Term.substB σ t₂)
+  | _, .not t     => .not (Term.substB σ t)
+  | _, .and t₁ t₂ => .and (Term.substB σ t₁) (Term.substB σ t₂)
+
+def Formula.substB (σ : BSubst) : Formula → Formula
+  | .tt           => .tt
+  | .ff           => .ff
+  | .eq b t₁ t₂   => .eq (b.substB σ) (t₁.substB σ) (t₂.substB σ)
+  | .leqI t₁ t₂   => .leqI (t₁.substB σ) (t₂.substB σ)
+  | .and φ₁ φ₂    => .and (φ₁.substB σ) (φ₂.substB σ)
+  | .or φ₁ φ₂     => .or (φ₁.substB σ) (φ₂.substB σ)
+  | .not φ        => .not (φ.substB σ)
+  | .imp φ₁ φ₂    => .imp (φ₁.substB σ) (φ₂.substB σ)
+  | .ex b φ       => .ex (b.substB σ) (φ.substB σ)
+  | .all b φ      => .all (b.substB σ) (φ.substB σ)
+
+def Refinement.substB (σ : BSubst) : Refinement → Refinement
+  | .fmla φ       => .fmla (φ.substB σ)
+  | .kapp kn args => .kapp kn (args.map (fun a => ⟨a.1.substB σ, a.2.substB σ⟩))
+  | .conj r₁ r₂   => .conj (r₁.substB σ) (r₂.substB σ)
+
+/-- Re-reading a value through the type-variable code changes nothing at any
+    sort (closures all collapse to `other`, and every sort's projection treats
+    closures alike). -/
+@[simp] theorem Val.proj_toVal_toBVal (b' : Base) (w : Val) :
+    Val.proj b' (BVal.toVal (Val.toBVal w)) = Val.proj b' w := by
+  cases w <;> cases b' <;> rfl
+
+theorem Base.recast_proj (σ : BSubst) (b : Base) (w : Val) :
+    Base.recast b (b.substB σ) (Val.proj b w) = Val.proj (b.substB σ) w := by
+  cases b with
+  | int  => cases w <;> rfl
+  | bool => cases w <;> rfl
+  | tbvar k => simp [Base.recast, Base.substB]
+  | tfvar a => simp [Base.recast, Base.substB]
+
+@[simp] theorem Base.recast_int (n : Int) : Base.recast .int .int n = n := rfl
+@[simp] theorem Base.recast_bool (c : Bool) : Base.recast .bool .bool c = c := rfl
+
+/-- Retyping is semantically a recast: unconditionally, at the `Term` level.
+    (Its `Formula`-level counterpart needs the recast to be injective on the
+    values involved, i.e. that type-variable-sorted slots hold values of the
+    target sort.) -/
+theorem Term.interp_substB (σ : BSubst) (γ : REnv) :
+    ∀ {b : Base} (t : Term b),
+      Term.interp γ (t.substB σ) = Base.recast b (b.substB σ) (Term.interp γ t) := by
+  intro b t
+  induction t with
+  | const b c => rfl
+  | bvar b k =>
+    simp only [Term.substB, Term.interp, REnv.getBV]
+    exact (Base.recast_proj σ b _).symm
+  | fvar b x =>
+    simp only [Term.substB, Term.interp, REnv.get]
+    exact (Base.recast_proj σ b _).symm
+  | add _ _ ih₁ ih₂ =>
+    simp only [Base.substB] at ih₁ ih₂
+    simp only [Term.substB, Term.interp, ih₁, ih₂, Base.substB]
+  | not _ ih =>
+    simp only [Base.substB] at ih
+    simp only [Term.substB, Term.interp, ih, Base.substB]
+  | and _ _ ih₁ ih₂ =>
+    simp only [Base.substB] at ih₁ ih₂
+    simp only [Term.substB, Term.interp, ih₁, ih₂, Base.substB]
+
+@[simp] theorem Term.fv_substB (σ : BSubst) : ∀ {b : Base} (t : Term b),
+    (t.substB σ).fv = t.fv := by
+  intro b t
+  induction t with
+  | const _ _ | bvar _ _ | fvar _ _ => rfl
+  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
+    simp only [Term.substB, Term.fv]; exact congr (congrArg (· ++ ·) ih₁) ih₂
+  | not _ ih => simp only [Term.substB, Term.fv]; exact ih
+
+@[simp] theorem Formula.fv_substB (σ : BSubst) (φ : Formula) : (φ.substB σ).fv = φ.fv := by
+  induction φ with
+  | tt | ff => rfl
+  | eq _ t₁ t₂ | leqI t₁ t₂ =>
+    simp only [Formula.substB, Formula.fv]
+    exact congr (congrArg (· ++ ·) (Term.fv_substB σ t₁)) (Term.fv_substB σ t₂)
+  | and _ _ ih₁ ih₂ | or _ _ ih₁ ih₂ | imp _ _ ih₁ ih₂ =>
+    simp only [Formula.substB, Formula.fv]; exact congr (congrArg (· ++ ·) ih₁) ih₂
+  | not _ ih | ex _ _ ih | all _ _ ih => simp only [Formula.substB, Formula.fv]; exact ih
+
+@[simp] theorem Refinement.fv_substB (σ : BSubst) (r : Refinement) :
+    (r.substB σ).fv = r.fv := by
+  induction r with
+  | fmla φ => simp [Refinement.substB, Refinement.fv]
+  | kapp kn args =>
+    simp only [Refinement.substB, Refinement.fv, List.flatMap_map]
+    congr 1; funext a; exact Term.fv_substB σ a.2
+  | conj r₁ r₂ ih₁ ih₂ => simp [Refinement.substB, Refinement.fv, ih₁, ih₂]
+
+/-- Open type-binder level `k` with the free type variable `a`. -/
+def BSubst.openAt (k : Nat) (a : TVar) : BSubst :=
+  ⟨fun j => if j = k then .tfvar a else .tbvar j, .tfvar⟩
+
+/-- Instantiate type-binder level `k` at sort `b'`. -/
+def BSubst.instAt (k : Nat) (b' : Base) : BSubst :=
+  ⟨fun j => if j = k then b' else .tbvar j, .tfvar⟩
+
+/-- Open the type binder at level `k` with the free type variable `a`
+    (locally nameless; levels bump under `Ty.forall`). -/
+def Ty.openTv (k : Nat) (a : TVar) : Ty → Ty
+  | .refine b r  => .refine (b.substB (BSubst.openAt k a)) (r.substB (BSubst.openAt k a))
+  | .arrow s t   => .arrow (s.openTv k a) (t.openTv k a)
+  | .forall κ t  => .forall κ (t.openTv (k+1) a)
+
+@[simp] theorem Ty.skel_openTv (k : Nat) (a : TVar) (t : Ty) :
+    (t.openTv k a).skel = t.skel := by
+  induction t generalizing k <;> simp_all [Ty.openTv, Ty.skel]
+
+@[simp] theorem Ty.fv_openTv (k : Nat) (a : TVar) (t : Ty) : (t.openTv k a).fv = t.fv := by
+  induction t generalizing k <;> simp_all [Ty.openTv, Ty.fv]
+
+/-- The sort a type contributes when it instantiates a type variable (only
+    meaningful for refined base types; arbitrary otherwise — no refinement can
+    mention a ⋆-kinded variable). -/
+def Ty.sortOf : Ty → Base
+  | .refine b _ => b
+  | _           => .int
+
+/-- λ_RF's `refine(s, r)`: conjoin `r` into the top-level refinement of a
+    refined base type; other types (instances of ⋆-kinded variables, refined
+    only with `true`) are returned unchanged. -/
+def Ty.strengthen (s : Ty) (r : Refinement) : Ty :=
+  match s with
+  | .refine b r' => .refine b (.conj r' r)
+  | s            => s
+
+/-- T-TApp's substitution `t[s/α]` for the type binder at level `k`: retype every
+    refinement along `α ↦ sortOf s`, and replace each `α{r}` by `refine(s, r)`. -/
+def Ty.instTy (k : Nat) (s : Ty) : Ty → Ty
+  | .refine b r  =>
+      if b = .tbvar k then s.strengthen (r.substB (BSubst.instAt k s.sortOf))
+      else .refine (b.substB (BSubst.instAt k s.sortOf)) (r.substB (BSubst.instAt k s.sortOf))
+  | .arrow t₁ t₂ => .arrow (Ty.instTy k s t₁) (Ty.instTy k s t₂)
+  | .forall κ t  => .forall κ (Ty.instTy (k+1) s t)
+
+/-- The kind of a type: refined `Int`/`Bool` and `B`-kinded type variables are
+    base (`B`); everything else is `⋆`. -/
+def Ty.kindOf : Ty → Kind
+  | .refine .int _               => .B
+  | .refine .bool _              => .B
+  | .refine (.tfvar (_, κ)) _    => κ
+  | _                            => .star
+
+/-- Kind ordering: `B ≤ ⋆` (a base type may instantiate a ⋆-kinded variable). -/
+def Kind.le (k₁ k₂ : Kind) : Prop := k₁ = .B ∨ k₂ = .star
+
+instance (k₁ k₂ : Kind) : Decidable (Kind.le k₁ k₂) := by
+  unfold Kind.le; infer_instance
 
 /-! ## 5. Exp operations (locally nameless)
 
@@ -363,6 +570,8 @@ def Exp.openVar (k : Nat) (x : EVar) : Exp → Exp
   | .add e₁ e₂     => .add (e₁.openVar k x) (e₂.openVar k x)
   | .unreach       => .unreach
   | .fix body      => .fix (body.openVar (k+2) x)
+  | .tabs κ e      => .tabs κ (e.openVar k x)
+  | .tapp e t      => .tapp (e.openVar k x) t
 
 /-- Structural skeleton size: counts constructor depth, ignoring leaf details
     (so `Exp.skel` is preserved under `openVar` / `subst`). Used as a
@@ -384,6 +593,8 @@ def Exp.skel : Exp → Nat
   | .add e₁ e₂     => 1 + e₁.skel + e₂.skel
   | .unreach       => 0
   | .fix body      => 1 + body.skel
+  | .tabs _ e      => 1 + e.skel
+  | .tapp e _      => 1 + e.skel
 
 @[simp]
 theorem Exp.skel_openVar (k : Nat) (x : EVar) (e : Exp) :
@@ -396,7 +607,7 @@ theorem Exp.skel_openVar (k : Nat) (x : EVar) (e : Exp) :
   | lam _ ih      => simp [Exp.openVar, Exp.skel, ih]
   | letin _ _ ih₁ ih₂  => simp [Exp.openVar, Exp.skel, ih₁, ih₂]
   | app _ _ ih₁ ih₂    => simp [Exp.openVar, Exp.skel, ih₁, ih₂]
-  | ann _ _ ih         => simp [Exp.openVar, Exp.skel, ih]
+  | ann _ _ ih | tapp _ _ ih | tabs _ _ ih => simp [Exp.openVar, Exp.skel, ih]
   | and _ _ ih₁ ih₂    => simp [Exp.openVar, Exp.skel, ih₁, ih₂]
   | not _ ih           => simp [Exp.openVar, Exp.skel, ih]
   | leq _ _ ih₁ ih₂    => simp [Exp.openVar, Exp.skel, ih₁, ih₂]
@@ -404,6 +615,35 @@ theorem Exp.skel_openVar (k : Nat) (x : EVar) (e : Exp) :
   | add _ _ ih₁ ih₂    => simp [Exp.openVar, Exp.skel, ih₁, ih₂]
   | unreach            => rfl
   | fix _ ih           => simp [Exp.openVar, Exp.skel, ih]
+
+/-- Open the type binder at level `k` with the free type variable `a` inside the
+    type annotations of an expression (levels bump under `Exp.tabs`). -/
+def Exp.openTv (k : Nat) (a : TVar) : Exp → Exp
+  | .bvar j        => .bvar j
+  | .fvar y        => .fvar y
+  | .iconst n      => .iconst n
+  | .bconst b      => .bconst b
+  | .lam body      => .lam (body.openTv k a)
+  | .letin e₁ e₂   => .letin (e₁.openTv k a) (e₂.openTv k a)
+  | .app e₁ e₂     => .app (e₁.openTv k a) (e₂.openTv k a)
+  | .ann e t       => .ann (e.openTv k a) (t.openTv k a)
+  | .and e₁ e₂     => .and (e₁.openTv k a) (e₂.openTv k a)
+  | .not e         => .not (e.openTv k a)
+  | .leq e₁ e₂     => .leq (e₁.openTv k a) (e₂.openTv k a)
+  | .ite e₀ e₁ e₂  => .ite (e₀.openTv k a) (e₁.openTv k a) (e₂.openTv k a)
+  | .add e₁ e₂     => .add (e₁.openTv k a) (e₂.openTv k a)
+  | .unreach       => .unreach
+  | .fix body      => .fix (body.openTv k a)
+  | .tabs κ e      => .tabs κ (e.openTv (k+1) a)
+  | .tapp e t      => .tapp (e.openTv k a) (t.openTv k a)
+
+@[simp] theorem Exp.skel_openTv (k : Nat) (a : TVar) (e : Exp) :
+    (e.openTv k a).skel = e.skel := by
+  induction e generalizing k <;> simp_all [Exp.openTv, Exp.skel]
+
+@[simp] theorem Exp.fv_openTv (k : Nat) (a : TVar) (e : Exp) :
+    (e.openTv k a).fv = e.fv := by
+  induction e generalizing k <;> simp_all [Exp.openTv, Exp.fv]
 
 /-! ## 7. TEnv free variables -/
 
@@ -437,6 +677,8 @@ def Exp.substEnv (γ : REnv) : Exp → Exp
   | .ite e₀ e₁ e₂ => .ite (Exp.substEnv γ e₀) (Exp.substEnv γ e₁) (Exp.substEnv γ e₂)
   | .unreach      => .unreach
   | .fix body     => .fix (Exp.substEnv γ body)
+  | .tabs κ e     => .tabs κ (Exp.substEnv γ e)
+  | .tapp e t     => .tapp (Exp.substEnv γ e) t
 
 /-! ## 9. Freshness helper
 
@@ -454,7 +696,7 @@ def EVar.fresh (L : List EVar) : EVar :=
 
 @[simp] theorem REnv.get_update_same (b : Base) (γ : REnv) (x : EVar) (v : b.interp) :
     REnv.get b (γ.update b x v) x = v := by
-  cases b <;> simp [REnv.get]
+  cases b <;> (try cases v) <;> simp [REnv.get]
 
 /-! ## 11. EVar.fresh proof -/
 
@@ -565,7 +807,7 @@ theorem Exp.substEnv_closed (γ : REnv) (e : Exp) (he : e.fv = []) :
   | fvar y => simp [Exp.fv] at he
   | lam body ih => simp only [Exp.fv] at he; simp only [Exp.substEnv, ih he]
   | fix body ih => simp only [Exp.fv] at he; simp only [Exp.substEnv, ih he]
-  | ann e t ih => simp only [Exp.fv] at he; simp only [Exp.substEnv, ih he]
+  | ann e t ih | tapp e t ih | tabs t e ih => simp only [Exp.fv] at he; simp only [Exp.substEnv, ih he]
   | not e ih => simp only [Exp.fv] at he; simp only [Exp.substEnv, ih he]
   | letin e₁ e₂ ih₁ ih₂ | app e₁ e₂ ih₁ ih₂ | and e₁ e₂ ih₁ ih₂
   | leq e₁ e₂ ih₁ ih₂ | add e₁ e₂ ih₁ ih₂ =>
@@ -609,7 +851,7 @@ theorem Exp.substEnv_fv_nil (γ : REnv) (e : Exp)
   | fvar x => exact Val.toExp_closed_of_closed (hcl x (by simp [Exp.fv]))
   | lam body ih => exact ih fun z hz => hcl z (by simpa [Exp.fv] using hz)
   | fix body ih => exact ih fun z hz => hcl z (by simpa [Exp.fv] using hz)
-  | ann e t ih => exact ih fun z hz => hcl z (by simpa [Exp.fv] using hz)
+  | ann e t ih | tapp e t ih | tabs t e ih => exact ih fun z hz => hcl z (by simpa [Exp.fv] using hz)
   | not e ih => exact ih fun z hz => hcl z (by simpa [Exp.fv] using hz)
   | letin e₁ e₂ ih₁ ih₂ | app e₁ e₂ ih₁ ih₂ | and e₁ e₂ ih₁ ih₂
   | leq e₁ e₂ ih₁ ih₂ | add e₁ e₂ ih₁ ih₂ =>
@@ -651,7 +893,7 @@ theorem Exp.lc_at_of_openVar (e : Exp) (k : Nat) (x : EVar)
   | app e₁ e₂ ih₁ ih₂ =>
     simp only [Exp.openVar, Exp.lc_at] at h ⊢
     exact ⟨ih₁ k h.1, ih₂ k h.2⟩
-  | ann e t ih =>
+  | ann e t ih | tapp e t ih | tabs t e ih =>
     simp only [Exp.openVar, Exp.lc_at] at h ⊢
     exact ih k h
   | and e₁ e₂ ih₁ ih₂ =>
@@ -678,7 +920,7 @@ theorem Exp.fv_openVar {e : Exp} {k : Nat} {y z : EVar}
     simp only [Exp.openVar] at h
     split at h <;> simp_all [Exp.fv]
   | fvar _ | iconst _ | bconst _ | unreach => simp_all [Exp.openVar, Exp.fv]
-  | lam _ ih | ann _ _ ih | not _ ih | fix _ ih =>
+  | lam _ ih | ann _ _ ih | not _ ih | fix _ ih | tapp _ _ ih | tabs _ _ ih =>
     simp only [Exp.openVar, Exp.fv] at h ⊢; exact ih h
   | letin _ _ ih₁ ih₂ | app _ _ ih₁ ih₂ | and _ _ ih₁ ih₂
   | leq _ _ ih₁ ih₂ | add _ _ ih₁ ih₂ =>
@@ -714,7 +956,7 @@ theorem Exp.openExp_of_lc_at (e : Exp) (k : Nat) (u : Exp) (h : Exp.lc_at k e) :
   | app e₁ e₂ ih₁ ih₂ =>
     simp only [Exp.lc_at] at h; simp only [Exp.openExp]; congr 1
     exact ih₁ k h.1; exact ih₂ k h.2
-  | ann e t ih =>
+  | ann e t ih | tapp e t ih | tabs t e ih =>
     simp only [Exp.lc_at] at h; simp only [Exp.openExp]; congr 1; exact ih k h
   | and e₁ e₂ ih₁ ih₂ =>
     simp only [Exp.lc_at] at h; simp only [Exp.openExp]; congr 1
@@ -752,7 +994,7 @@ theorem Exp.lc_at_mono (e : Exp) {j k : Nat} (hjk : j ≤ k) (h : Exp.lc_at j e)
   | app e₁ e₂ ih₁ ih₂ =>
     simp only [Exp.lc_at] at *
     exact ⟨ih₁ hjk h.1, ih₂ hjk h.2⟩
-  | ann e t ih =>
+  | ann e t ih | tapp e t ih | tabs t e ih =>
     simp only [Exp.lc_at] at *
     exact ih hjk h
   | and e₁ e₂ ih₁ ih₂ =>
@@ -785,7 +1027,7 @@ theorem Exp.substEnv_lc_at (γ : REnv) (e : Exp) (k : Nat)
     exact ih (k+1) (fun z hz => hγ z (by simpa [Exp.fv] using hz)) hlc_e
   | fix body ih =>
     exact ih (k+2) (fun z hz => hγ z (by simpa [Exp.fv] using hz)) hlc_e
-  | ann e t ih =>
+  | ann e t ih | tapp e t ih | tabs t e ih =>
     exact ih k (fun z hz => hγ z (by simpa [Exp.fv] using hz)) hlc_e
   | not e ih =>
     exact ih k (fun z hz => hγ z (by simpa [Exp.fv] using hz)) hlc_e
@@ -832,7 +1074,7 @@ theorem Exp.substEnv_congr (e : Exp) (γ₁ γ₂ : REnv)
   induction e with
   | bvar _ | iconst _ | bconst _ | unreach => rfl
   | fvar x => simp only [Exp.substEnv, h x (by simp [Exp.fv])]
-  | lam e ih | ann e _ ih | not e ih | fix e ih =>
+  | lam e ih | ann e _ ih | not e ih | fix e ih | tapp e _ ih | tabs _ e ih =>
     simp only [Exp.substEnv, ih fun z hz => h z (by simpa [Exp.fv] using hz)]
   | letin e₁ e₂ ih₁ ih₂ | app e₁ e₂ ih₁ ih₂ | and e₁ e₂ ih₁ ih₂
   | leq e₁ e₂ ih₁ ih₂ | add e₁ e₂ ih₁ ih₂ =>
@@ -881,7 +1123,7 @@ theorem Exp.substEnv_write_openVar (e : Exp) (γ : REnv) (va : Val) (z : EVar) (
     simp only [Exp.openVar, Exp.substEnv, Exp.openExp]
     rw [ih (k+2) (by simpa [Exp.fv] using hz_fv)
         (fun w hw => hγ w (by simpa [Exp.fv] using hw))]
-  | ann e t ih =>
+  | ann e t ih | tapp e t ih | tabs t e ih =>
     simp only [Exp.openVar, Exp.substEnv, Exp.openExp]
     rw [ih k (by simpa [Exp.fv] using hz_fv)
         (fun w hw => hγ w (by simpa [Exp.fv] using hw))]
@@ -1115,7 +1357,11 @@ theorem Refinement.interp_openBVar (κ : KEnv) (r : Refinement) (γ : REnv)
     (x : EVar) (w : Val) (k : Nat) (hk : k ≤ γ.bv.length) (hx : x ∉ r.fv) :
     Refinement.interp κ (r.openBVar k x) (γ.write x w) ↔
     Refinement.interp κ r (γ.insertBV k w) := by
-  cases r with
+  induction r with
+  | conj r₁ r₂ ih₁ ih₂ =>
+      simp only [Refinement.fv, List.mem_append, not_or] at hx
+      simp only [Refinement.openBVar, Refinement.interp]
+      exact and_congr (ih₁ hx.1) (ih₂ hx.2)
   | fmla φ =>
       simp only [Refinement.openBVar, Refinement.interp]
       exact Formula.interp_openBVar x w φ γ k hk (by simpa [Refinement.fv] using hx)

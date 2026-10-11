@@ -23,15 +23,45 @@ inductive Const where
   | int : Int → Const
   deriving Repr, DecidableEq
 
+/-- Kinds of type variables (λ_RF): `B` variables may be refined, compared and
+    instantiated only with refined base types; `star` variables are refined
+    only with `true` and may be instantiated with any type. -/
+inductive Kind where
+  | B    : Kind
+  | star : Kind
+  deriving Repr, DecidableEq
+
+/-- A free type variable: a name together with its kind. Carrying the kind on
+    the name makes the kind of any type computable without a kind environment. -/
+abbrev TVar := String × Kind
+
+/-- Base sorts of the refinement logic. Type variables are sorts too: a
+    locally-nameless bound one (`tbvar k`, the `k`-th enclosing `Ty.forall`)
+    or a free one (`tfvar a`). -/
 inductive Base where
-  | int  : Base
-  | bool : Base
+  | int   : Base
+  | bool  : Base
+  | tbvar : Nat → Base
+  | tfvar : TVar → Base
+  deriving Repr, DecidableEq
+
+/-- The refinement-logic domain of a type-variable sort. Only `B`-kinded type
+    variables are ever compared in refinements, and they only ever hold ints or
+    bools, so this code type (with closures collapsed to `other`) is faithful.
+    It is defined here, before `Val`, to break the `Val → Exp → Ty → Term`
+    definitional cycle. -/
+inductive BVal where
+  | int   : Int → BVal
+  | bool  : Bool → BVal
+  | other : BVal
   deriving Repr, DecidableEq
 
 @[simp, reducible]
 def Base.interp : Base → Type
-  | .int  => Int
-  | .bool => Bool
+  | .int     => Int
+  | .bool    => Bool
+  | .tbvar _ => BVal
+  | .tfvar _ => BVal
 
 -- `REnv` (the runtime environment) is a single `EVar → Val` map; it is defined
 -- *after* `Val` below, since its operations mention `Val`.
@@ -98,6 +128,10 @@ inductive Formula where
 inductive Refinement where
   | fmla : Formula → Refinement
   | kapp : EVar → List (Σ b : Base, Term b) → Refinement
+  /-- Conjunction of refinements: produced by type substitution
+      `α{r}[α := b{r'}] = b{r' ∧ r}`. Still Horn — refinements never occur
+      under negation, and a conjunctive head splits into one clause per conjunct. -/
+  | conj : Refinement → Refinement → Refinement
 
 /-! ## Syntactic constraints (CHC tree)
 
@@ -171,6 +205,7 @@ theorem exists_kenv_curried {P : KEnv → Prop}
 inductive Ty where
   | refine : (b : Base) → Refinement → Ty -- `{ν: b | r}`
   | arrow  : Ty → Ty → Ty                   -- `x:s -> t`
+  | forall : Kind → Ty → Ty                 -- `∀α:k. t`; body has `tbvar 0` = α
 
 /-! ## Expressions — locally nameless
 
@@ -196,6 +231,8 @@ inductive Exp where
   | unreach : Exp                       -- `assert false` / unreachable; not a value, gets stuck
   | fix    : Exp → Exp                  -- recursive function `fix f. λx. body`;
                                         -- body has BVar 1 = f (self), BVar 0 = x (param)
+  | tabs   : Kind → Exp → Exp           -- type abstraction `Λα:k. e` (`tbvar 0` = α in types)
+  | tapp   : Exp → Ty → Exp             -- type application `e[τ]`
 
 /-- Typing context: a list of free-name × type pairs. Names are unique by convention. -/
 @[simp]
@@ -246,6 +283,8 @@ def Exp.lc_at : Nat → Exp → Prop
   | k, .add e₁ e₂     => e₁.lc_at k ∧ e₂.lc_at k
   | _, .unreach       => True
   | k, .fix body      => body.lc_at (k+2)
+  | k, .tabs _ e      => e.lc_at k
+  | k, .tapp e _      => e.lc_at k
 
 /-- A `Val` is closed when its `toExp` is locally closed (note: the closure
     body is required `lc_at 1` since `BVar 0` is the parameter). -/
@@ -277,6 +316,8 @@ def Exp.openExp (k : Nat) (u : Exp) (e : Exp) : Exp :=
   | .add e₁ e₂     => .add (Exp.openExp k u e₁) (Exp.openExp k u e₂)
   | .unreach       => .unreach
   | .fix body      => .fix (Exp.openExp (k+2) u body)
+  | .tabs κ e      => .tabs κ (Exp.openExp k u e)
+  | .tapp e t      => .tapp (Exp.openExp k u e) t
 
 /-- Open `bvar k` with a value (via `Val.toExp`). Handy for big-step. -/
 def Exp.openVal (k : Nat) (v : Val) : Exp → Exp := Exp.openExp k v.toExp
@@ -306,6 +347,21 @@ structure REnv where
 
 @[simp] def REnv.empty : REnv := ⟨fun _ => .iconst 0, []⟩
 
+/-- Code a runtime value into the type-variable sort's domain. -/
+@[simp, reducible]
+def Val.toBVal : Val → BVal
+  | .iconst n => .int n
+  | .bconst c => .bool c
+  | _         => .other
+
+/-- Decode a type-variable-sort value. `other` decodes to a (dummy) closure,
+    so that `toBVal (toVal c) = c` for every code `c`. -/
+@[simp, reducible]
+def BVal.toVal : BVal → Val
+  | .int n  => .iconst n
+  | .bool c => .bconst c
+  | .other  => .clos .unreach
+
 /-- Project a stored `Val` to a base-typed value. The mismatch cases
     (`0`/`false`) are unreachable for well-typed reads. -/
 @[simp, reducible]
@@ -314,12 +370,16 @@ def Val.proj : (b : Base) → Val → b.interp
   | .bool, .bconst c => c
   | .int,  _ => 0
   | .bool, _ => false
+  | .tbvar _, v => Val.toBVal v
+  | .tfvar _, v => Val.toBVal v
 
 /-- Inject a base-typed value into `Val`. -/
 @[simp, reducible]
 def Val.inj : (b : Base) → b.interp → Val
   | .int,  n => .iconst n
   | .bool, c => .bconst c
+  | .tbvar _, v => BVal.toVal v
+  | .tfvar _, v => BVal.toVal v
 
 /-- The base a `Val` carries (`none` for a closure). Mirrors `Ty.optBase`:
     a value inhabiting a refinement type `{ν:b|…}` has `optBase = some b`. -/
@@ -387,6 +447,8 @@ def REnv.update (b : Base) (γ : REnv) (x : EVar) (v : b.interp) : REnv :=
 def REnv.HasBase (γ : REnv) (x : EVar) : Base → Prop
   | .int  => ∃ n, γ.map x = .iconst n
   | .bool => ∃ c, γ.map x = .bconst c
+  | .tbvar _ => (∃ n, γ.map x = .iconst n) ∨ (∃ c, γ.map x = .bconst c)
+  | .tfvar _ => (∃ n, γ.map x = .iconst n) ∨ (∃ c, γ.map x = .bconst c)
 
 
 /-! ## 5b. Val operations (depend on Exp.* declared above) -/
@@ -407,6 +469,8 @@ def Exp.fv : Exp → List EVar
   | .add e₁ e₂     => Exp.fv e₁ ++ Exp.fv e₂
   | .unreach       => []
   | .fix body      => Exp.fv body
+  | .tabs _ e      => Exp.fv e
+  | .tapp e _      => Exp.fv e
 
 def Val.fv (v : Val) : List EVar :=
   match v with
@@ -429,5 +493,6 @@ def Val.closed (v : Val) : Prop := Val.fv v = []
 def Ty.skel : Ty → Nat
   | .refine _ _ => 0
   | .arrow s t  => 1 + s.skel + t.skel
+  | .forall _ t => 1 + t.skel
 
 end STLC

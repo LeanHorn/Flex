@@ -44,13 +44,10 @@ private def timed (measure : IO.Ref Measurement) (stage : String)
 
 private def solverResult (backend : String) (problem : ExportedProblem) : IO SolverResult := do
   if backend == "spacer" then
-    Spacer.run problem
+    Flex.CHC.run problem { backend := .spacer }
   else if backend == "eldarica" then
-    let executable := (← IO.getEnv "CHC_ELDARICA").getD "eld"
-    let process ← Process.run {
-      executable, args := #["-in", "-hsmt", "-ssol"], timeoutMs := 10000
-    } problem.toSMTLib
-    return SolverResult.ofProcess process
+    Flex.CHC.run problem {
+      backend := .eldarica, executable := ← IO.getEnv "CHC_ELDARICA" }
   else
     throw (IO.userError s!"unknown backend: {backend}")
 

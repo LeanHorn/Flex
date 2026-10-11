@@ -144,29 +144,46 @@ not require an external solver:
 lake build Demo.CHC.Export
 ```
 
-## Running Spacer
+## Running Spacer and Eldarica
 
-With `import Flex.CHC` and `z3` on PATH, pass an exported problem to
-`Flex.CHC.Spacer.run`. For example, add this after creating `problem` in the
+With `import Flex.CHC`, pass an exported problem to `Flex.CHC.run`. The default
+backend is Spacer (`z3` on PATH). Add this after creating `problem` in the
 export example above:
 
 ```lean
-  let result ← Flex.CHC.Spacer.run problem { timeoutMs := 5000 }
+  let result ← Flex.CHC.run problem { backend := .spacer, timeoutMs := 5000 }
   match result.outcome with
   | .sat definitions =>
     for definition in definitions do logInfo definition.text
   | .unsat => logInfo "The exported constraints have no satisfying interpretation."
-  | .unknown _ => logInfo "Spacer could not decide the constraints."
-  | .timedOut => logInfo "Spacer exceeded the wall-clock timeout."
+  | .unknown _ => logInfo "The solver could not decide the constraints."
+  | .timedOut => logInfo "The solver exceeded the wall-clock timeout."
   | .error message => throwError message
 ```
 
-For the counter example, Spacer returns a definition equivalent to
-`fun x : Int => 0 ≤ x`. The configuration accepts `executable` (default `"z3"`)
-and a positive `timeoutMs` (default `10000`). The runner invokes
-`z3 -in -smt2 -model fp.engine=spacer` directly, using one process and one solve.
+Select Eldarica with the same API:
+
+```lean
+  let result ← Flex.CHC.run problem { backend := .eldarica, timeoutMs := 5000 }
+  -- An optional executable override accepts a native binary or launcher path:
+  let result ← Flex.CHC.run problem {
+    backend := .eldarica, executable := some "/path/to/eld", timeoutMs := 5000 }
+```
+
+The shared configuration accepts `backend`, an optional `executable` override,
+and a positive `timeoutMs` (default `10000`). Without an override, Spacer uses
+`z3` and Eldarica uses `eld`, resolved on PATH. The library reads no configuration
+environment variables and does not automatically try another backend.
+The direct APIs `Flex.CHC.Spacer.run` and `Flex.CHC.Eldarica.run` also remain
+available; their backend-specific configurations take a plain executable string.
+
+For the counter example, both solvers return a definition equivalent to
+`fun x : Int => 0 ≤ x`. Spacer invokes
+`z3 -in -smt2 -model fp.engine=spacer`; Eldarica invokes `eld -in -hsmt -ssol`.
+Both use the same serialized Horn script and shared process runner.
 Z3's `-model` option produces a model only after `sat`, so `unsat` does not trigger
-a failing model request. `unknown` remains distinct from a wall-clock timeout.
+a failing model request. Eldarica's `-ssol` prints predicate definitions in SMT-LIB
+format. `unknown` remains distinct from a wall-clock timeout.
 
 `result.process` retains stdout, stderr, process completion, and elapsed
 milliseconds. The deadline covers startup, input, solving, and output collection.
@@ -181,12 +198,14 @@ The shared response decoder reuses SMTLib-to-Lean's `SolverResponse.parse`.
 It rejects nonzero process exits, solver errors, malformed output, and `sat`
 without a model, while accepting an explicitly empty model. Model definitions
 remain source text with provenance. The witness API below reconstructs and assigns
-them separately. Running Spacer does not close a Lean goal or add a `fix` option.
+them separately. Running either backend leaves Lean goals and witnesses unchanged.
+The `fix` tactic integration is planned in PR8.
 
 The implementation separates process handling in
 [`Process.lean`](Flex/CHC/Process.lean), shared response handling in
-[`Solver.lean`](Flex/CHC/Solver.lean), and the backend adapter in
-[`Spacer.lean`](Flex/CHC/Spacer.lean).
+[`Solver.lean`](Flex/CHC/Solver.lean), explicit backend selection in
+[`Backend.lean`](Flex/CHC/Backend.lean), and the two adapters in
+[`Spacer.lean`](Flex/CHC/Spacer.lean) and [`Eldarica.lean`](Flex/CHC/Eldarica.lean).
 
 The native implementation is isolated in [`native/chc_process.cpp`](native/chc_process.cpp)
 behind [`Process/Native.lean`](Flex/CHC/Process/Native.lean). Lake builds and loads
@@ -197,19 +216,20 @@ are unchanged.
 Run its tests with:
 
 ```sh
-# Deterministic protocol/process tests (Python 3; no Z3 required).
+# Deterministic protocol/process tests (Python 3; no installed solver required).
 lake lean Demo/CHC/Runner.lean
+lake lean Demo/CHC/Backends.lean
 # Real counter, Bool/Int, empty-model, and unsatisfiable cases (requires Z3).
 lake lean Demo/CHC/Spacer.lean
 ```
 
 ## Importing and assigning CHC witnesses
 
-After exporting `problem` and running Spacer, prepare its complete model with
+After exporting `problem` and running either backend, prepare its complete model with
 `importWitnesses`, then explicitly assign the resulting predicates:
 
 ```lean
-  let result ← Flex.CHC.Spacer.run problem
+  let result ← Flex.CHC.run problem { backend := .spacer }
   let witnesses ← Flex.CHC.importWitnesses problem result
   -- Inspect witnesses[i].value here; preparation has assigned no κs.
   Flex.CHC.assignWitnesses problem witnesses
@@ -241,12 +261,13 @@ integration and fallback are the next step.
 [`Witness.lean`](Flex/CHC/Witness.lean) implements these two operations.
 [`Demo/CHC/Witness.lean`](Demo/CHC/Witness.lean) tests model adaptation and atomic
 assignment without launching a solver. [`Demo/CHC/Instantiate.lean`](Demo/CHC/Instantiate.lean)
-tests the full Spacer-to-witness path and closes the resulting constraints with
+tests both solvers through the shared API and closes the resulting constraints with
 ordinary Lean proofs, checking that no `sorry` or trusted SMT axiom is used:
 
 ```sh
 lake lean Demo/CHC/Witness.lean
 lake lean Demo/CHC/Instantiate.lean  # requires Z3
+CHC_ELDARICA=/path/to/eld lake lean Demo/CHC/Instantiate.lean
 ```
 
 ## Comparing CHC solvers on the demos
@@ -255,9 +276,10 @@ lake lean Demo/CHC/Instantiate.lean  # requires Z3
 in `Demo/Basic.lean` and the 8 in `Demo/Cyclic.lean`. The solver paths export the
 original constraints, ask Spacer or Eldarica for every predicate, import and
 assign their models, then split conjunctions/introduce binders and run `omega`
-with `grind` as fallback. They do not invoke Flex's PA, fusion, or zap. Eldarica
-is invoked through a benchmark adapter using the shared process runner and model
-importer; it is not yet a production `fix` backend.
+with `grind` as fallback. They do not invoke Flex's PA, fusion, or zap. Both solvers
+use the public `Flex.CHC.run` API and shared witness importer; integration into
+the production `fix` tactic is the next step. The benchmark passes `--eldarica`
+through its own `CHC_ELDARICA` environment variable to the API's executable override.
 
 ```sh
 # Z3 and Eldarica must be installed; --eldarica also accepts an absolute path.
@@ -322,6 +344,66 @@ To reproduce the new run without overwriting the original:
 ```sh
 python3 scripts/benchmark_chc.py --eldarica /path/to/eld --output eval/chc_results_posix.csv
 ```
+
+### Remaining PRs
+
+PR1–PR7 supplied the dependency integration, export, solver execution, typed
+witness reconstruction, and public Spacer/Eldarica selection. The benchmark now
+uses that shared API. Native CHC spawning and the initial Demo comparisons are
+also implemented. The remaining sequence connects this path to `fix` for the
+existing supported fragment; language extensions are tracked separately.
+
+| PR | Deliverable | Completion check |
+| --- | --- | --- |
+| PR8 | Explicit CHC mode in `fix`: export → solve → reconstruct → assign → prove the original constraints. Restore the entire tactic attempt on failure, including goals, messages, and metavariables. | Existing supported examples produce complete Lean proofs through the tactic; failed attempts leave the original goal intact. |
+| PR9 | Configurable fallback between solvers and optionally the existing PA path, with a shared time budget and phase diagnostics. | Unsupported export, missing executable, `unknown`, timeout, bad model, and failed VC discharge follow the configured policy. An explicit CHC-only mode remains available. |
+| PR10 | Complete validation and documentation of the public route. Reuse the existing fixtures and benchmark harness; exercise the actual API/tactic, configurations, and failure recovery. | Regression and proof-audit checks pass; reproducible comparisons distinguish CHC-only runs from runs with PA fallback. |
+| PR11 | lean-auto native spawning, deferred until the core CHC integration is finished. | A configurable upstream-compatible query hook and Flex adapter pass protocol tests and are measured with the oracle benchmarks; details below. |
+
+A solver's `sat` result supplies candidate witnesses, not a proof. Its `unsat`
+result is a synthesis failure, not proof of the existential Lean goal. Every
+successful tactic invocation must discharge the original constraints in Lean.
+
+### Planned feature list
+
+These extensions are a separate backlog, not prerequisites for PR7–PR10. They
+will receive implementation PRs when selected. The first four items address the
+five shared Demo export gaps:
+
+| Capability | Required work | Acceptance case |
+| --- | --- | --- |
+| Bool/Prop bridge | Support `decide p` and justified Boolean comparisons; basic Bool arguments already work. | `Demo.Basic.ex_bool` |
+| Nonrecursive definitions | Controlled unfolding of selected definitions, such as `double x` into `x + x`. | `Demo.Basic.ex_userfn` |
+| Nat arithmetic | Encode Nat as Int with nonnegative guards; preserve truncated subtraction; lift imported predicates back through `Int.ofNat`. | `Demo.Basic.ex_nat`, including zero/underflow tests |
+| Products and scalar records | Flatten fields into solver arguments; translate constructors, projections, and equality; reconstruct witnesses on the original types. | `Demo.Basic.ex_prod`, `Demo.Basic.ex_pair` |
+| More capable VC discharge | Normalize imported quantified predicates and use the configured proof oracle to discharge their constraints. | Spacer's `ex14` and `ex_stress`, which already export and return `sat` |
+| Recursive definitions | Encode function calls with graph relations or a supported equivalent, add defining clauses, and connect the inferred predicates to the original Lean function. | Dedicated recursive-function cases, starting with Fibonacci |
+
+Nat and record support need shared argument-encoding metadata: one original Lean
+parameter may have a different SMT type or expand into several arguments. Export
+and witness reconstruction must use the same map. Reuse the existing SMTLib-to-Lean
+Int/Prop importer and selected lean-smt Bool/Nat embedding lemmas.
+
+An acceptance case succeeds only when the solver's candidates lead to a complete,
+kernel-checked proof of the original Lean proposition. Evaluate these changes
+with the same CHC-only benchmark, keeping PA/fusion/zap out of its solver paths.
+
+Recursive definitions such as Fibonacci remain a separate extension: qualifier
+scraping reads equation lemmas, but CHC export also needs graph relations or a
+supported equivalent encoding of calls, defining clauses, and Lean proof bridges.
+Unfolding a nonrecursive definition does not supply that recursive semantics.
+
+**PR11 — lean-auto native spawning (planned; deferred until PR7–PR10).**
+Add a configurable SMT query backend to a pinned lean-auto fork, preserving its
+existing implementation as the default. Bind a Flex adapter to the native process
+runner, initially for trusted PA synthesis, while keeping certificate generation
+on the proof oracle. Account for lean-auto's interactive status-dependent model,
+core, and proof requests: the existing batch runner is not a direct replacement
+for its live child-process interface. Test protocol outcomes, cancellation,
+cleanup, and unchanged proof checks; rerun the oracle benchmarks with phase
+timings. Prepare the backend hook and evidence for an upstream contribution.
+The current lean-smt tactic already uses in-process cvc5; its performance needs
+separate profiling, not this spawning replacement.
 
 ## Basic example
 

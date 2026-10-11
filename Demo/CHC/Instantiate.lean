@@ -1,15 +1,17 @@
 import Flex.CHC
 
-/-! Real Spacer-to-Lean witness integration. The test-only tactic supplies all
+/-! Real solver-to-Lean witness integration. The test-only tactic supplies all
 existential witnesses from the returned model; ordinary Lean tactics then prove
-the instantiated constraints. Requires `z3` on PATH and `lake lean` for the
-native SMT parser. Production `fix` integration is a separate change. -/
+the instantiated constraints. By default, requires `z3` on PATH. Set
+`CHC_ELDARICA=/path/to/eld` to check the same proofs using Eldarica instead.
+Run with `lake lean` for the native SMT parser and to execute the checks even
+when compiled artifacts are cached. Production `fix` integration is separate. -/
 namespace CHCInstantiateDemo
 
 open Lean Meta Elab Tactic Flex.CHC
 
 /-- Stop exactly at witness assignment, leaving invariant correctness to Lean. -/
-elab "spacer_witnesses" : tactic => withMainContext do
+elab "chc_witnesses" : tactic => withMainContext do
   let asyncPrefix := (← getEnv).asyncPrefix?
   let checkEnvironment : TacticM Unit := do
     unless (← getEnv).asyncPrefix? == asyncPrefix do
@@ -17,11 +19,14 @@ elab "spacer_witnesses" : tactic => withMainContext do
   let (_, kvars, bodyGoal) ← peelExistentialsAndIntro (← getMainGoal)
   let problem ← exportConstraints kvars (← bodyGoal.getType)
   checkEnvironment
-  let result ← Spacer.run problem
+  let config : Flex.CHC.Config := match ← IO.getEnv "CHC_ELDARICA" with
+    | some executable => { backend := .eldarica, executable := some executable }
+    | none => { backend := .spacer }
+  let result ← Flex.CHC.run problem config
   let witnesses ← importWitnesses problem result
   checkEnvironment
   unless witnesses.size == kvars.length do
-    throwError "Spacer did not provide every existential witness"
+    throwError "CHC solver did not provide every existential witness"
   for kvar in kvars do
     if ← kvar.mvarId.isAssignedOrDelayedAssigned then
       throwError "preparing witnesses assigned an existential"
@@ -40,7 +45,7 @@ elab "spacer_witnesses" : tactic => withMainContext do
 theorem counter :
     ∃ k : Int → Prop,
       k 0 ∧ (∀ x, k x → k (x + 1)) ∧ (∀ x, k x → 0 ≤ x) := by
-  spacer_witnesses
+  chc_witnesses
   refine ⟨?_, ?_, ?_⟩
   · omega
   · intro x hx
@@ -57,22 +62,18 @@ theorem booleanBranches :
       (∀ x, k false x → k false (x - 1)) ∧
       (∀ x, k true x → 0 ≤ x) ∧
       (∀ x, k false x → x ≤ 0) := by
-  spacer_witnesses
+  chc_witnesses
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
   · simp_all
   · simp_all
   · intro x hx
-    simp_all
-    omega
+    simp_all <;> omega
   · intro x hx
-    simp_all
-    omega
+    simp_all <;> omega
   · intro x hx
-    simp_all
-    omega
+    simp_all <;> omega
   · intro x hx
-    simp_all
-    omega
+    simp_all <;> omega
 
 theorem relatedPredicates :
     ∃ entry exit : Int → Prop,
@@ -83,7 +84,7 @@ theorem relatedPredicates :
       (∀ x, exit x → entry x) ∧
       (∀ x, entry x → 0 ≤ x) ∧
       (∀ x, exit x → 1 ≤ x) := by
-  spacer_witnesses
+  chc_witnesses
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · omega
   · omega
@@ -104,6 +105,6 @@ run_elab do
   for name in [``counter, ``booleanBranches, ``relatedPredicates] do
     let axioms ← collectAxioms name
     if axioms.contains ``sorryAx || axioms.contains `autoSMTSorry then
-      throwError "incomplete or trusted evidence in Spacer witness proof: {name}"
+      throwError "incomplete or trusted evidence in CHC witness proof: {name}"
 
 end CHCInstantiateDemo

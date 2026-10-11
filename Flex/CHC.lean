@@ -1,3 +1,3 @@
 import Flex.CHC.Export
-import Flex.CHC.Spacer
+import Flex.CHC.Backend
 import Flex.CHC.Witness

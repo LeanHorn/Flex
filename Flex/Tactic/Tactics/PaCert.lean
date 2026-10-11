@@ -48,7 +48,7 @@ private def benchFixPhase {m : Type → Type} {α : Type}
   aborts with a hint to run `fusion` first.
 -/
 def paCertImpl (oracle : PAOracle := proveLeaf) (scrape : PAScrapeConfig := {})
-    (proofOracle : Option PAOracle := none)
+    (proofOracle : Option PAOracle := none) (synth : Option PASynthOracle := none)
     : TacticM Unit := withMainContext do
   let (kctx, kvarsInOrder) ← peelKVars
 
@@ -72,7 +72,8 @@ def paCertImpl (oracle : PAOracle := proveLeaf) (scrape : PAScrapeConfig := {})
     -- Weakening fixpoint A* (reused PA pipeline, identical to `solve_fixpoint`).
     let flatCs  ← (exprFlat body).run kctx
     let initial ← buildInitialAssignment paSet extraQualifiers
-    let aStar ← benchFixPhase "synthesis" <| solveFixpoint kctx flatCs initial oracle
+    let aStar ← benchFixPhase "synthesis" <| solveFixpoint kctx flatCs initial
+      (synth.getD (.ofOracle oracle))
     if flex.benchOracles.get (← getOptions) then
       let count := fun (a : List (KVar × List (Expr × List Nat))) =>
         a.foldl (fun n (_, qs) => n + qs.length) 0
@@ -136,14 +137,17 @@ elab_rules : tactic
     let oracle ← match fallback with
       | none => pure proveLeaf
       | some tac => pure (withPAFallback (← `(tactic| ($tac:tacticSeq))) trust)
-    let synthOracle ← match synth with
-      | none => pure oracle
-      | some tac => pure (withPAPriority (← `(tactic| ($tac:tacticSeq))) trust)
+    -- Weakening asks per clause visit; a batched backend (e.g. `flex_auto`)
+    -- answers all of a clause's queries from one translation.
+    let synthOracle ← match synth, fallback with
+      | some tac, _ => pure (PASynthOracle.priority (← PASynthOracle.ofTactic tac trust))
+      | none, some tac => pure (PASynthOracle.fallback (← PASynthOracle.ofTactic tac trust))
+      | none, none => pure (.ofOracle proveLeaf)
     let proofOracle ← match proof with
       | none => pure oracle
       | some tac => pure (withPAPriority (← `(tactic| ($tac:tacticSeq))) trust)
     Flex.OracleStats.reset
-    paCertImpl synthOracle { mode, defs } (some proofOracle)
+    paCertImpl oracle { mode, defs } (some proofOracle) (some synthOracle)
     benchFixPhase "residual" do
       let mut remaining := []
       for goal in ← getGoals do

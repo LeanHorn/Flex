@@ -89,8 +89,9 @@ private def buildCurrentSols
       this clause this iter (don't drop candidates; dropping would be
       unsound). Other clauses processed in this iter usually shrink `out`
       enough that the inconsistency disappears next pass.
-    · Otherwise, for each candidate `(q, qSlots)`, specialize and check
-      via `checkExprVC`. Keep candidate iff it passes.
+    · Otherwise, for each candidate `(q, qSlots)`, specialize and check.
+      Keep candidate iff it passes. The sat-guard and candidate VCs go to the
+      synthesis oracle together (`PASynthOracle.checkClause`).
 
     A2: `currentSols` is rebuilt INSIDE the per-clause loop so each clause
     sees the latest `out` (post earlier-clause refinements within this iter). -/
@@ -98,7 +99,7 @@ partial def weakenOnce
     (kctx       : KContext)
     (flatCs     : List Expr)
     (assignment : List (KVar × List (Expr × List Nat)))
-    (oracle : PAOracle := proveLeaf)
+    (synth : PASynthOracle := .ofOracle proveLeaf)
     : TermElabM (List (KVar × List (Expr × List Nat))) := do
   -- A2: `currentSols` is rebuilt INSIDE the per-clause loop so each clause
   -- sees the latest `out` (post earlier-clause refinements within this iter).
@@ -113,15 +114,15 @@ partial def weakenOnce
     -- don't touch `out`. Other clauses processed in this iter shrink `out`,
     -- usually breaking the inconsistency on the next pass.
     let negVC ← (specializeClauseAsNeg headKVar currentSols fc).run kctx
-    let vacuous ← checkExprUnsat negVC oracle
-    match vacuous with
-    | true  => pure ()
-    | false =>
-      let mut kept : List (Expr × List Nat) := []
-      for (q, slots) in candidates do
-        let vc ← (specializeClauseForHead headKVar q slots currentSols fc).run kctx
-        if ← checkExprVC vc oracle then
-          kept := kept.concat (q, slots)
+    let vcs ← candidates.toArray.mapM fun (q, slots) =>
+      (specializeClauseForHead headKVar q slots currentSols fc).run kctx
+    -- One oracle call per clause visit: the sat-guard and every candidate
+    -- share the clause's binders and hypotheses.
+    match ← synth.checkClause negVC vcs with
+    | none => pure ()
+    | some ok =>
+      let kept := (candidates.zip ok.toList).filterMap fun (c, keep) =>
+        if keep then some c else none
       out := out.map fun (κ, qs) =>
         if κ == headKVar then (κ, kept) else (κ, qs)
   return out

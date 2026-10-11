@@ -1,6 +1,7 @@
 import Auto.Tactic
 import Batteries.Tactic.OpenPrivate
 import Flex.Tactic.Oracles.Stats
+import Flex.PA.Check
 
 open Lean Meta Elab Tactic Auto Embedding.Lam
 
@@ -35,6 +36,11 @@ register_option flex.auto.shareSolver : Bool := {
 register_option flex.auto.dumpDir : String := {
   defValue := ""
   descr := "flex_auto: if set, write each shared-solver query and its answer to this directory."
+}
+
+register_option flex.auto.batchClauses : Bool := {
+  defValue := true
+  descr := "flex_auto as a synthesis oracle: translate each clause visit once and check all its candidates in one solver scope."
 }
 
 register_option flex.auto.fastMono : Bool := {
@@ -72,39 +78,51 @@ private def dropSession : IO Unit := do
     try s.proc.kill catch _ => pure ()
   sessionRef.set none
 
-/-- Send `cmds` to the shared z3 process and return its `check-sat` answer.
-    Each query runs inside `(push)`/`(pop)`, which discards its declarations
-    and assertions; `(reset)` would too, but costs ~4 ms per query against
-    ~0.2 ms. The trailing `echo` sentinel keeps reads aligned even if z3 prints
-    error lines for individual commands. A dead process is replaced on next use. -/
-def queryShared (cmds : Array IR.SMT.Command) (timeoutMs : Nat) : IO (Option String) := do
+/-- Write a script to the shared z3 process and collect answers. `build`
+    receives a tag unique to this exchange and returns the script and the
+    markers it echoes, in order; for each marker the result is the last
+    `check-sat` answer printed before it. Echoed markers keep reads aligned even
+    if z3 prints error lines. A dead process is replaced on next use. -/
+def exchange (timeoutMs : Nat) (build : String → String × Array String)
+    : IO (Array (Option String)) := do
   let s ← match ← sessionRef.get with
     | some s => pure s
     | none => pure { proc := ← spawnZ3, queries := 0 }
   sessionRef.set (some s)
-  let sync := s!"flex-sync-{s.queries}"
+  let (script, markers) := build s!"flex-{s.queries}"
   try
-    let mut buf := if s.timeoutMs == some timeoutMs then "(push)\n"
-      else s!"(set-option :timeout {timeoutMs})\n(push)\n"
-    for c in cmds do
-      buf := buf ++ s!"{c}\n"
-    buf := buf ++ s!"(check-sat)\n(pop)\n(echo \"{sync}\")\n"
-    s.proc.stdin.putStr buf
+    let pre := if s.timeoutMs == some timeoutMs then ""
+      else s!"(set-option :timeout {timeoutMs})\n"
+    s.proc.stdin.putStr (pre ++ script)
     s.proc.stdin.flush
-    let mut answer := none
-    repeat
-      let line ← s.proc.stdout.getLine
-      if line.isEmpty then
-        throw <| IO.userError "flex_auto: z3 exited unexpectedly"
-      let line := line.trimAscii.toString
-      if line == sync then break
-      if line == "sat" || line == "unsat" || line == "unknown" then
-        answer := some line
+    let mut answers := #[]
+    for marker in markers do
+      let mut answer := none
+      repeat
+        let line ← s.proc.stdout.getLine
+        if line.isEmpty then
+          throw <| IO.userError "flex_auto: z3 exited unexpectedly"
+        let line := line.trimAscii.toString
+        if line == marker then break
+        if line == "sat" || line == "unsat" || line == "unknown" then
+          answer := some line
+      answers := answers.push answer
     sessionRef.set (some { s with queries := s.queries + 1, timeoutMs := some timeoutMs })
-    return answer
+    return answers
   catch e =>
     dropSession
     throw e
+
+def render (cmds : Array IR.SMT.Command) : String :=
+  cmds.foldl (fun acc c => acc ++ s!"{c}\n") ""
+
+/-- One query in its own `(push)`/`(pop)` scope, which discards its
+    declarations and assertions. `(reset)` would too, but costs ~4 ms per query
+    against ~0.2 ms. -/
+def queryShared (cmds : Array IR.SMT.Command) (timeoutMs : Nat) : IO (Option String) := do
+  let answers ← exchange timeoutMs fun tag =>
+    (s!"(push)\n{render cmds}(check-sat)\n(pop)\n(echo \"{tag}\")\n", #[tag])
+  return answers[0]!
 
 /-! ## Monomorphization fast path -/
 
@@ -132,9 +150,15 @@ def fastMonoAction (lemmas : Array Lemma) : MonoM (LemmaInsts × Array (Array Si
     LemmaInst.monomorphic? (← LemmaInst.ofLemmaHOL lem)
   return (lis, ← collectMonoMutInds)
 
-def monomorphize (lemmas inhFacts : Array Lemma) (k : Reif.State → MetaM α) : MetaM α := do
-  let fast := flex.auto.fastMono.get (← getOptions)
-  if fast && (← lemmas.allM isFirstOrderMono) then
+/-- `orderPreserving` demands the fast path, whose output facts follow the
+    input lemmas one-to-one (per-clause batches rely on positions). -/
+def monomorphize (lemmas inhFacts : Array Lemma) (k : Reif.State → MetaM α)
+    (orderPreserving := false) : MetaM α := do
+  let fast := flex.auto.fastMono.get (← getOptions) || orderPreserving
+  let firstOrder ← lemmas.allM isFirstOrderMono
+  if orderPreserving && !firstOrder then
+    throwError "flex_auto :: batching needs first-order monomorphic lemmas"
+  if fast && firstOrder then
     let ((lis, inds), st) ← OracleStats.time "auto.mono" <|
       (fastMonoAction lemmas).run {}
     MetaState.runWithIntroducedFVars
@@ -173,9 +197,8 @@ def reifAndQuery (uvalids uinhs : Array UMonoFact) (minds : Array (Array SimpleI
       let dir := flex.auto.dumpDir.get opts
       unless dir.isEmpty do
         let n := ((← sessionRef.get).map (·.queries)).getD 0
-        let body := commands.foldl (fun acc c => acc ++ s!"{c}\n") ""
         IO.FS.createDirAll dir
-        IO.FS.writeFile s!"{dir}/q{n}.smt2" s!"; answer: {answer}\n{body}(check-sat)\n"
+        IO.FS.writeFile s!"{dir}/q{n}.smt2" s!"; answer: {answer}\n{render commands}(check-sat)\n"
       pure (answer == some "unsat")
     else
       pure (← Solver.SMT.querySolver commands).isSome
@@ -190,6 +213,130 @@ def run (lemmas inhFacts : Array Lemma) : MetaM Expr := Meta.withDefault do
     (reifAndQuery s.facts s.inhTys s.inds).run' { u := u })
   return proof
 
+/-! ## Per-clause batches
+
+  Houdini weakening checks, per clause visit, the sat-guard `∀ x̄, H → False`
+  and every candidate `∀ x̄, H → c(ā)`. They share binders and hypotheses, so
+  the batch opens the binders once, runs lean-auto once over the context and
+  all negated candidate goals (one monomorphization, one reification), and
+  checks everything in one z3 scope: the context is asserted once, the
+  sat-guard is a plain `check-sat`, and each candidate adds its negated goal
+  in a nested `(push)`/`(pop)`. Facts are attributed to candidates through
+  lean-auto's derivation leaves. -/
+
+private def goalTag (i : Nat) : String := s!"flexGoal {i}"
+
+private def goalIndex? (leaf : String) : Option Nat :=
+  if leaf.startsWith "flexGoal " then (leaf.drop 9).toNat? else none
+
+/-- The leaf of candidate VC `c` under the binder prefix it shares with
+    `vacuity = ∀ x̄, False`; loose bound variables refer to that prefix. -/
+partial def leafUnder? : Expr → Expr → Option Expr
+  | .forallE _ d₁ b₁ _, .forallE _ d₂ b₂ _ => if d₁ == d₂ then leafUnder? b₁ b₂ else none
+  | .const ``False _, c => some c
+  | _, _ => none
+
+/-- The candidate whose negated goal a `valid_fact_j` assertion is: goals
+    come first, so fact `j < nGoals` is candidate `j`'s. -/
+private def factOwner? (nGoals : Nat) : IR.SMT.Command → Option Nat
+  | .assert (.attr _ #[.symb "named" name]) =>
+    if name.startsWith "valid_fact_" then (name.drop 11).toNat?.filter (· < nGoals) else none
+  | _ => none
+
+/-- Translate the negated candidate goals and the context in one lean-auto
+    run. Returns the commands shared by all candidates (declarations, context
+    facts) and, per candidate, the assertions of its negated goal.
+
+    Facts are matched to candidates by position. The goals are the first
+    `nGoals` input facts; reification is one-to-one, and preprocessing maps
+    facts one-to-one except that definitions (`x = t`) are removed after being
+    substituted into the others, which keeps the order of the rest. A negated
+    goal is never definition-shaped, so the goals keep their positions.
+    (Derivations cannot be used after reification: it merges identical terms,
+    e.g. `0 ≤ ν` and `0 ≤ x` once `ν = x` has been substituted.) -/
+def translateClause (nGoals : Nat) (uvalids uinhs : Array UMonoFact)
+    (minds : Array (Array SimpleIndVal))
+    : LamReif.ReifM (Array IR.SMT.Command × Array (Array IR.SMT.Command)) := do
+  for i in [0:nGoals] do
+    unless uvalids[i]?.any (·.deriv.collectLeafStrings.contains (goalTag i)) do
+      throwError "flex_auto :: candidate goal {i} is not fact {i} after monomorphization"
+  let exportFacts ← LamReif.reifFacts uvalids
+  let exportFacts := exportFacts.map (REntry.valid [])
+  let _ ← LamReif.reifInhabitations uinhs
+  let exportInds ← LamReif.reifMutInds minds
+  let (exportFacts, exportInds) ← LamReif.preprocess exportFacts exportInds
+  if exportFacts.size < nGoals then
+    throwError "flex_auto :: preprocessing removed a candidate goal"
+  let lamVarTy := (← LamReif.getVarVal).map Prod.snd
+  let lamEVarTy ← LamReif.getLamEVarTy
+  let terms ← exportFacts.mapM fun
+    | .valid [] t => pure t
+    | _ => throwError "flex_auto :: unexpected non-valid fact"
+  let sni : SMT.SMTNamingInfo :=
+    { tyVal := ← LamReif.getTyVal, varVal := ← LamReif.getVarVal, lamEVarTy }
+  let ((commands, _), _) ← (lamFOL2SMT sni lamVarTy lamEVarTy terms exportInds).run
+  let mut shared := #[]
+  let mut goals : Array (Array IR.SMT.Command) := Array.replicate nGoals #[]
+  for cmd in commands do
+    match factOwner? nGoals cmd with
+    | some i => goals := goals.modify i (·.push cmd)
+    | none => shared := shared.push cmd
+  return (shared, goals)
+
+/-- One lemma `¬ gᵢ` per candidate goal, tagged and first (see
+    `translateClause`), then the lemmas of the context (per `hs`, `us`). The goal lemmas carry a
+    placeholder proof: batch results are verdicts, never proof terms. -/
+private def collectClause (hs : TSyntax ``Auto.hints) (us : Array (TSyntax ``Auto.uord))
+    (xs goals : Array Expr) : TermElabM (Array Lemma × Array Lemma) := do
+  let mvar ← mkFreshExprMVar (mkConst ``False)
+  let out ← IO.mkRef (#[], #[])
+  discard <| Tactic.run mvar.mvarId! do
+    let (lemmas, inhFacts) ← collectAllLemmas hs us (xs.map (·.fvarId!))
+    let unfolds ← Prep.topoSortUnfolds (← parseUOrDs us).1
+    let goalLemmas ← goals.mapIdxM fun i g => do
+      let ty := mkNot g
+      unfoldConstAndPreprocessLemma unfolds
+        ⟨⟨mkApp (.const ``autoSMTSorry [.zero]) ty, ty, .leaf (goalTag i)⟩, #[]⟩
+    out.set (goalLemmas ++ lemmas, inhFacts)
+  out.get
+
+/-- Batched `flex_auto` for one clause visit; see `PASynthOracle.checkClause`. -/
+def checkClause (hs : TSyntax ``Auto.hints) (us : Array (TSyntax ``Auto.uord))
+    (vacuity : Expr) (candidates : Array Expr) : TermElabM (Option (Array Bool)) := do
+  let some leaves := candidates.mapM (leafUnder? vacuity)
+    | throwError "flex_auto :: candidate VCs do not share the clause's binders"
+  forallTelescope vacuity fun xs body => do
+    unless body.isConstOf ``False do
+      throwError "flex_auto :: unexpected sat-guard shape{indentExpr body}"
+    let goals := leaves.map (·.instantiateRev xs)
+    let (lemmas, inhFacts) ← OracleStats.time "auto.collect" <| collectClause hs us xs goals
+    let ((shared, goalCmds), _) ← Meta.withDefault do
+      let lemmas ← rewriteIteCondDecide lemmas
+      monomorphize lemmas inhFacts (@id (Reif.ReifM _) do
+        let s ← get
+        let u ← computeMaxLevel s.facts
+        OracleStats.time "auto.reif" <|
+          (translateClause goals.size s.facts s.inhTys s.inds).run' { u := u })
+        (orderPreserving := true)
+    let timeoutMs := auto.smt.timeout.get (← getOptions) * 1000
+    OracleStats.time "auto.solver" do
+      let guard ← exchange timeoutMs fun tag =>
+        (s!"(push)\n{render shared}(check-sat)\n(echo \"{tag}\")\n", #[tag])
+      if guard[0]! == some "unsat" then
+        discard <| exchange timeoutMs fun _ => ("(pop)\n", #[])
+        return none
+      let ids := (List.range goalCmds.size).toArray.filter (!goalCmds[·]!.isEmpty)
+      let answers ← exchange timeoutMs fun tag =>
+        let checks := ids.foldl (init := "") fun acc i =>
+          acc ++ s!"(push)\n{render goalCmds[i]!}(check-sat)\n(pop)\n(echo \"{tag}-{i}\")\n"
+        (checks ++ s!"(pop)\n(echo \"{tag}\")\n", (ids.map (s!"{tag}-{·}")).push tag)
+      let mut ok := Array.replicate goalCmds.size false
+      for (i, answer) in ids.zip answers do
+        ok := ok.set! i (answer == some "unsat")
+      trace[flex.oracle] "flex_auto batch: {goals.size} candidates, untranslated \
+        {(List.range goalCmds.size).filter (goalCmds[·]!.isEmpty)}, answers {answers}"
+      return some ok
+
 end Flex.AutoOracle
 
 /-- lean-auto's trusted SMT mode, specialised for PA queries (see module doc).
@@ -200,8 +347,13 @@ end Flex.AutoOracle
     or `fix (oracle := flex_auto)` as a Lean-first fallback for all phases.
     Successful SMT calls use lean-auto's `autoSMTSorry` axiom; a separate proof
     oracle rebuilds the certificate without those synthesis proof terms. -/
-elab "flex_auto" hs:hints us:uord* : tactic =>
-  withOptions (fun o => (o.setBool `auto.smt true).setBool `auto.smt.trust true) do
+syntax (name := flexAuto) "flex_auto" hints uord* : tactic
+
+private def withAutoSMT {m : Type → Type} {α : Type} [MonadWithOptions m] (k : m α) : m α :=
+  withOptions (fun o => (o.setBool `auto.smt true).setBool `auto.smt.trust true) k
+
+elab_rules : tactic
+  | `(tactic| flex_auto $hs:hints $us:uord*) => withAutoSMT do
   Flex.OracleStats.reportCall ((← getOptions).getBool `flex.benchOracles)
       "flex_auto" (fun _ => "proved") <|
   Flex.OracleStats.time "auto.total" <| withMainContext do
@@ -214,6 +366,28 @@ elab "flex_auto" hs:hints us:uord* : tactic =>
       let (lemmas, inhFacts) ← Flex.OracleStats.time "auto.collect" <|
         collectAllLemmas hs us (binders.push ngoal)
       absurd.assign (← Flex.AutoOracle.run lemmas inhFacts)
+
+/-- As a synthesis oracle (`fix (synth := flex_auto …)` or `(oracle := …)`),
+    `flex_auto` answers each clause visit from one translation. On any failure
+    of the batch it reverts to per-query calls for that clause. -/
+initialize registerPASynthBuilder ``flexAuto fun tac trust => do
+  let opts ← getOptions
+  unless flex.auto.batchClauses.get opts && flex.auto.shareSolver.get opts do return none
+  let `(tactic| flex_auto $hs:hints $us:uord*) := tac | return none
+  let perQuery := PASynthOracle.ofOracle (proveLeafWith ⟨tac⟩ · trust)
+  return some { checkClause := fun vacuity candidates => do
+    let saved ← saveState
+    try
+      Flex.OracleStats.reportCall (opts.getBool `flex.benchOracles) "flex_auto_clause"
+          (fun r => if r.isSome then "checked" else "vacuous") do
+        Flex.OracleStats.record "batch.candidates" candidates.size
+        withAutoSMT <| withSilencedMessages <| withNewMCtxDepth <|
+          Flex.OracleStats.time "auto.total" <|
+            Flex.AutoOracle.checkClause hs us vacuity candidates
+    catch e =>
+      saved.restore
+      trace[flex.oracle] "flex_auto batch failed, using per-query calls: {e.toMessageData}"
+      perQuery.checkClause vacuity candidates }
 
 /-- The stock lean-auto pipeline (fresh solver per query, full
     monomorphization), kept for comparison with `flex_auto`. -/

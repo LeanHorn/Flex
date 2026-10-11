@@ -8,7 +8,7 @@ two panels:
   solving (the z3 process is reused, so no spawn cost per call), next to the
   Lean oracle (`pa_oracle`);
 * bottom: per constraint (one `fix` run), the one-time z3 spawn + start-up
-  against the summed per-call `flex_auto` time.
+  against the per-query work of all `flex_auto` calls, as shares.
 """
 import argparse
 import json
@@ -54,9 +54,13 @@ def split_call(call: dict[str, float]) -> dict[str, float]:
     return {"mono": mono, "other": other, "solve": solve}
 
 
+INCLUDE_WARMUP = False
+
+
 def measured(records: list[Record], case: str, config: str) -> list[Record]:
     return [r for r in records
-            if r["case"] == case and r["config"] == config and not r["warmup"] and r["success"]]
+            if r["case"] == case and r["config"] == config and r["success"]
+            and (INCLUDE_WARMUP or not r["warmup"])]
 
 
 def per_call_rows(records: list[Record]) -> list[tuple[str, dict[str, float], int]]:
@@ -82,20 +86,24 @@ def per_call_rows(records: list[Record]) -> list[tuple[str, dict[str, float], in
     return rows
 
 
-def per_constraint_rows(records: list[Record]) -> list[tuple[str, float, float, float]]:
-    """(case, median spawn ms, median summed per-call ms, median calls per run)."""
-    rows: list[tuple[str, float, float, float]] = []
+def per_constraint_rows(records: list[Record]) -> list[tuple[str, dict[str, float], float]]:
+    """(case, median ms per part of all flex_auto work in one run, median calls per run)."""
+    rows: list[tuple[str, dict[str, float], float]] = []
     for case in CASES:
-        spawns: list[float] = []
-        sums: list[float] = []
+        parts: list[dict[str, float]] = []
         counts: list[int] = []
         for r in measured(records, case, AUTO_CONFIG):
             calls = [c for c in r["calls"] if c["oracle"] == "flex_auto"]
-            spawns.append(sum(c.get("auto.spawn", 0.0) for c in calls))
-            sums.append(sum(sum(split_call(c).values()) for c in calls))
+            split = [split_call(c) for c in calls]
+            parts.append({
+                "spawn": sum(c.get("auto.spawn", 0.0) for c in calls),
+                "mono": sum(c["mono"] for c in split),
+                "other": sum(c["other"] for c in split),
+                "solve": sum(c["solve"] for c in split),
+            })
             counts.append(len(calls))
-        if spawns:
-            rows.append((case, statistics.median(spawns), statistics.median(sums),
+        if parts:
+            rows.append((case, {k: statistics.median(p[k] for p in parts) for k in parts[0]},
                          statistics.median(counts)))
     return rows
 
@@ -131,7 +139,11 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=ROOT / "eval/fig_oracle_calls_shared.png")
     parser.add_argument("--xmax", type=float, default=85,
                         help="x-axis limit of the per-call panel (match the earlier chart)")
+    parser.add_argument("--include-warmup", action="store_true",
+                        help="also use warm-up runs (for previews of a partial run)")
     args = parser.parse_args()
+    global INCLUDE_WARMUP
+    INCLUDE_WARMUP = args.include_warmup
     records: list[Record] = json.loads(args.input.read_text())["records"]
 
     calls = per_call_rows(records)
@@ -139,42 +151,46 @@ def main() -> None:
 
     fig, (ax_call, ax_once) = plt.subplots(
         2, 1, figsize=(16.4, 13), facecolor=SURFACE,
-        gridspec_kw={"height_ratios": [len(calls), len(constraints) * 1.25], "hspace": 0.32})
+        gridspec_kw={"height_ratios": [len(calls), len(constraints) * 1.1], "hspace": 0.3})
 
     for y, (label, med, n) in enumerate(calls):
         order = ["lean"] if "lean" in med else ["mono", "other", "solve"]
         end = draw_stacked(ax_call, y, [(k, med[k]) for k in order], 0.56)
-        ax_call.text(end + 0.8, y, f"{end:.0f} ms" if end >= 1 else f"{end:.1f} ms",
-                     va="center", color=INK, fontsize=11)
+        text = f"{end:.0f} ms" if end >= 1 else f"{end:.1f} ms"
+        if end > args.xmax:
+            # Off-scale: z3 ran into its per-query timeout (`unknown`).
+            text = f"→ {text}  (z3 timeout, auto.smt.timeout = 1 s)"
+            ax_call.text(args.xmax * 0.985, y, text, va="center", ha="right",
+                         color="white", fontsize=11, fontweight="bold")
+        else:
+            ax_call.text(end + 0.8, y, text, va="center", color=INK, fontsize=11)
     ax_call.set_yticks(range(len(calls)), [label for label, _, _ in calls])
     style_axis(ax_call, args.xmax, "median ms per call")
     ax_call.set_title("Per query: z3 is no longer spawned; the process is reused after (reset)",
                       loc="left", color=INK, fontsize=13, pad=12)
 
-    once_max = max(max(spawn, total) for _, spawn, total, _ in constraints)
-    for i, (case, spawn, total, n) in enumerate(constraints):
-        y0 = i * 2
-        ax_once.barh(y0, spawn, height=0.7, color=COLORS["spawn"], edgecolor=SURFACE)
-        ax_once.text(spawn + once_max * 0.008, y0, f"{spawn:.0f} ms, once", va="center",
-                     color=INK, fontsize=11)
-        ax_once.barh(y0 + 0.8, total, height=0.7, color=COLORS["solve"], edgecolor=SURFACE,
-                     hatch="//", alpha=0.85)
-        ax_once.text(total + once_max * 0.008, y0 + 0.8,
-                     f"{total:.0f} ms over {n:.0f} calls", va="center", color=INK, fontsize=11)
-    ax_once.set_yticks([i * 2 + 0.4 for i in range(len(constraints))],
-                       [case for case, *_ in constraints])
-    style_axis(ax_once, once_max * 1.25, "median ms per constraint (one fix run)")
-    ax_once.set_title("Per constraint: one z3 spawn + start-up vs. all flex_auto calls together",
+    for y, (case, parts, n) in enumerate(constraints):
+        total = sum(parts.values())
+        draw_stacked(ax_once, y, [(k, 100 * parts[k] / total)
+                                  for k in ("spawn", "mono", "other", "solve")], 0.56)
+        share = 100 * parts["spawn"] / total
+        ax_once.text(101, y, f"{total / 1000:.2f} s over {n:.0f} calls; "
+                     f"once: {parts['spawn']:.0f} ms ({share:.1f}%)",
+                     va="center", color=INK, fontsize=11)
+    ax_once.set_yticks(range(len(constraints)), [case for case, *_ in constraints])
+    style_axis(ax_once, 100, "share of all flex_auto time in one constraint (%)")
+    ax_once.set_xlim(0, 150)
+    ax_once.set_xticks(range(0, 101, 20))
+    ax_once.spines["bottom"].set_bounds(0, 100)
+    ax_once.set_title("Per constraint: spawning + starting z3 (once) vs. per-query work",
                       loc="left", color=INK, fontsize=13, pad=12)
 
     legend = [
         Patch(color=COLORS["mono"], label="lean-auto: monomorphization (fast path)"),
         Patch(color=COLORS["other"], label="lean-auto: other translation"),
-        Patch(color=COLORS["solve"], label="Z3 solve (shared process)"),
+        Patch(color=COLORS["spawn"], label="Spawning + starting Z3 (once per constraint)"),
+        Patch(color=COLORS["solve"], label="Z3 solve (shared process, per query)"),
         Patch(color=COLORS["lean"], label="Lean oracle (pa_oracle)"),
-        Patch(color=COLORS["spawn"], label="Spawning + starting Z3 (once per process)"),
-        Patch(facecolor=COLORS["solve"], hatch="//", alpha=0.85,
-              label="Σ flex_auto calls in the constraint"),
     ]
     fig.legend(handles=legend, loc="upper center", ncol=3, frameon=False, fontsize=11,
                labelcolor=INK, bbox_to_anchor=(0.6, 0.995))
@@ -183,9 +199,8 @@ def main() -> None:
     print(f"wrote {args.output}")
     for label, med, n in calls:
         print(f"{label:40} n={n:4d} " + " ".join(f"{k}={v:.2f}" for k, v in med.items()))
-    for case, spawn, total, n in constraints:
-        print(f"{case:12} spawn={spawn:.1f}ms per-call-sum={total:.1f}ms calls={n:.0f}")
-
+    for case, parts, n in constraints:
+        print(f"{case:12} calls={n:.0f} " + " ".join(f"{k}={v:.1f}ms" for k, v in parts.items()))
 
 if __name__ == "__main__":
     main()

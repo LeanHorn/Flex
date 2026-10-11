@@ -13,8 +13,8 @@ open Lean Meta Elab Tactic Auto Embedding.Lam
 
   * **A fresh solver process.** `Auto.Solver.SMT.querySolver` spawns `z3` for
     every call. Here one `z3 -in` process is kept per Lean process and reused;
-    each query starts with `(reset)` so no state leaks between queries, and a
-    per-query `:timeout` replaces the process-wide `-T`.
+    each query runs in a `(push)`/`(pop)` scope so no state leaks between
+    queries, and a `:timeout` option replaces the process-wide `-T`.
   * **Monomorphization saturation.** PA queries are first-order facts over
     concrete types. Saturation still runs quadratic `instanceOf?` searches
     (term-like and instance defeqs) that cannot add instances for such input.
@@ -49,8 +49,9 @@ namespace Flex.AutoOracle
 abbrev Z3Proc := IO.Process.Child ⟨.piped, .piped, .null⟩
 
 structure Session where
-  proc    : Z3Proc
-  queries : Nat
+  proc      : Z3Proc
+  queries   : Nat
+  timeoutMs : Option Nat := none
 
 initialize sessionRef : IO.Ref (Option Session) ← IO.mkRef none
 
@@ -72,8 +73,10 @@ private def dropSession : IO Unit := do
   sessionRef.set none
 
 /-- Send `cmds` to the shared z3 process and return its `check-sat` answer.
-    The trailing `echo` sentinel keeps reads aligned even if z3 prints error
-    lines for individual commands. A dead process is replaced on next use. -/
+    Each query runs inside `(push)`/`(pop)`, which discards its declarations
+    and assertions; `(reset)` would too, but costs ~4 ms per query against
+    ~0.2 ms. The trailing `echo` sentinel keeps reads aligned even if z3 prints
+    error lines for individual commands. A dead process is replaced on next use. -/
 def queryShared (cmds : Array IR.SMT.Command) (timeoutMs : Nat) : IO (Option String) := do
   let s ← match ← sessionRef.get with
     | some s => pure s
@@ -81,10 +84,11 @@ def queryShared (cmds : Array IR.SMT.Command) (timeoutMs : Nat) : IO (Option Str
   sessionRef.set (some s)
   let sync := s!"flex-sync-{s.queries}"
   try
-    let mut buf := s!"(reset)\n(set-option :timeout {timeoutMs})\n"
+    let mut buf := if s.timeoutMs == some timeoutMs then "(push)\n"
+      else s!"(set-option :timeout {timeoutMs})\n(push)\n"
     for c in cmds do
       buf := buf ++ s!"{c}\n"
-    buf := buf ++ s!"(check-sat)\n(echo \"{sync}\")\n"
+    buf := buf ++ s!"(check-sat)\n(pop)\n(echo \"{sync}\")\n"
     s.proc.stdin.putStr buf
     s.proc.stdin.flush
     let mut answer := none
@@ -96,7 +100,7 @@ def queryShared (cmds : Array IR.SMT.Command) (timeoutMs : Nat) : IO (Option Str
       if line == sync then break
       if line == "sat" || line == "unsat" || line == "unknown" then
         answer := some line
-    sessionRef.set (some { s with queries := s.queries + 1 })
+    sessionRef.set (some { s with queries := s.queries + 1, timeoutMs := some timeoutMs })
     return answer
   catch e =>
     dropSession

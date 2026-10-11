@@ -135,10 +135,12 @@ def draw_stacked(ax: plt.Axes, y: int, parts: list[tuple[str, float]], height: f
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", type=Path, default=ROOT / "eval/oracle_results_shared.json")
-    parser.add_argument("--output", type=Path, default=ROOT / "eval/fig_oracle_calls_shared.png")
+    parser.add_argument("--input", type=Path, default=ROOT / "eval/oracle_results_pushpop.json")
+    parser.add_argument("--output", type=Path, default=ROOT / "eval/fig_oracle_calls_pushpop.png")
     parser.add_argument("--xmax", type=float, default=85,
                         help="x-axis limit of the per-call panel (match the earlier chart)")
+    parser.add_argument("--scoping", default="(push)/(pop)",
+                        help="how queries are isolated in the shared z3 process (title text)")
     parser.add_argument("--include-warmup", action="store_true",
                         help="also use warm-up runs (for previews of a partial run)")
     args = parser.parse_args()
@@ -166,7 +168,7 @@ def main() -> None:
             ax_call.text(end + 0.8, y, text, va="center", color=INK, fontsize=11)
     ax_call.set_yticks(range(len(calls)), [label for label, _, _ in calls])
     style_axis(ax_call, args.xmax, "median ms per call")
-    ax_call.set_title("Per query: z3 is no longer spawned; the process is reused after (reset)",
+    ax_call.set_title(f"Per query: one z3 process, each query scoped by {args.scoping}",
                       loc="left", color=INK, fontsize=13, pad=12)
 
     for y, (case, parts, n) in enumerate(constraints):

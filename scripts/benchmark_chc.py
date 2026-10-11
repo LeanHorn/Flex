@@ -149,6 +149,8 @@ def main() -> int:
                                         "scripts/benchmark_chc.py", "lake-manifest.json", "lakefile.lean",
                                         "Flex/CHC/Process.lean", "Flex/CHC/Process/Native.lean",
                                         "Flex/CHC/Process/Portable.lean", "Flex/CHC/Process/Types.lean",
+                                        "Flex/CHC/Backend.lean", "Flex/CHC/Spacer.lean",
+                                        "Flex/CHC/Eldarica.lean",
                                         "native/chc_process.cpp"]},
         "complete": False,
     }

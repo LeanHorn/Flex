@@ -109,4 +109,13 @@ mutual
         Check κ ((y, <ty|Bool{ν : x = true }|>) :: Γ) e₁ t →
         Check κ ((y, <ty|Bool{ν : x = false}|>) :: Γ) e₂ t →
         Check κ Γ (.ite (.fvar x) e₁ e₂) t
+
+    /-- FIX (Chk-Rec, assume–guarantee): check the body of the recursive
+        function `fix f. λx. e` assuming `f` already has the annotated type. -/
+    | fix {κ Γ e s t f x} :
+        f ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s.fv ++ t.fv →
+        x ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s.fv ++ t.fv ++ [f] →
+        Check κ ((x, s) :: (f, .arrow s t) :: Γ)
+          ((e.openVar 1 f).openVar 0 x) (t.openVar 0 x) →
+        Check κ Γ (.fix e) (.arrow s t)
 end

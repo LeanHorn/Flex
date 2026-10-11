@@ -66,6 +66,13 @@ inductive Hastype : KEnv → TEnv → Exp → Ty → Prop where
       Hastype κ ((y, <ty|Bool{ν : x = true }|>) :: Γ) e₁ t →
       Hastype κ ((y, <ty|Bool{ν : x = false}|>) :: Γ) e₂ t →
       Hastype κ Γ (.ite (.fvar x) e₁ e₂) t
+  | fix {κ Γ e s t f x} :
+      Ty.WFBVars (.arrow s t) →
+      f ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s.fv ++ t.fv →
+      x ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s.fv ++ t.fv ++ [f] →
+      Hastype κ ((x, s) :: (f, .arrow s t) :: Γ)
+        ((e.openVar 1 f).openVar 0 x) (t.openVar 0 x) →
+      Hastype κ Γ (.fix e) (.arrow s t)
 
 /-- For fvar typing, the variable must appear in the context. -/
 theorem Hastype.fvar_lookup {κ Γ x t} (h : Hastype κ Γ (.fvar x) t) :
@@ -82,7 +89,7 @@ theorem EVar.not_free_in_open : x ∈ e.fv → x ∈ (Exp.openVar k y e).fv := b
     | fvar z              => unfold Exp.fv Exp.openVar at * ; simp_all
     | iconst i            => simp_all [Exp.fv]
     | bconst b            => simp_all [Exp.fv]
-    | lam e ih | not e ih => simp_all [Exp.fv, Exp.openVar]
+    | lam e ih | not e ih | fix e ih => simp_all [Exp.fv, Exp.openVar]
     | letin e₁ e₂ ih1 ih2
     | app e₁ e₂ ih1 ih2
     | add e₁ e₂ ih1 ih2
@@ -140,6 +147,15 @@ theorem Hastype.fv_subset {κ Γ e t} (_h : Hastype κ Γ e t) :
     exact ih zf
   | unreach =>
     simp [Exp.fv] at zf
+  | @fix Γ' e s t f x _ hf hx _ ih =>
+    simp only [Exp.fv] at zf
+    simp only [List.mem_append, List.mem_singleton, not_or] at hf hx
+    obtain ⟨t', hz⟩ := ih (EVar.not_free_in_open (EVar.not_free_in_open zf))
+    simp only [List.mem_cons, Prod.mk.injEq] at hz
+    rcases hz with ⟨rfl, _⟩ | ⟨rfl, _⟩ | hz
+    · exact absurd zf (by simp_all)
+    · exact absurd zf (by simp_all)
+    · exact ⟨t', hz⟩
 
 
 /-- Well-typed expressions are locally closed (lc_at 0). Proved by induction on
@@ -165,6 +181,9 @@ theorem Hastype.lc_at {κ Γ e t} (_h : Hastype κ Γ e t) : Exp.lc_at 0 e := by
   | and_var => simp [Exp.lc_at]
   | ite _ _ _ _ _ ih₁ ih₂ => simp only [Exp.lc_at]; exact ⟨trivial, ih₁, ih₂⟩
   | unreach => simp [Exp.lc_at]
+  | fix _ _ _ _ ih =>
+    simp only [Exp.lc_at]
+    exact Exp.lc_at_of_openVar _ 1 _ (Exp.lc_at_of_openVar _ 0 _ ih)
 
 /-- WFBVars of `self x t`: `self` is the singleton `{ν | ν = x}` (kvar-free, no
     BVars), so it is `WFBVars` outright — independent of `t`. -/
@@ -224,3 +243,4 @@ theorem Hastype.wf_bvars {κ Γ e t} (h : Hastype κ Γ e t) : Ty.WFBVars t := b
   | and_var => exact Ty.WFBVars_and_result _ _
   | ite _ _ hwf _ _ _ _ => exact hwf
   | unreach _ hwf => exact hwf
+  | fix hwf _ _ _ _ => exact hwf

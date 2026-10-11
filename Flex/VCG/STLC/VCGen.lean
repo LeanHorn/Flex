@@ -98,6 +98,15 @@ mutual
         match check ((x, s₁) :: Γ) (e.openVar 0 x) (s₂.openVar 0 x) with
         | some c => some (implyBindCstr x s₁ c)
         | none   => none
+    | .fix e, .arrow s t =>
+        -- Chk-Rec: check the body assuming `f : s → t` (assume–guarantee). The
+        -- binding for `f` has arrow type, so it contributes no hypothesis.
+        let f := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s.fv ++ t.fv)
+        let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s.fv ++ t.fv ++ [f])
+        match check ((x, s) :: (f, .arrow s t) :: Γ)
+                ((e.openVar 1 f).openVar 0 x) (t.openVar 0 x) with
+        | some c => some (implyBindCstr x s c)
+        | none   => none
     | .letin e₁ e₂, t =>
         match synth Γ e₁ with
         | some (c₁, s) =>

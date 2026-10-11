@@ -194,6 +194,8 @@ inductive Exp where
   | ite    : Exp → Exp → Exp → Exp
   | add    : Exp → Exp → Exp
   | unreach : Exp                       -- `assert false` / unreachable; not a value, gets stuck
+  | fix    : Exp → Exp                  -- recursive function `fix f. λx. body`;
+                                        -- body has BVar 1 = f (self), BVar 0 = x (param)
 
 /-- Typing context: a list of free-name × type pairs. Names are unique by convention. -/
 @[simp]
@@ -216,12 +218,14 @@ inductive Val where
   | iconst : Int  → Val
   | bconst : Bool → Val
   | clos   : Exp  → Val
+  | fclos  : Exp  → Val                 -- recursive closure: body of `Exp.fix`
 
 /-- Inject a value into the syntax (used by big-step `lam` and `Exp.openVal`). -/
 @[simp] def Val.toExp : Val → Exp
   | .iconst n   => .iconst n
   | .bconst b   => .bconst b
   | .clos body  => .lam body
+  | .fclos body => .fix body
 
 
 /-- Locally closed at level `k`: every `bvar j` satisfies `j < k`.
@@ -241,6 +245,7 @@ def Exp.lc_at : Nat → Exp → Prop
   | k, .ite e₀ e₁ e₂  => e₀.lc_at k ∧ e₁.lc_at k ∧ e₂.lc_at k
   | k, .add e₁ e₂     => e₁.lc_at k ∧ e₂.lc_at k
   | _, .unreach       => True
+  | k, .fix body      => body.lc_at (k+2)
 
 /-- A `Val` is closed when its `toExp` is locally closed (note: the closure
     body is required `lc_at 1` since `BVar 0` is the parameter). -/
@@ -249,6 +254,7 @@ def Val.lc (v : Val) : Prop :=
   | Val.iconst _   => True
   | Val.bconst _   => True
   | Val.clos body  => body.lc_at 1
+  | Val.fclos body => body.lc_at 2
 
 
 /-! ## Substitution on expressions -/
@@ -270,6 +276,7 @@ def Exp.openExp (k : Nat) (u : Exp) (e : Exp) : Exp :=
   | .ite e₀ e₁ e₂  => .ite (Exp.openExp k u e₀) (Exp.openExp k u e₁) (Exp.openExp k u e₂)
   | .add e₁ e₂     => .add (Exp.openExp k u e₁) (Exp.openExp k u e₂)
   | .unreach       => .unreach
+  | .fix body      => .fix (Exp.openExp (k+2) u body)
 
 /-- Open `bvar k` with a value (via `Val.toExp`). Handy for big-step. -/
 def Exp.openVal (k : Nat) (v : Val) : Exp → Exp := Exp.openExp k v.toExp
@@ -320,6 +327,7 @@ def Val.inj : (b : Base) → b.interp → Val
   | .iconst _ => some .int
   | .bconst _ => some .bool
   | .clos _   => none
+  | .fclos _  => none
 
 /-- Val-level (lossless) lookup. -/
 @[simp, reducible]
@@ -398,12 +406,14 @@ def Exp.fv : Exp → List EVar
   | .ite e₀ e₁ e₂  => Exp.fv e₀ ++ Exp.fv e₁ ++ Exp.fv e₂
   | .add e₁ e₂     => Exp.fv e₁ ++ Exp.fv e₂
   | .unreach       => []
+  | .fix body      => Exp.fv body
 
 def Val.fv (v : Val) : List EVar :=
   match v with
   | Val.iconst _   => []
   | Val.bconst _   => []
   | Val.clos body  => body.fv
+  | Val.fclos body => body.fv
 
 /-- A value is *closed* when it has no free names. For `iconst`/`bconst` this
     is automatic; for `clos body` it says the body's free names are all bound

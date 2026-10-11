@@ -28,3 +28,4 @@ import Flex.VCG.STLC.Declarative
 import Flex.VCG.STLC.Semantics
 import Flex.VCG.STLC.Safety
 import Flex.VCG.STLC.Examples
+import Flex.VCG.STLC.Audit

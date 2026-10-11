@@ -68,6 +68,7 @@ theorem Exp.WFBVars_openVar (e : Exp) (k : Nat) (x : EVar) :
   | ite e₀ e₁ e₂ ih₀ ih₁ ih₂ => simp [Exp.openVar, Exp.WFBVars, ih₀, ih₁, ih₂]
   | add e₁ e₂ ih₁ ih₂ => simp [Exp.openVar, Exp.WFBVars, ih₁, ih₂]
   | unreach => simp [Exp.openVar, Exp.WFBVars]
+  | fix e ih => simp [Exp.openVar, Exp.WFBVars, ih]
 
 
 theorem sub_sound (κ : KEnv) (Γ : TEnv) (s t : Ty) (c : Cstr) :
@@ -174,7 +175,7 @@ mutual
           List.lookup x Γ = some (.refine .bool rx) ∧
           List.lookup y Γ = some (.refine .bool ry) := by grind
       simp_all ; rw [←hsynth.2] ; constructor <;> assumption
-    | .lam e | .letin e1 e2 | .ite _ _ _  =>
+    | .lam e | .letin e1 e2 | .ite _ _ _ | .fix _ =>
       simp_all [synth]
     | .app e1 (.fvar y) =>
       simp_all [synth]
@@ -226,6 +227,9 @@ mutual
     | .unreach | (.add .unreach _) | (.add (.fvar _) .unreach)
     | (.leq .unreach _) | (.leq (.fvar _) .unreach) | (.not .unreach)
     | (.and .unreach _) | (.and (.fvar _) .unreach) | (.app _ .unreach)
+    | (.add (.fix _) _) | (.add (.fvar _) (.fix _))
+    | (.leq (.fix _) _) | (.leq (.fvar _) (.fix _)) | (.not (.fix _))
+    | (.and (.fix _) _) | (.and (.fvar _) (.fix _)) | (.app _ (.fix _))
       => simp_all [synth]
   termination_by 2*e.skel
 
@@ -463,8 +467,44 @@ mutual
     | (.leq (.fvar _) .unreach) | (.leq .unreach _)
     | (.app _ (.add _ _)) | (.app _ (.ite _ _ _)) | (.app _ (.leq _ _)) | (.app _ (.not _))
     | (.app _ (.and _ _)) | (.app _ (.ann _ _)) | (.app _ (.app _ _)) | (.app _ (.letin _ _)) | (.app _ (.lam _)) | (.app _ (.bconst _))
-    | (.app _ (.iconst _)) | (.app _ (.bvar _)) | (.app _ .unreach)=>
+    | (.app _ (.iconst _)) | (.app _ (.bvar _)) | (.app _ .unreach)
+    | (.ite (.fix _) _ _) | (.not (.fix _)) | (.and (.fvar _) (.fix _)) | (.and (.fix _) _)
+    | (.leq (.fix _) _) | (.leq (.fvar _) (.fix _)) | (.app _ (.fix _)) =>
       simp_all [check, synth]
+    | .fix e =>
+      match t with
+      | .refine _ _ => simp_all [check, synth]
+      | .arrow s1 t1 =>
+        simp only [check] at hcheck
+        have hfF := EVar.fresh_not_mem (TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s1.fv ++ t1.fv)
+        generalize EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s1.fv ++ t1.fv) = f at hfF hcheck
+        have hxF := EVar.fresh_not_mem (TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s1.fv ++ t1.fv ++ [f])
+        generalize EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s1.fv ++ t1.fv ++ [f]) = x
+          at hxF hcheck
+        split at hcheck
+        · rename_i c₁ hc₁
+          injection hcheck with hc
+          subst hc
+          refine Check.fix hfF hxF (check_sound κ _ _ _ _ hc₁ ?_)
+          intro γ hmγ
+          have hΓγ : ModelsEnv κ γ Γ := by
+            cases s1 with
+            | refine _ _ => exact hmγ.2.2
+            | arrow _ _  => exact hmγ
+          have hcγ := hent γ hΓγ
+          have hxs : x ∉ s1.fv := by
+            simp only [List.mem_append, not_or] at hxF; exact hxF.1.1.2
+          rw [implyBindCstr_interp_gen κ x s1 c₁ γ hxs] at hcγ
+          simp only [implyBindSem] at hcγ
+          cases s1 with
+          | refine b r =>
+            have hsat : Refinement.interp κ r (γ.push (γ.lookup x)) := hmγ.2.1
+            rw [REnv.lookup_eq_inj_get b γ x hmγ.1] at hsat
+            have h := hcγ (REnv.get b γ x) hsat
+            rw [REnv.update_self b γ x hmγ.1] at h
+            exact h
+          | arrow _ _ => exact hcγ
+        · simp at hcheck
   termination_by 2 * e.skel + 1
 end
 
@@ -550,6 +590,16 @@ mutual
       have hht1 := check_to_hastype hΓ1 hE1 ht hck1
       have hht2 := check_to_hastype hΓ2 hE2 ht hck2
       exact .ite hlk hfresh ht hht1 hht2
+    | .fix hf hx hck =>
+      rename_i e s t f x
+      have ht_split : Ty.WFBVarCtx [] s ∧ Ty.WFBVarCtx [s.optBase] t := by
+        simp only [Ty.WFBVars, Ty.WFBVarCtx] at ht; exact ht
+      have hΓ_ext : TEnv.WFBVars ((x, s) :: (f, .arrow s t) :: Γ) :=
+        (hΓ.cons ht).cons ht_split.1
+      have hE_ext : Exp.WFBVars ((e.openVar 1 f).openVar 0 x) := by
+        simp only [Exp.WFBVars] at hE; simp [hE]
+      exact .fix ht hf hx (check_to_hastype hΓ_ext hE_ext
+        (Ty.WFBVarCtx_openVar_last t [] s.optBase x ht_split.2) hck)
 end
 
 theorem synth_decl_sound (κ : KEnv) (Γ : TEnv) (e : Exp) (c : Cstr) (t : Ty)

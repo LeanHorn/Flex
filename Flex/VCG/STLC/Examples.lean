@@ -3,6 +3,7 @@ import Flex.VCG.STLC.Declarative
 import Flex.Tactic
 import Flex.VCG.STLC.Soundness
 import Flex.VCG.STLC.MakeHornUnderK
+import Flex.VCG.STLC.Safety
 
 open STLC
 
@@ -245,10 +246,11 @@ example (κ : KEnv) (Γ : TEnv) (t : Ty)
     (h : Entail κ Γ (fun _ => False)) (hwf : Ty.WFBVars t) :
     Hastype κ Γ .unreach t := .unreach h hwf
 
--- Sanity check: `unreach` genuinely gets stuck — it has no `BigStep` rule.
-example : ¬ ∃ v, BigStep .unreach v := by
-  rintro ⟨v, hv⟩
-  cases hv
+-- Sanity check: `unreach` genuinely gets stuck — it has no `Eval` rule, not
+-- even a timeout, at any fuel.
+example (n : Nat) : ¬ ∃ o, Eval n .unreach o := by
+  rintro ⟨o, ho⟩
+  cases ho
 
 /-! ## Declarative-side examples (via `topVC_decl_sound`) -/
 
@@ -289,3 +291,126 @@ example (κ : KEnv) (Γ : TEnv) (x y : EVar) (r₁ r₂ : Refinement)
       (.refine .int (.fmla (.eq .int (.bvar .int 0)
                           (.add (.fvar .int x) (.fvar .int y))))) := by
   apply Hastype.add_var <;> assumption
+
+
+/-! ## Recursive functions (`Exp.fix`)
+
+  `Exp.fix body` is the recursive function `fix f. λx. body`, where inside
+  `body` `BVar 1` is the self-reference `f` and `BVar 0` is the parameter `x`.
+  The body is checked assuming `f` already has the annotated type
+  (assume–guarantee, Chapter 4), so these specs are *partial* correctness
+  guarantees. The book's `rec f = e₁ : t in e₂` is `letin (ann (fix e₁) t) e₂`.
+-/
+
+/-- `sum : n:Int → {ν : 0 ≤ ν ∧ n ≤ ν}` (in the codomain, `BVar 1` is `n`). -/
+def sumTy : Ty :=
+  .arrow TT
+    (.refine .int (.fmla (.and (.leqI (.const .int 0) (.bvar .int 0))
+                               (.leqI (.bvar .int 1) (.bvar .int 0)))))
+
+/-- Body of `sum` (there is no `sub`, so `n - 1` is `n + m` with `m = -1`):
+    ```
+    let z = 0; let c = leq n z;
+    if c then 0
+    else let m = -1; let n1 = add n m; let t1 = sum n1; add n t1
+    ``` -/
+def sumBody : Exp :=
+  .letin (.iconst 0)                          -- z      (n = 1, sum = 2)
+  (.letin (.leq (.bvar 1) (.bvar 0))          -- c      (z = 1, n = 2, sum = 3)
+  (.ite (.bvar 0)
+    (.iconst 0)
+    (.letin (.iconst (-1))                    -- m      (n = 3, sum = 4)
+    (.letin (.add (.bvar 3) (.bvar 0))        -- n1     (n = 4, sum = 5)
+    (.letin (.app (.bvar 5) (.bvar 0))        -- t1     (n1 = 1, n = 5, sum = 6)
+    (.add (.bvar 5) (.bvar 0)))))))           -- n + t1
+
+/-- `sum` meets its spec. -/
+example (κ : KEnv) : topVC κ [] (.fix sumBody) sumTy := by
+  simp [topVC, check, synth, sub, implyBindCstr, Cstr.interp, Cstr.triv,
+        sumBody, sumTy, self, prim, Refinement.interp, Formula.interp, Term.interp, REnv.get,
+        TEnv.dom, TEnv.tyFv, Ty.fv, Refinement.fv, Formula.fv, Term.fv, Exp.fv,
+        Exp.openVar, Ty.openVar, Refinement.openBVar, Formula.openBVar, Term.openBVar]
+  intros; omega
+
+/-- A client, via the `rec` encoding: `rec sum = … : sumTy in sum 5 ⇐ {ν : 5 ≤ ν}`. -/
+def sumClient : Exp :=
+  .letin (.ann (.fix sumBody) sumTy)
+  (.letin (.iconst 5)
+  (.app (.bvar 1) (.bvar 0)))
+
+example (κ : KEnv) :
+    topVC κ [] sumClient (.refine .int (.fmla (.leqI (.const .int 5) (.bvar .int 0)))) := by
+  simp [topVC, check, synth, sub, implyBindCstr, Cstr.interp, Cstr.triv,
+        sumClient, sumBody, sumTy, self, prim, Refinement.interp, Formula.interp, Term.interp,
+        REnv.get, TEnv.dom, TEnv.tyFv, Ty.fv, Refinement.fv, Formula.fv, Term.fv, Exp.fv,
+        Exp.openVar, Ty.openVar, Refinement.openBVar, Formula.openBVar, Term.openBVar]
+  intros; omega
+
+/-! ### Partial correctness: a diverging function
+
+  `loop = fix f. λx. f x` checks against `Int → {ν : false}`: the type promises
+  nothing about termination. Safety then says the only way to run `loop 0`
+  without getting stuck is to time out — at *every* fuel budget. -/
+
+def loopTy : Ty := .arrow TT (.refine .int (.fmla .ff))
+def loop : Exp := .fix (.app (.bvar 1) (.bvar 0))
+
+example (κ : KEnv) : topVC κ [] loop loopTy := by
+  simp [topVC, check, synth, sub, implyBindCstr, Cstr.interp, Cstr.triv,
+        loop, loopTy, self, Refinement.interp, Formula.interp, Term.interp,
+        REnv.get, TEnv.dom, TEnv.tyFv, Ty.fv, Refinement.fv, Formula.fv, Term.fv, Exp.fv,
+        Exp.openVar, Ty.openVar, Refinement.openBVar, Formula.openBVar, Term.openBVar]
+
+/-- `rec loop = … : loopTy in loop 0`. -/
+def loopMain : Exp :=
+  .letin (.ann loop loopTy) (.letin (.iconst 0) (.app (.bvar 1) (.bvar 0)))
+
+theorem loopMain_vc (κ : KEnv) : topVC κ [] loopMain (.refine .int (.fmla .ff)) := by
+  simp [topVC, check, synth, sub, implyBindCstr, Cstr.interp, Cstr.triv,
+        loopMain, loop, loopTy, self, prim, Refinement.interp, Formula.interp, Term.interp,
+        REnv.get, TEnv.dom, TEnv.tyFv, Ty.fv, Refinement.fv, Formula.fv, Term.fv, Exp.fv,
+        Exp.openVar, Ty.openVar, Refinement.openBVar, Formula.openBVar, Term.openBVar]
+
+/-- By `vcgen_partial_correct`, `loop 0` never returns a value, whatever the fuel. -/
+example (n : Nat) : ¬ ∃ v m, Eval n loopMain (.val v m) := by
+  rintro ⟨v, m, hev⟩
+  obtain ⟨_, _, hr⟩ := vcgen_partial_correct (κ := fun _ _ => True)
+    (by simp [loopMain, loop, loopTy, Exp.WFBVars, Ty.WFBVars, Ty.WFBVarCtx,
+              Refinement.hasBVar, Formula.hasBVar])
+    (by simp [Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar])
+    (loopMain_vc _) hev
+  simp [Refinement.interp, Formula.interp] at hr
+
+/-! ### Recursion + refinement inference: `sum` with an inferred spec
+
+  Same `sum` body, but now its output refinement is a κ-hole:
+  `sum : n:Int → {ν | k(n, ν)}`. Only the *client* states what it needs,
+  `sum 5 ≥ 5`. Because `sum` calls itself, the Horn constraints are recursive
+  (κ appears on both sides of the recursive-call clause):
+
+    n ≤ 0                    → k(n, 0)          -- base case
+    n ≥ 1 ∧ k(n - 1, t₁)     → k(n, n + t₁)     -- recursive call
+    k(5, v)                  → 5 ≤ v            -- client
+
+  so κ is *cyclic*: fusion (`zap`) cannot eliminate it, and we solve it by
+  predicate abstraction (Houdini, the `fix` tactic) over the `@[qualif]`s below. It infers the
+  inductive invariant `k(n, ν) := 0 ≤ ν ∧ n ≤ ν`. (`n ≤ ν` alone already
+  suffices — it is inductive because the recursive call only happens when
+  `n ≥ 1` — whereas `0 ≤ ν` alone cannot establish the client's `5 ≤ v`; and
+  the false client claim `16 ≤ sum 5` is rejected.) -/
+
+@[qualif] def QGe0 (a : Int) : Prop := 0 ≤ a
+@[qualif] def QLe (a b : Int) : Prop := a ≤ b
+
+/-- `sum : n:Int → {ν | k(n, ν)}`: output refinement left for the solver. -/
+abbrev sumTyK : Ty := .arrow TT (IntR "k")
+
+theorem sum_infer :
+    ∃ κ : KEnv,
+      Check κ []
+        (.letin (.ann (.fix sumBody) sumTyK)          -- rec sum = … : sumTyK in
+          (.letin (.iconst 5) (.app (.bvar 1) (.bvar 0))))   -- sum 5
+        (.refine .int (.fmla (.leqI (.const .int 5) (.bvar .int 0)))) := by
+  simp only [sumBody]
+  generate
+  fix

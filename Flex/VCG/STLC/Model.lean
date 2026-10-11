@@ -45,19 +45,42 @@ def Cstr.interp : Cstr → KEnv → REnv → Prop
   | .all x b c,  κ, γ => ∀ v : b.interp, c.interp κ (REnv.update b γ x v)
   | .conj c₁ c₂, κ, γ => c₁.interp κ γ ∧ c₂.interp κ γ
 
-/-! ## Logical relation: ⟦τ⟧ as a predicate on values, κ-indexed and parameterized by γ. -/
-def TyDenote : KEnv → Ty → REnv → Val → Prop
-  | κ, .refine b r, γ, v => ∃ ν : b.interp, v = Val.inj b ν ∧
-                              Refinement.interp κ r (γ.push (Val.inj b ν))
-  | κ, .arrow s t,      γ, v =>
-      ∃ body, v = .clos body ∧
-        Val.lc (.clos body) ∧ Val.closed (.clos body) ∧
-        ∀ va, TyDenote κ s γ va →
-          ∃ vr, BigStep (body.openVal 0 va) vr ∧ TyDenote κ t (γ.push va) vr
-termination_by _ t _ _ => t.skel
+/-! ## Step-indexed logical relation
+
+  `TyDenote κ k t γ v` — `v` is a value of type `t` (under the closing environment
+  `γ`), *good for `k` more units of fuel*. Base types ignore the index. A
+  function is good at index `k` if, for every `j < k` and argument good at `j`,
+  running the body with fuel `j` never gets stuck and any value it returns
+  (with `m` fuel left) is good at `m`. Since a β-step costs one unit of fuel,
+  `j < k` is exactly what lets the `fix` case go through by induction on `k`. -/
+def TyDenote : KEnv → Nat → Ty → REnv → Val → Prop
+  | κ, _, .refine b r, γ, v => ∃ ν : b.interp, v = Val.inj b ν ∧
+                                 Refinement.interp κ r (γ.push (Val.inj b ν))
+  | κ, k, .arrow s t,  γ, v =>
+      (∃ body, v = .clos body ∨ v = .fclos body) ∧
+        Val.lc v ∧ Val.closed v ∧
+        ∀ j < k, ∀ va, TyDenote κ j s γ va →
+          ∃ body o, Val.apply v va = some body ∧ Eval j body o ∧
+            ∀ vr m, o = .val vr m → TyDenote κ m t (γ.push va) vr
+termination_by _ _ t _ _ => t.skel
 decreasing_by
   all_goals simp_wf
   · omega
   · omega
+
+/-- Expression relation: with exactly `k` fuel, `e` does not get stuck, and any
+    value it returns with `m` fuel left is good at index `m`. -/
+def ExpDenote (κ : KEnv) (k : Nat) (t : Ty) (γ : REnv) (e : Exp) : Prop :=
+  ∃ o, Eval k e o ∧ ∀ v m, o = .val v m → TyDenote κ m t γ v
+
+/-- Downward closure: a value good for `k` steps is good for fewer. -/
+theorem TyDenote.mono {κ : KEnv} {j k : Nat} {t : Ty} {γ : REnv} {v : Val}
+    (hjk : j ≤ k) (h : TyDenote κ k t γ v) : TyDenote κ j t γ v := by
+  cases t with
+  | refine b r => simpa only [TyDenote] using h
+  | arrow s t =>
+    simp only [TyDenote] at h ⊢
+    obtain ⟨hf, hlc, hcl, hLR⟩ := h
+    exact ⟨hf, hlc, hcl, fun i hi => hLR i (by omega)⟩
 
 end STLC

@@ -9,7 +9,7 @@ open Lean Meta Elab Tactic Auto Embedding.Lam
   # `flex_auto`: lean-auto's trusted SMT mode, specialised for PA queries
 
   PA issues many small, closely related queries (one per candidate per clause
-  per Houdini round). Running stock `auto` on each pays two per-query costs that
+  per Houdini round). Running stock `auto` on each pays per-query costs that
   do not depend on the query:
 
   * **A fresh solver process.** `Auto.Solver.SMT.querySolver` spawns `z3` for

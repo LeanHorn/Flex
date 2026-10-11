@@ -30,7 +30,11 @@ BASIC = [f"ex{i}" for i in range(1, 15)] + [
     "ex_nat", "ex_bool", "ex_pair", "ex_prod", "ex_userfn", "ex_stress"]
 CYCLIC = ["cyc0"] + [f"pa{i}" for i in range(1, 8)]
 BACKENDS = ["fix", "spacer", "eldarica"]
-PHASES = ["export", "solver", "import", "assign", "vc", "kernel", "fix"]
+# The public pipeline separates preparation and certification. Legacy phase
+# columns remain readable when summarizing records from older benchmark runs.
+PHASES = ["prepare", "export", "solver", "import", "certificate",
+          "assign", "vc", "kernel", "fix"]
+OBLIGATION_COUNTS = ["remaining_heads", "remaining_queries", "proved_heads", "proved_queries"]
 
 
 def version(command: list[str]) -> str:
@@ -46,12 +50,15 @@ def run_fields(record: dict) -> dict:
         "case": record["case"], "backend": record["backend"],
         "repetition": record["repetition"], "warmup": record["repetition"] == 0,
         "success": record["success"],
-        "status": "proved" if record["success"] else record["stage"] + "_failed",
+        "status": ("proved" if record["success"] else
+                   "partial_vcs" if record.get("result_kind") == "partial" else
+                   record["stage"] + "_failed"),
         "solver_status": record.get("solver_status", ""),
         "pipeline_ms": (record["total_ns"] - phases.get("describe", 0)) / 1e6,
         "process_ms": record.get("process_elapsed_ms") if record.get("solver_status") != "not_run" else None,
         **{phase + "_ms": phases[phase] / 1e6 for phase in PHASES if phase in phases},
         "relations": record["relations"], "clauses": record["clauses"],
+        **{name: record.get(name) for name in OBLIGATION_COUNTS},
         "axioms": ";".join(record["axioms"]),
         "error": " ".join(record["error"].split())[:1000],
     }
@@ -68,6 +75,12 @@ def summarize(records: list[dict], expected_runs: int | None = None) -> list[dic
                    status=";".join(sorted({r["status"] for r in runs})),
                    solver_status=";".join(sorted({r["solver_status"] for r in runs})),
                    error=next((r["error"] for r in runs if r["error"]), ""))
+        # Report the largest residual across repetitions, so nondeterministic
+        # partial results never appear more complete than an observed run.
+        for name in OBLIGATION_COUNTS:
+            values = [r[name] for r in runs if r[name] is not None]
+            if values:
+                row[name] = max(values) if name.startswith("remaining_") else min(values)
         # Failed/unsupported cases have no successful runtime or speedup.
         if all(r["success"] for r in runs) and (expected_runs is None or len(runs) == expected_runs):
             times = [r["pipeline_ms"] for r in runs]
@@ -97,11 +110,11 @@ def write_csv(path: Path, rows: list[dict], fields: list[str]) -> None:
 def save_results(output: Path, records: list[dict], metadata: dict) -> None:
     summary_fields = ["group", "case", "backend", "runs", "successes", "status",
                       "solver_status", "relations", "clauses", "median_ms", "min_ms",
-                      "max_ms", "process_ms"] + [p + "_ms" for p in PHASES] + ["speedup_vs_fix", "error"]
+                      "max_ms", "process_ms"] + [p + "_ms" for p in PHASES] + OBLIGATION_COUNTS + ["speedup_vs_fix", "error"]
     write_csv(output, summarize(records, metadata["repeats"]), summary_fields)
     run_columns = ["group", "case", "backend", "repetition", "warmup", "success",
                    "status", "solver_status", "pipeline_ms", "process_ms"] + [p + "_ms" for p in PHASES]
-    run_columns += ["relations", "clauses", "axioms", "error"]
+    run_columns += ["relations", "clauses"] + OBLIGATION_COUNTS + ["axioms", "error"]
     write_csv(output.with_name(output.stem + "_runs.csv"),
               [run_fields(r) for r in records], run_columns)
     # Keep only three illustrative models instead of retaining every transcript.
@@ -143,6 +156,8 @@ def main() -> int:
         "seed": args.seed, "cases": args.cases, "backends": args.backends,
         "solver_timeout_ms": 10000, "batch_timeout_seconds": args.timeout,
         "timing": "serial in-process Lean wall time, including fresh solver startup and kernel audit; excludes imports, builds, witness pretty printing",
+        "chc_pipeline": "Flex.CHC.solveGoal with proof oracle first | omega | grind; partial VCs are not counted as proofs",
+        "obligation_summary": "maximum remaining and minimum proved obligations across measured repetitions",
         "baseline": "solve_fixpoint with Demo.Basic and Demo.Cyclic imported (including Cyclic qualifiers)",
         "sources_sha256": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
                            for name in ["Demo/Basic.lean", "Demo/Cyclic.lean", "eval/CHCCases.lean",
@@ -150,7 +165,10 @@ def main() -> int:
                                         "Flex/CHC/Process.lean", "Flex/CHC/Process/Native.lean",
                                         "Flex/CHC/Process/Portable.lean", "Flex/CHC/Process/Types.lean",
                                         "Flex/CHC/Backend.lean", "Flex/CHC/Spacer.lean",
-                                        "Flex/CHC/Eldarica.lean",
+                                        "Flex/CHC/Eldarica.lean", "Flex/CHC/Goal.lean",
+                                        "Flex/CHC/Certificate.lean", "Flex/CHC/Normalize.lean",
+                                        "Flex/CHC/Export.lean",
+                                        "Flex/CHC/Witness.lean",
                                         "native/chc_process.cpp"]},
         "complete": False,
     }

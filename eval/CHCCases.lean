@@ -4,9 +4,9 @@ import Flex.CHC
 
 /-! Benchmark prelude used by `scripts/benchmark_chc.py`.
 
-The solver paths use the original demo propositions, without Flex predicate
-abstraction, fusion, or zap. Only ordinary Lean automation discharges the
-constraints after every existential predicate is supplied by the solver.
+The solver paths use `Flex.CHC.solveGoal` on the original demo propositions,
+without predicate abstraction, fusion, or zap. Ordinary Lean automation certifies
+the candidates; partial certificates are reported separately from solver errors.
 Imports and dependency builds are excluded from the timers. -/
 
 open Lean Meta Elab Tactic Command Flex.CHC
@@ -24,6 +24,11 @@ private structure Measurement where
   witnesses : Array String := #[]
   solverStatus : String := "not_run"
   processElapsedMs : Nat := 0
+  resultKind : String := "not_run"
+  remainingHeads : Nat := 0
+  remainingQueries : Nat := 0
+  provedHeads : Nat := 0
+  provedQueries : Nat := 0
 
 private def timed (measure : IO.Ref Measurement) (stage : String)
     (action : TacticM α) : TacticM α := do
@@ -42,50 +47,82 @@ private def timed (measure : IO.Ref Measurement) (stage : String)
     let stop ← IO.monoNanosNow
     measure.modify fun m => { m with phases := m.phases.push (stage, stop - start) }
 
-private def solverResult (backend : String) (problem : ExportedProblem) : IO SolverResult := do
+private def solverConfig (backend : String) : IO Flex.CHC.Config := do
   if backend == "spacer" then
-    Flex.CHC.run problem { backend := .spacer }
+    return { backend := .spacer }
   else if backend == "eldarica" then
-    Flex.CHC.run problem {
+    return {
       backend := .eldarica, executable := ← IO.getEnv "CHC_ELDARICA" }
   else
     throw (IO.userError s!"unknown backend: {backend}")
 
-private def prove (measure : IO.Ref Measurement) (backend : String) : TacticM Unit :=
-  withMainContext do
-    if backend == "fix" then
-      timed measure "fix" do
-        evalTactic (← `(tactic| solve_fixpoint))
-      return
-    let (bodyGoal, problem) ← timed measure "export" do
-      let (_, kvars, bodyGoal) ← peelExistentialsAndIntro (← getMainGoal)
-      let problem ← exportConstraints kvars (← bodyGoal.getType)
-      measure.modify fun m => { m with
-        relations := problem.relations.size, clauses := problem.clauseCount }
-      return (bodyGoal, problem)
-    let result ← timed measure "solver" do
-      let result ← solverResult backend problem
-      let status := match result.outcome with
-        | .sat _ => "sat"
-        | .unsat => "unsat"
-        | .unknown _ => "unknown"
-        | .timedOut => "timeout"
-        | .error _ => "error"
-      measure.modify fun m => { m with
-        solverStatus := status, processElapsedMs := result.process.elapsedMs }
-      return result
-    let witnesses ← timed measure "import" (importWitnesses problem result)
-    timed measure "assign" (assignWitnesses problem witnesses)
-    -- Pretty printing is recorded separately from the synthesis/proof phases.
-    timed measure "describe" do
-      let rendered ← witnesses.mapM fun w => do
-        return s!"{w.symbol} := {← ppExpr w.value}"
-      measure.modify fun m => { m with witnesses := rendered }
-    timed measure "vc" do
-      let bodyGoal ← bodyGoal.replaceTargetDefEq (← instantiateMVars (← bodyGoal.getType))
-      setGoals [bodyGoal]
-      evalTactic (← `(tactic| repeat' (first | (intro) | apply And.intro)))
-      evalTactic (← `(tactic| all_goals (first | omega | grind)))
+private def stageName : Stage → String
+  | .prepare => "prepare"
+  | .exporting => "export"
+  | .solver => "solver"
+  | .importing => "import"
+  | .certificate => "certificate"
+
+private def recordSolver (measure : IO.Ref Measurement) (result : SolverResult) : IO Unit := do
+  let status := match result.outcome with
+    | .sat _ => "sat"
+    | .unsat => "unsat"
+    | .unknown _ => "unknown"
+    | .timedOut => "timeout"
+    | .error _ => "error"
+  measure.modify fun m => { m with
+    solverStatus := status, processElapsedMs := result.process.elapsedMs }
+
+private def recordTimings (measure : IO.Ref Measurement) (timings : Array PhaseTiming) : IO Unit :=
+  measure.modify fun m => { m with
+    phases := m.phases ++ timings.map (fun timing => (stageName timing.stage, timing.elapsedNs)) }
+
+private def recordReport (measure : IO.Ref Measurement) (report : GoalReport) : TermElabM Unit := do
+  recordTimings measure report.timings
+  recordSolver measure report.solver
+  let heads := report.certificate.obligations.countP fun obligation =>
+    match obligation.kind with | .head _ => true | .query => false
+  measure.modify fun m => { m with
+    stage := "certificate"
+    relations := report.problem.relations.size
+    clauses := report.problem.clauseCount
+    remainingHeads := heads
+    remainingQueries := report.certificate.obligations.size - heads
+    provedHeads := report.certificate.provedHeads
+    provedQueries := report.certificate.provedQueries }
+  -- Pretty printing is excluded from the reported pipeline duration.
+  let start ← IO.monoNanosNow
+  try
+    let rendered ← report.witnesses.mapM fun w => do
+      return s!"{w.symbol} := {← ppExpr w.value}"
+    measure.modify fun m => { m with witnesses := rendered }
+  finally
+    let stop ← IO.monoNanosNow
+    measure.modify fun m => { m with phases := m.phases.push ("describe", stop - start) }
+
+/-- Exercise the public goal pipeline directly, so expected failures and useful
+partial certificates are data rather than tactic error-recovery admissions. -/
+private def proveCHC (measure : IO.Ref Measurement) (backend : String)
+    (goal : MVarId) : TermElabM Unit := do
+  let config ← solverConfig backend
+  let oracle : ProofOracle := fun proposition => do
+    proveLeafWith (← `(tactic| first | omega | grind)) proposition
+  match ← solveGoal goal config oracle with
+  | .failed failure =>
+    recordTimings measure failure.timings
+    if let some solver := failure.solver then recordSolver measure solver
+    measure.modify fun m => { m with
+      stage := stageName failure.stage, resultKind := "failed"
+      relations := failure.relations, clauses := failure.clauses }
+    throwError "{failure.message}"
+  | .partial report =>
+    recordReport measure report
+    measure.modify fun m => { m with stage := "partial", resultKind := "partial" }
+    let m ← measure.get
+    throwError "CHC witnesses leave {m.remainingHeads} head and {m.remainingQueries} query obligations"
+  | .solved report =>
+    recordReport measure report
+    measure.modify fun m => { m with resultKind := "solved" }
 
 private def timedKernelCheck (measure : IO.Ref Measurement) (goal type : Expr) : TermElabM (Array String) := do
   measure.modify fun m => { m with stage := "kernel" }
@@ -140,8 +177,13 @@ elab "chc_case " target:ident backend:str repetition:num : command => do
       try
         let type ← Term.elabTerm target (some (.sort .zero))
         let goal ← mkFreshExprMVar type
-        let remaining ← Tactic.run goal.mvarId! (prove measure backend.getString)
-        unless remaining.isEmpty do throwError "automation left {remaining.length} goals"
+        if backend.getString == "fix" then
+          let remaining ← Tactic.run goal.mvarId! do
+            withMainContext do
+              timed measure "fix" do evalTactic (← `(tactic| solve_fixpoint))
+          unless remaining.isEmpty do throwError "automation left {remaining.length} goals"
+        else
+          proveCHC measure backend.getString goal.mvarId!
         -- Tactic.run catches abort exceptions; a failed tactic may therefore
         -- skip subsequent TacticM checks and return a recovered sorry proof.
         -- Inspect the root here, retaining the last automation phase on failure.
@@ -163,6 +205,7 @@ elab "chc_case " target:ident backend:str repetition:num : command => do
     ("repetition", toJson repetition.getNat),
     ("success", toJson success),
     ("stage", toJson m.stage),
+    ("result_kind", toJson m.resultKind),
     ("solver_status", toJson m.solverStatus),
     ("process_elapsed_ms", toJson m.processElapsedMs),
     ("error", toJson error),
@@ -170,6 +213,10 @@ elab "chc_case " target:ident backend:str repetition:num : command => do
     ("phases_ns", Json.mkObj (m.phases.toList.map fun (k, v) => (k, toJson v))),
     ("relations", toJson m.relations),
     ("clauses", toJson m.clauses),
+    ("remaining_heads", toJson m.remainingHeads),
+    ("remaining_queries", toJson m.remainingQueries),
+    ("proved_heads", toJson m.provedHeads),
+    ("proved_queries", toJson m.provedQueries),
     ("witnesses", toJson m.witnesses),
     ("axioms", toJson axioms)]
   IO.println s!"CHC_RESULT {result.compress}"

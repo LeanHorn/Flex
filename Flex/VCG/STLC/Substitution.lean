@@ -489,13 +489,13 @@ theorem Term.interp_substB (σ : BSubst) (γ : REnv) :
     congr 1; funext a; exact Term.fv_substB σ a.2
   | conj r₁ r₂ ih₁ ih₂ => simp [Refinement.substB, Refinement.fv, ih₁, ih₂]
 
-/-- Open type-binder level `k` with the free type variable `a`. -/
-def BSubst.openAt (k : Nat) (a : TVar) : BSubst :=
-  ⟨fun j => if j = k then .tfvar a else .tbvar j, .tfvar⟩
-
-/-- Instantiate type-binder level `k` at sort `b'`. -/
+/-- Replace type-binder level `k` by the sort `b'`, shifting deeper levels down
+    by one (proper locally-nameless binder instantiation, as `Term.openBVar`). -/
 def BSubst.instAt (k : Nat) (b' : Base) : BSubst :=
-  ⟨fun j => if j = k then b' else .tbvar j, .tfvar⟩
+  ⟨fun j => if j = k then b' else if k < j then .tbvar (j - 1) else .tbvar j, .tfvar⟩
+
+/-- Open type-binder level `k` with the free type variable `a`. -/
+def BSubst.openAt (k : Nat) (a : TVar) : BSubst := BSubst.instAt k (.tfvar a)
 
 /-- Open the type binder at level `k` with the free type variable `a`
     (locally nameless; levels bump under `Ty.forall`). -/
@@ -548,6 +548,312 @@ def Kind.le (k₁ k₂ : Kind) : Prop := k₁ = .B ∨ k₂ = .star
 
 instance (k₁ k₂ : Kind) : Decidable (Kind.le k₁ k₂) := by
   unfold Kind.le; infer_instance
+
+/-! ### Well-formedness checker for types with type variables
+
+  `Ty.wfB kctx ctx t` decides, in one pass:
+  * every bound variable's sort agrees with its binder (as `Ty.WFBVarCtx`);
+  * every `tbvar` is bound (`kctx` lists the enclosing `∀` kinds);
+  * ⋆-kinded type variables are refined only with `true`;
+  * terms at a type-variable sort are bound variables of a `B`-kinded sort only —
+    no constants, no free variables at bound type-variable sorts, no quantifiers
+    at type-variable sorts, no type-variable κ arguments.
+  The last restrictions are exactly what makes type instantiation semantically
+  sound: equality at a type-variable sort then coincides with equality at the
+  instance sort. -/
+
+def Base.isTv : Base → Bool
+  | .tbvar _ | .tfvar _ => true
+  | _ => false
+
+/-- A sort at which terms may occur. -/
+def Base.sortOK (kctx : List Kind) : Base → Bool
+  | .int | .bool    => true
+  | .tbvar j        => kctx[j]? == some .B
+  | .tfvar (_, κ)   => κ == .B
+
+/-- A sort at which free variables may occur. -/
+def Base.fvOK : Base → Bool
+  | .int | .bool    => true
+  | .tbvar _        => false
+  | .tfvar (_, κ)   => κ == .B
+
+/-- A sort that may be refined (bound type variables must be in scope). -/
+def Base.tyOK (kctx : List Kind) : Base → Bool
+  | .tbvar j => j < kctx.length
+  | _        => true
+
+def Base.isStarB (kctx : List Kind) : Base → Bool
+  | .tbvar j      => kctx[j]? == some .star
+  | .tfvar (_, κ) => κ == .star
+  | _             => false
+
+def Term.wfB (kctx : List Kind) (ctx : List (Option Base)) : {b : Base} → Term b → Bool
+  | _, .const b _ => !b.isTv
+  | _, .bvar b i  => ctx[i]? == some (some b) && b.sortOK kctx
+  | _, .fvar b _  => b.fvOK
+  | _, .add t₁ t₂ => Term.wfB kctx ctx t₁ && Term.wfB kctx ctx t₂
+  | _, .not t     => Term.wfB kctx ctx t
+  | _, .and t₁ t₂ => Term.wfB kctx ctx t₁ && Term.wfB kctx ctx t₂
+
+def Formula.wfB (kctx : List Kind) (ctx : List (Option Base)) : Formula → Bool
+  | .tt | .ff       => true
+  | .eq _ t₁ t₂     => t₁.wfB kctx ctx && t₂.wfB kctx ctx
+  | .leqI t₁ t₂     => t₁.wfB kctx ctx && t₂.wfB kctx ctx
+  | .and φ₁ φ₂      => φ₁.wfB kctx ctx && φ₂.wfB kctx ctx
+  | .or φ₁ φ₂       => φ₁.wfB kctx ctx && φ₂.wfB kctx ctx
+  | .imp φ₁ φ₂      => φ₁.wfB kctx ctx && φ₂.wfB kctx ctx
+  | .not φ          => φ.wfB kctx ctx
+  | .ex b φ         => !b.isTv && φ.wfB kctx (some b :: ctx)
+  | .all b φ        => !b.isTv && φ.wfB kctx (some b :: ctx)
+
+def Refinement.isTT : Refinement → Bool
+  | .fmla .tt => true
+  | _         => false
+
+def Refinement.wfB (kctx : List Kind) (ctx : List (Option Base)) : Refinement → Bool
+  | .fmla φ       => φ.wfB kctx ctx
+  | .kapp _ args  => args.all (fun a => !a.1.isTv && Term.wfB kctx ctx a.2)
+  | .conj r₁ r₂   => r₁.wfB kctx ctx && r₂.wfB kctx ctx
+
+def Ty.wfB (kctx : List Kind) (ctx : List (Option Base)) : Ty → Bool
+  | .refine b r  => b.tyOK kctx && (!b.isStarB kctx || r.isTT) && r.wfB kctx (some b :: ctx)
+  | .arrow s t   => s.wfB kctx ctx && t.wfB kctx (s.optBase :: ctx)
+  | .forall κ t  => t.wfB (κ :: kctx) (ctx.map (Option.map Base.shiftT))
+
+theorem Term.wfB_hasBVar {kctx : List Kind} {ctx : List (Option Base)} :
+    ∀ {b'' : Base} (t : Term b''), t.wfB kctx ctx = true →
+      ∀ b k, Term.hasBVar b k t → ctx[k]? = some (some b) := by
+  intro b'' t
+  induction t with
+  | const _ _ | fvar _ _ => intro _ b k h; simp [Term.hasBVar] at h
+  | bvar b' i =>
+    intro hw b k h
+    simp only [Term.hasBVar] at h
+    obtain ⟨rfl, rfl⟩ := h
+    simp only [Term.wfB, Bool.and_eq_true, beq_iff_eq] at hw
+    exact hw.1
+  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
+    intro hw b k h
+    simp only [Term.wfB, Bool.and_eq_true] at hw
+    simp only [Term.hasBVar] at h
+    rcases h with h | h
+    · exact ih₁ hw.1 b k h
+    · exact ih₂ hw.2 b k h
+  | not _ ih =>
+    intro hw b k h
+    simp only [Term.wfB] at hw
+    exact ih hw b k h
+
+theorem Formula.wfB_hasBVar (φ : Formula) : ∀ {kctx : List Kind} {ctx : List (Option Base)},
+    φ.wfB kctx ctx = true → ∀ b k, Formula.hasBVar b k φ → ctx[k]? = some (some b) := by
+  induction φ with
+  | tt | ff => intro _ _ _ b k h; simp [Formula.hasBVar] at h
+  | eq _ t₁ t₂ | leqI t₁ t₂ =>
+    intro kctx ctx hw b k h
+    simp only [Formula.wfB, Bool.and_eq_true] at hw
+    simp only [Formula.hasBVar] at h
+    rcases h with h | h
+    · exact Term.wfB_hasBVar t₁ hw.1 b k h
+    · exact Term.wfB_hasBVar t₂ hw.2 b k h
+  | and _ _ ih₁ ih₂ | or _ _ ih₁ ih₂ | imp _ _ ih₁ ih₂ =>
+    intro kctx ctx hw b k h
+    simp only [Formula.wfB, Bool.and_eq_true] at hw
+    simp only [Formula.hasBVar] at h
+    rcases h with h | h
+    · exact ih₁ hw.1 b k h
+    · exact ih₂ hw.2 b k h
+  | not _ ih =>
+    intro kctx ctx hw b k h
+    simp only [Formula.wfB] at hw
+    exact ih hw b k h
+  | ex b₀ _ ih | all b₀ _ ih =>
+    intro kctx ctx hw b k h
+    simp only [Formula.wfB, Bool.and_eq_true] at hw
+    simp only [Formula.hasBVar] at h
+    have := ih hw.2 b (k+1) h
+    simpa using this
+
+theorem Refinement.wfB_hasBVar (r : Refinement) : ∀ {kctx : List Kind} {ctx : List (Option Base)},
+    r.wfB kctx ctx = true → ∀ b k, Refinement.hasBVar b k r → ctx[k]? = some (some b) := by
+  induction r with
+  | fmla φ => intro kctx ctx hw; exact Formula.wfB_hasBVar φ hw
+  | kapp kn args =>
+    intro kctx ctx hw b k h
+    simp only [Refinement.wfB, List.all_eq_true, Bool.and_eq_true] at hw
+    simp only [Refinement.hasBVar] at h
+    obtain ⟨a, ha, hbv⟩ := h
+    exact Term.wfB_hasBVar a.2 (hw a ha).2 b k hbv
+  | conj _ _ ih₁ ih₂ =>
+    intro kctx ctx hw b k h
+    simp only [Refinement.wfB, Bool.and_eq_true] at hw
+    simp only [Refinement.hasBVar] at h
+    rcases h with h | h
+    · exact ih₁ hw.1 b k h
+    · exact ih₂ hw.2 b k h
+
+/-- The checker is sound for bound-variable sort consistency. -/
+theorem Ty.wfB_WFBVarCtx (t : Ty) : ∀ {kctx : List Kind} {ctx : List (Option Base)},
+    t.wfB kctx ctx = true → Ty.WFBVarCtx ctx t := by
+  induction t with
+  | refine b r =>
+    intro kctx ctx hw
+    simp only [Ty.wfB, Bool.and_eq_true] at hw
+    exact Refinement.wfB_hasBVar r hw.2
+  | arrow s t ihs iht =>
+    intro kctx ctx hw
+    simp only [Ty.wfB, Bool.and_eq_true] at hw
+    exact ⟨ihs hw.1, iht hw.2⟩
+  | «forall» κ t ih =>
+    intro kctx ctx hw
+    simp only [Ty.wfB] at hw
+    exact ih hw
+
+theorem Ty.wfB_WFBVars (t : Ty) (h : t.wfB [] [] = true) : Ty.WFBVars t :=
+  Ty.wfB_WFBVarCtx t h
+
+/-! ### Bound-variable sort consistency under type-binder opening -/
+
+theorem Term.hasBVar_substB (σ : BSubst) (b : Base) (k : Nat) :
+    ∀ {b'' : Base} (t : Term b''), Term.hasBVar b k (t.substB σ) →
+      ∃ b₀, b = b₀.substB σ ∧ Term.hasBVar b₀ k t := by
+  intro b'' t
+  induction t with
+  | const _ _ | fvar _ _ => intro h; simp [Term.substB, Term.hasBVar] at h
+  | bvar b' i =>
+    intro h
+    simp only [Term.substB, Term.hasBVar] at h
+    exact ⟨b', h.1, rfl, h.2⟩
+  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
+    intro h
+    simp only [Term.substB, Term.hasBVar] at h
+    rcases h with h | h
+    · obtain ⟨b₀, hb, h⟩ := ih₁ h; exact ⟨b₀, hb, Or.inl h⟩
+    · obtain ⟨b₀, hb, h⟩ := ih₂ h; exact ⟨b₀, hb, Or.inr h⟩
+  | not _ ih => intro h; simp only [Term.substB, Term.hasBVar] at h; exact ih h
+
+theorem Formula.hasBVar_substB (σ : BSubst) (b : Base) (φ : Formula) :
+    ∀ k, Formula.hasBVar b k (φ.substB σ) → ∃ b₀, b = b₀.substB σ ∧ Formula.hasBVar b₀ k φ := by
+  induction φ with
+  | tt | ff => intro k h; simp [Formula.substB, Formula.hasBVar] at h
+  | eq _ t₁ t₂ | leqI t₁ t₂ =>
+    intro k h
+    simp only [Formula.substB, Formula.hasBVar] at h
+    rcases h with h | h
+    · obtain ⟨b₀, hb, h⟩ := Term.hasBVar_substB σ b k t₁ h; exact ⟨b₀, hb, Or.inl h⟩
+    · obtain ⟨b₀, hb, h⟩ := Term.hasBVar_substB σ b k t₂ h; exact ⟨b₀, hb, Or.inr h⟩
+  | and _ _ ih₁ ih₂ | or _ _ ih₁ ih₂ | imp _ _ ih₁ ih₂ =>
+    intro k h
+    simp only [Formula.substB, Formula.hasBVar] at h
+    rcases h with h | h
+    · obtain ⟨b₀, hb, h⟩ := ih₁ k h; exact ⟨b₀, hb, Or.inl h⟩
+    · obtain ⟨b₀, hb, h⟩ := ih₂ k h; exact ⟨b₀, hb, Or.inr h⟩
+  | not _ ih => intro k h; simp only [Formula.substB, Formula.hasBVar] at h; exact ih k h
+  | ex _ _ ih | all _ _ ih =>
+    intro k h; simp only [Formula.substB, Formula.hasBVar] at h; exact ih (k+1) h
+
+theorem Refinement.hasBVar_substB (σ : BSubst) (b : Base) (r : Refinement) (k : Nat)
+    (h : Refinement.hasBVar b k (r.substB σ)) :
+    ∃ b₀, b = b₀.substB σ ∧ Refinement.hasBVar b₀ k r := by
+  induction r with
+  | fmla φ => exact Formula.hasBVar_substB σ b φ k h
+  | kapp kn args =>
+    simp only [Refinement.substB, Refinement.hasBVar, List.mem_map] at h
+    obtain ⟨_, ⟨a, ha, rfl⟩, hbv⟩ := h
+    obtain ⟨b₀, hb, hbv⟩ := Term.hasBVar_substB σ b k a.2 hbv
+    exact ⟨b₀, hb, a, ha, hbv⟩
+  | conj _ _ ih₁ ih₂ =>
+    simp only [Refinement.substB, Refinement.hasBVar] at h
+    rcases h with h | h
+    · obtain ⟨b₀, hb, h⟩ := ih₁ h; exact ⟨b₀, hb, Or.inl h⟩
+    · obtain ⟨b₀, hb, h⟩ := ih₂ h; exact ⟨b₀, hb, Or.inr h⟩
+
+/-- Opening commutes with entering a further type binder. -/
+theorem Base.shiftT_substB_openAt (k : Nat) (a : TVar) (b : Base) :
+    (b.substB (BSubst.openAt k a)).shiftT = b.shiftT.substB (BSubst.openAt (k+1) a) := by
+  cases b with
+  | tbvar j =>
+    simp only [Base.substB, BSubst.openAt, BSubst.instAt, Base.shiftT]
+    by_cases h₁ : j = k
+    · subst h₁; simp
+    · by_cases h₂ : k < j
+      · simp [h₁, h₂] <;> omega
+      · simp [h₁, h₂] <;> omega
+  | _ => rfl
+
+/-- Opening a type binder preserves bound-variable sort consistency (with the
+    recorded sorts opened alike). -/
+theorem Ty.WFBVarCtx_openTv (t : Ty) : ∀ (k : Nat) (a : TVar) (ctx : List (Option Base)),
+    Ty.WFBVarCtx ctx t →
+    Ty.WFBVarCtx (ctx.map (Option.map (Base.substB (BSubst.openAt k a)))) (t.openTv k a) := by
+  induction t with
+  | refine br r =>
+    intro k a ctx h
+    simp only [Ty.openTv, Ty.WFBVarCtx] at h ⊢
+    intro b i hbv
+    obtain ⟨b₀, rfl, hbv₀⟩ := Refinement.hasBVar_substB _ b r i hbv
+    have := h b₀ i hbv₀
+    show ((some br :: ctx).map (Option.map (Base.substB (BSubst.openAt k a))))[i]? = _
+    rw [List.getElem?_map, this]; rfl
+  | arrow s t ihs iht =>
+    intro k a ctx h
+    simp only [Ty.openTv, Ty.WFBVarCtx] at h ⊢
+    refine ⟨ihs k a ctx h.1, ?_⟩
+    have := iht k a (s.optBase :: ctx) h.2
+    have hopt : (s.openTv k a).optBase = s.optBase.map (Base.substB (BSubst.openAt k a)) := by
+      cases s <;> rfl
+    rw [hopt]; simpa using this
+  | «forall» κ t ih =>
+    intro k a ctx h
+    simp only [Ty.openTv, Ty.WFBVarCtx] at h ⊢
+    have := ih (k+1) a (ctx.map (Option.map Base.shiftT)) h
+    have hmap : (ctx.map (Option.map (Base.substB (BSubst.openAt k a)))).map (Option.map Base.shiftT)
+        = (ctx.map (Option.map Base.shiftT)).map (Option.map (Base.substB (BSubst.openAt (k+1) a))) := by
+      simp only [List.map_map]
+      apply List.map_congr_left
+      intro o _
+      cases o <;> simp [Base.shiftT_substB_openAt]
+    rw [hmap]; exact this
+
+theorem Ty.WFBVars_openTv (t : Ty) (k : Nat) (a : TVar) (h : Ty.WFBVars t) :
+    Ty.WFBVars (t.openTv k a) := by
+  have := Ty.WFBVarCtx_openTv t k a [] h
+  simpa using this
+
+/-! ### Free type variables and fresh type-variable names
+
+  Free type variables can occur in the sorts of deep-embedded terms, so `ftv`
+  traverses refinements too. -/
+
+def Base.ftv : Base → List TVar
+  | .tfvar a => [a]
+  | _        => []
+
+def Term.ftv : {b : Base} → Term b → List TVar
+  | _, .const b _  => b.ftv
+  | _, .bvar b _   => b.ftv
+  | _, .fvar b _   => b.ftv
+  | _, .add t₁ t₂  => Term.ftv t₁ ++ Term.ftv t₂
+  | _, .not t      => Term.ftv t
+  | _, .and t₁ t₂  => Term.ftv t₁ ++ Term.ftv t₂
+
+def Formula.ftv : Formula → List TVar
+  | .tt | .ff     => []
+  | .eq b t₁ t₂   => b.ftv ++ t₁.ftv ++ t₂.ftv
+  | .leqI t₁ t₂   => t₁.ftv ++ t₂.ftv
+  | .and φ₁ φ₂ | .or φ₁ φ₂ | .imp φ₁ φ₂ => φ₁.ftv ++ φ₂.ftv
+  | .not φ        => φ.ftv
+  | .ex b φ | .all b φ => b.ftv ++ φ.ftv
+
+def Refinement.ftv : Refinement → List TVar
+  | .fmla φ      => φ.ftv
+  | .kapp _ args => args.flatMap (fun a => a.1.ftv ++ a.2.ftv)
+  | .conj r₁ r₂  => r₁.ftv ++ r₂.ftv
+
+def Ty.ftv : Ty → List TVar
+  | .refine b r  => b.ftv ++ r.ftv
+  | .arrow s t   => s.ftv ++ t.ftv
+  | .forall _ t  => t.ftv
 
 /-! ## 5. Exp operations (locally nameless)
 
@@ -641,6 +947,18 @@ def Exp.openTv (k : Nat) (a : TVar) : Exp → Exp
     (e.openTv k a).skel = e.skel := by
   induction e generalizing k <;> simp_all [Exp.openTv, Exp.skel]
 
+theorem Exp.WFBVars_openTv (e : Exp) (k : Nat) (a : TVar) (h : Exp.WFBVars e) :
+    Exp.WFBVars (e.openTv k a) := by
+  induction e generalizing k with
+  | ann e t ih | tapp e t ih =>
+    simp only [Exp.WFBVars, Exp.openTv] at h ⊢
+    exact ⟨Ty.WFBVars_openTv t k a h.1, ih k h.2⟩
+  | _ => simp_all [Exp.WFBVars, Exp.openTv]
+
+@[simp] theorem Exp.lc_at_openTv (k : Nat) (a : TVar) (e : Exp) (n : Nat) :
+    (e.openTv k a).lc_at n ↔ e.lc_at n := by
+  induction e generalizing k n <;> simp_all [Exp.openTv, Exp.lc_at]
+
 @[simp] theorem Exp.fv_openTv (k : Nat) (a : TVar) (e : Exp) :
     (e.openTv k a).fv = e.fv := by
   induction e generalizing k <;> simp_all [Exp.openTv, Exp.fv]
@@ -679,6 +997,96 @@ def Exp.substEnv (γ : REnv) : Exp → Exp
   | .fix body     => .fix (Exp.substEnv γ body)
   | .tabs κ e     => .tabs κ (Exp.substEnv γ e)
   | .tapp e t     => .tapp (Exp.substEnv γ e) t
+
+/-- Free type variables of the type annotations in an expression. -/
+def Exp.ftv : Exp → List TVar
+  | .bvar _ | .fvar _ | .iconst _ | .bconst _ | .unreach => []
+  | .lam b | .not b | .fix b | .tabs _ b => b.ftv
+  | .letin e₁ e₂ | .app e₁ e₂ | .and e₁ e₂ | .leq e₁ e₂ | .add e₁ e₂ => e₁.ftv ++ e₂.ftv
+  | .ite e₀ e₁ e₂ => e₀.ftv ++ e₁.ftv ++ e₂.ftv
+  | .ann e t | .tapp e t => e.ftv ++ t.ftv
+
+/-- Free type variables of the types in a context. -/
+def TEnv.ftv : TEnv → List TVar
+  | []          => []
+  | (_, t) :: Γ => t.ftv ++ TEnv.ftv Γ
+
+/-! ### Type erasure
+
+  Types never influence evaluation, so programs are run after erasing them
+  (`Run`, Semantics.lean). Erasure is what makes opening a type binder
+  (`Exp.openTv`) invisible at runtime. -/
+
+/-- Erase all type information: annotations, type abstractions and type
+    applications. -/
+def Exp.erase : Exp → Exp
+  | .bvar j        => .bvar j
+  | .fvar y        => .fvar y
+  | .iconst n      => .iconst n
+  | .bconst b      => .bconst b
+  | .lam body      => .lam body.erase
+  | .letin e₁ e₂   => .letin e₁.erase e₂.erase
+  | .app e₁ e₂     => .app e₁.erase e₂.erase
+  | .ann e _       => e.erase
+  | .and e₁ e₂     => .and e₁.erase e₂.erase
+  | .not e         => .not e.erase
+  | .leq e₁ e₂     => .leq e₁.erase e₂.erase
+  | .ite e₀ e₁ e₂  => .ite e₀.erase e₁.erase e₂.erase
+  | .add e₁ e₂     => .add e₁.erase e₂.erase
+  | .unreach       => .unreach
+  | .fix body      => .fix body.erase
+  | .tabs _ e      => e.erase
+  | .tapp e _      => e.erase
+
+@[simp] theorem Exp.erase_erase (e : Exp) : e.erase.erase = e.erase := by
+  induction e <;> simp_all [Exp.erase]
+
+@[simp] theorem Exp.erase_openTv (k : Nat) (a : TVar) (e : Exp) :
+    (e.openTv k a).erase = e.erase := by
+  induction e generalizing k <;> simp_all [Exp.openTv, Exp.erase]
+
+theorem Exp.erase_openExp (k : Nat) (u e : Exp) :
+    (Exp.openExp k u e).erase = Exp.openExp k u.erase e.erase := by
+  induction e generalizing k with
+  | bvar j => by_cases h : j = k <;> simp [Exp.openExp, Exp.erase, h]
+  | _ => simp_all [Exp.openExp, Exp.erase]
+
+theorem Exp.fv_erase_subset (e : Exp) : ∀ z ∈ e.erase.fv, z ∈ e.fv := by
+  induction e <;> simp_all [Exp.erase, Exp.fv] <;> grind
+
+theorem Exp.lc_at_erase (e : Exp) (k : Nat) (h : e.lc_at k) : e.erase.lc_at k := by
+  induction e generalizing k <;> simp_all [Exp.erase, Exp.lc_at]
+
+theorem Exp.typeFree_erase (e : Exp) : e.erase.TypeFree := by
+  induction e <;> simp_all [Exp.erase, Exp.TypeFree]
+
+theorem Exp.erase_of_typeFree (e : Exp) (h : e.TypeFree) : e.erase = e := by
+  induction e <;> simp_all [Exp.erase, Exp.TypeFree]
+
+/-- A type-free expression is unaffected by opening a type binder. -/
+theorem Exp.openTv_of_typeFree (k : Nat) (a : TVar) (e : Exp) (h : e.TypeFree) :
+    e.openTv k a = e := by
+  induction e generalizing k <;> simp_all [Exp.openTv, Exp.TypeFree]
+
+/-- The closing substitution commutes with erasure, provided the substituted
+    values are erased. -/
+theorem Exp.erase_substEnv (γ : REnv) (e : Exp)
+    (hγ : ∀ z ∈ e.fv, Val.Erased (γ.map z)) :
+    (Exp.substEnv γ e).erase = Exp.substEnv γ e.erase := by
+  induction e with
+  | fvar x => exact Exp.erase_of_typeFree _ (hγ x (by simp [Exp.fv]))
+  | _ => simp_all [Exp.substEnv, Exp.erase, Exp.fv]
+
+/-- The closing substitution commutes with opening a type binder, provided the
+    substituted values are erased (hence type-free). -/
+theorem Exp.substEnv_openTv (γ : REnv) (k : Nat) (a : TVar) (e : Exp)
+    (hγ : ∀ z ∈ e.fv, Val.Erased (γ.map z)) :
+    Exp.substEnv γ (e.openTv k a) = (Exp.substEnv γ e).openTv k a := by
+  induction e generalizing k with
+  | fvar x =>
+    simp only [Exp.openTv, Exp.substEnv]
+    exact (Exp.openTv_of_typeFree k a _ (hγ x (by simp [Exp.fv]))).symm
+  | _ => simp_all [Exp.substEnv, Exp.openTv, Exp.fv]
 
 /-! ## 9. Freshness helper
 
@@ -722,6 +1130,14 @@ theorem EVar.fresh_not_mem (L : List EVar) : EVar.fresh L ∉ L := by
   have h₂ : (EVar.fresh L).length ≤ EVar.maxLen L := EVar.maxLen_ge h
   rw [h₁] at h₂
   omega
+
+/-- A type-variable name with the given kind, fresh for `L` (by name). -/
+def TVar.fresh (L : List TVar) (κ : Kind) : TVar :=
+  (EVar.fresh (L.map Prod.fst), κ)
+
+theorem TVar.fresh_not_mem (L : List TVar) (κ : Kind) : TVar.fresh L κ ∉ L := fun h =>
+  EVar.fresh_not_mem (L.map Prod.fst) (List.mem_map.mpr ⟨_, h, rfl⟩)
+
 
 /-- A fresh name is `≠` any member of the list it was drawn from — decided by
     *length* (`EVar.maxLen`), not by comparing the `x`-strings character by
@@ -798,6 +1214,14 @@ theorem Exp.substEnv_unreach (γ : REnv) :
 @[simp]
 theorem Exp.substEnv_fix (γ : REnv) (body : Exp) :
     Exp.substEnv γ (.fix body) = .fix (Exp.substEnv γ body) := rfl
+
+@[simp]
+theorem Exp.substEnv_tabs (γ : REnv) (κ : Kind) (e : Exp) :
+    Exp.substEnv γ (.tabs κ e) = .tabs κ (Exp.substEnv γ e) := rfl
+
+@[simp]
+theorem Exp.substEnv_tapp (γ : REnv) (e : Exp) (t : Ty) :
+    Exp.substEnv γ (.tapp e t) = .tapp (Exp.substEnv γ e) t := rfl
 
 /-- A closed expression is fixed under the closing substitution. -/
 theorem Exp.substEnv_closed (γ : REnv) (e : Exp) (he : e.fv = []) :
@@ -1367,9 +1791,9 @@ theorem Refinement.interp_openBVar (κ : KEnv) (r : Refinement) (γ : REnv)
       exact Formula.interp_openBVar x w φ γ k hk (by simpa [Refinement.fv] using hx)
   | kapp kn args =>
       have hmap :
-          (List.map (fun a => (⟨a.1, Term.interp (γ.write x w) a.2⟩ : Σ b : Base, b.interp))
+          (List.map (fun a => Base.canonArg a.1 (Term.interp (γ.write x w) a.2))
             (List.map (fun a => (⟨a.1, Term.openBVar k x a.2⟩ : Σ b : Base, Term b)) args))
-          = List.map (fun a => (⟨a.1, Term.interp (γ.insertBV k w) a.2⟩ : Σ b : Base, b.interp)) args := by
+          = List.map (fun a => Base.canonArg a.1 (Term.interp (γ.insertBV k w) a.2)) args := by
         rw [List.map_map]
         apply List.map_congr_left
         intro a ha

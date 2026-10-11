@@ -118,28 +118,22 @@ theorem sub_sound (κ : KEnv) (Γ : TEnv) (s t : Ty) (c : Cstr) :
     sub Γ s t = some c → Entail κ Γ (c.interp κ) → Subtyp κ Γ s t := by
   intro hsub hent
   match s, t with
-  | .refine .int r1, .refine .int r2 =>
-    simp only [sub, Option.some.injEq] at hsub
-    subst hsub
-    let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ r1.fv ++ r2.fv)
-    have hfr : x ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ r1.fv ++ r2.fv := EVar.fresh_not_mem _
-    have hx1 : x ∉ r1.fv := by simp only [List.mem_append, not_or] at hfr; exact hfr.1.2
-    -- The emitted constraint is already the *opened* form the rule expects; close
-    -- the extension binder with `Entail.ext` and open r₁'s ν back to `x`.
-    refine Subtyp.refine hfr (Entail.ext (b := .int) (r := r1) rfl ?_)
-    intro γ hm v h1
-    have hc := hent γ hm; simp only [Cstr.interp] at hc
-    exact hc v ((Refinement.interp_openBVar κ r1 γ x (Val.inj .int v) 0 (Nat.zero_le _) hx1).mpr h1)
-  | .refine .bool r1, .refine .bool r2 =>
-    simp only [sub, Option.some.injEq] at hsub
-    subst hsub
-    let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ r1.fv ++ r2.fv)
-    have hfr : x ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ r1.fv ++ r2.fv := EVar.fresh_not_mem _
-    have hx1 : x ∉ r1.fv := by simp only [List.mem_append, not_or] at hfr; exact hfr.1.2
-    refine Subtyp.refine hfr (Entail.ext (b := .bool) (r := r1) rfl ?_)
-    intro γ hm v h1
-    have hc := hent γ hm; simp only [Cstr.interp] at hc
-    exact hc v ((Refinement.interp_openBVar κ r1 γ x (Val.inj .bool v) 0 (Nat.zero_le _) hx1).mpr h1)
+  | .refine b₁ r1, .refine b₂ r2 =>
+    simp only [sub] at hsub
+    split at hsub
+    · rename_i hb
+      subst hb
+      injection hsub with hc
+      subst hc
+      have hfr := EVar.fresh_not_mem (TEnv.dom Γ ++ TEnv.tyFv Γ ++ r1.fv ++ r2.fv)
+      have hx1 : EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ r1.fv ++ r2.fv) ∉ (Ty.refine b₁ r1).fv := by
+        simp only [Ty.fv]; simp only [List.mem_append, not_or] at hfr; exact hfr.1.2
+      -- The emitted constraint binds the fresh `x` exactly as the extension
+      -- binder of the opened rule does: eliminate it against the model.
+      refine Subtyp.refine hfr ?_
+      intro γ hm
+      exact implyBind_elim hm hx1 (hent γ hm.tail)
+    · simp at hsub
   | .arrow s1 t1, .arrow s2 t2 =>
     simp_all [sub]
     let w := (EVar.fresh (Γ.dom ++ (Γ.tyFv ++ (s1.fv ++ (s2.fv ++ (t1.fv ++ t2.fv))))))
@@ -171,12 +165,16 @@ theorem sub_sound (κ : KEnv) (Γ : TEnv) (s t : Ty) (c : Cstr) :
       intro γ hm
       rw [←hsub] at hent
       exact (hent γ hm).1
-  | .refine _ _ , .arrow _ _ | .arrow _ _, .refine _ _ | .refine .int _, .refine .bool _ | .refine .bool _, .refine .int _
-  | .forall _ _, _ | .refine _ _, .forall _ _ | .arrow _ _, .forall _ _
-  | .refine (.tbvar _) _, .refine _ _ | .refine (.tfvar _) _, .refine _ _
-  | .refine .int _, .refine (.tbvar _) _ | .refine .int _, .refine (.tfvar _) _
-  | .refine .bool _, .refine (.tbvar _) _ | .refine .bool _, .refine (.tfvar _) _ =>
-    simp_all [sub]
+  | .forall k₁ t₁, .forall k₂ t₂ =>
+    simp only [sub] at hsub
+    split at hsub
+    · rename_i hk
+      subst hk
+      exact Subtyp.forall rfl (TVar.fresh_not_mem _ _) (sub_sound κ Γ _ _ c hsub hent)
+    · simp at hsub
+  | .refine _ _, .arrow _ _ | .refine _ _, .forall _ _ | .arrow _ _, .refine _ _
+  | .arrow _ _, .forall _ _ | .forall _ _, .refine _ _ | .forall _ _, .arrow _ _ =>
+    simp [sub] at hsub
   termination_by s.skel + t.skel
 
 /-! ## Synth / Check soundness (mutual) -/
@@ -210,8 +208,26 @@ mutual
           List.lookup x Γ = some (.refine .bool rx) ∧
           List.lookup y Γ = some (.refine .bool ry) := by grind
       simp_all ; rw [←hsynth.2] ; constructor <;> assumption
-    | .lam e | .letin e1 e2 | .ite _ _ _ | .fix _ | .tabs _ _ | .tapp _ _ =>
+    | .lam e | .letin e1 e2 | .ite _ _ _ | .fix _ | .tabs _ _ =>
       simp_all [synth]
+    | .tapp e₀ s₀ =>
+      simp only [synth] at hsynth
+      cases hse : synth Γ e₀ with
+      | none => simp [hse] at hsynth
+      | some p =>
+        obtain ⟨c', t'⟩ := p
+        rw [hse] at hsynth
+        cases t' with
+        | «forall» k t₀ =>
+          simp only at hsynth
+          split at hsynth
+          · rename_i hcond
+            obtain ⟨hk, h1, h2, h3⟩ := hcond
+            simp only [Option.some.injEq, Prod.mk.injEq] at hsynth
+            obtain ⟨rfl, rfl⟩ := hsynth
+            exact Synth.tapp (synth_sound κ Γ e₀ c' (.forall k t₀) hse hent) hk h1 h2 h3
+          · simp at hsynth
+        | refine _ _ | arrow _ _ => simp at hsynth
     | .app e1 (.fvar y) =>
       simp_all [synth]
       obtain ⟨c1, s', t', hse⟩ : ∃ c s t, synth Γ e1 = some (c, .arrow s t) := by grind
@@ -480,9 +496,25 @@ mutual
     | (.app _ (.and _ _)) | (.app _ (.ann _ _)) | (.app _ (.app _ _)) | (.app _ (.letin _ _)) | (.app _ (.lam _)) | (.app _ (.bconst _))
     | (.app _ (.iconst _)) | (.app _ (.bvar _)) | (.app _ .unreach)
     | (.ite (.fix _) _ _) | (.ite (.tabs _ _) _ _) | (.ite (.tapp _ _) _ _) | (.not (.fix _)) | (.not (.tabs _ _)) | (.not (.tapp _ _)) | (.and (.fvar _) (.fix _)) | (.and (.fvar _) (.tabs _ _)) | (.and (.fvar _) (.tapp _ _)) | (.and (.fix _) _) | (.and (.tabs _ _) _) | (.and (.tapp _ _) _)
-    | (.leq (.fix _) _) | (.leq (.tabs _ _) _) | (.leq (.tapp _ _) _) | (.leq (.fvar _) (.fix _)) | (.leq (.fvar _) (.tabs _ _)) | (.leq (.fvar _) (.tapp _ _)) | (.app _ (.fix _)) | (.app _ (.tabs _ _)) | (.app _ (.tapp _ _))
-    | .tabs _ _ | .tapp _ _ =>
+    | (.leq (.fix _) _) | (.leq (.tabs _ _) _) | (.leq (.tapp _ _) _) | (.leq (.fvar _) (.fix _)) | (.leq (.fvar _) (.tabs _ _)) | (.leq (.fvar _) (.tapp _ _)) | (.app _ (.fix _)) | (.app _ (.tabs _ _)) | (.app _ (.tapp _ _)) =>
       simp_all [check, synth]
+    | .tabs k e₀ =>
+      match t with
+      | .forall k' t₀ =>
+        simp only [check] at hcheck
+        split at hcheck
+        · rename_i hk
+          subst hk
+          exact Check.tabs rfl (TVar.fresh_not_mem _ _) (check_sound κ Γ _ _ c hcheck hent)
+        · simp at hcheck
+      | .refine _ _ | .arrow _ _ => simp_all [check, synth]
+    | .tapp e₀ s₀ =>
+      simp_all [check]
+      obtain ⟨c₁, s, hc₁⟩ : ∃ c₁ s, synth Γ (.tapp e₀ s₀) = some (c₁, s) := by grind
+      obtain ⟨c₂, hc₂⟩ : ∃ c₂, sub Γ s t = some c₂ := by grind
+      simp_all ; rw [←hcheck] at hent
+      exact Check.sub (synth_sound _ _ _ _ _ hc₁ fun γ hm => (hent γ hm).1)
+                      (sub_sound _ _ _ _ _ hc₂ fun γ hm => (hent γ hm).2)
     | .fix e =>
       match t with
       | .refine _ _ | .forall _ _ => simp_all [check, synth]
@@ -540,6 +572,10 @@ mutual
       exact ⟨.not_var hxlk, Ty.WFBVars_not_result _⟩
     | .and_var hxlk hylk =>
       exact ⟨.and_var hxlk hylk, Ty.WFBVars_and_result _ _⟩
+    | .tapp hsy hk h1 h2 h3 =>
+      simp only [Exp.WFBVars] at hE
+      have ⟨hht, _⟩ := synth_to_hastype hΓ hE.2 hsy
+      exact ⟨.tapp hht hk h1 h2 h3, Ty.wfB_WFBVars _ h3⟩
 
   theorem check_to_hastype {κ Γ e t}
       (hΓ : TEnv.WFBVars Γ) (hE : Exp.WFBVars e) (ht : Ty.WFBVars t)
@@ -599,6 +635,12 @@ mutual
         simp only [Exp.WFBVars] at hE; simp [hE]
       exact .fix ht hf hx (check_to_hastype hΓ_ext hE_ext
         (Ty.WFBVarCtx_openVar_last t [] s.optBase x ht_split.2) hck)
+    | .tabs hk hfresh hck =>
+      rename_i k e t a
+      simp only [Exp.WFBVars] at hE
+      have htb : Ty.WFBVars t := by simpa [Ty.WFBVars, Ty.WFBVarCtx] using ht
+      exact .tabs ht hk hfresh (check_to_hastype hΓ (Exp.WFBVars_openTv e 0 a hE)
+        (Ty.WFBVars_openTv t 0 a htb) hck)
 end
 
 theorem synth_decl_sound (κ : KEnv) (Γ : TEnv) (e : Exp) (c : Cstr) (t : Ty)

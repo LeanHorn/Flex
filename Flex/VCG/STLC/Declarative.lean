@@ -73,6 +73,19 @@ inductive Hastype : KEnv → TEnv → Exp → Ty → Prop where
       Hastype κ ((x, s) :: (f, .arrow s t) :: Γ)
         ((e.openVar 1 f).openVar 0 x) (t.openVar 0 x) →
       Hastype κ Γ (.fix e) (.arrow s t)
+  | tabs {κ Γ k e t a} :
+      Ty.WFBVars (.forall k t) →
+      a.2 = k →
+      a ∉ TEnv.ftv Γ ++ e.ftv ++ t.ftv →
+      Hastype κ Γ (e.openTv 0 a) (t.openTv 0 a) →
+      Hastype κ Γ (.tabs k e) (.forall k t)
+  | tapp {κ Γ e k t s} :
+      Hastype κ Γ e (.forall k t) →
+      Kind.le s.kindOf k →
+      (Ty.forall k t).wfB [] [] = true →
+      s.wfB [] [] = true →
+      (Ty.instTy 0 s t).wfB [] [] = true →
+      Hastype κ Γ (.tapp e s) (Ty.instTy 0 s t)
 
 /-- For fvar typing, the variable must appear in the context. -/
 theorem Hastype.fvar_lookup {κ Γ x t} (h : Hastype κ Γ (.fvar x) t) :
@@ -156,6 +169,12 @@ theorem Hastype.fv_subset {κ Γ e t} (_h : Hastype κ Γ e t) :
     · exact absurd zf (by simp_all)
     · exact absurd zf (by simp_all)
     · exact ⟨t', hz⟩
+  | tabs _ _ _ _ ih =>
+    simp only [Exp.fv] at zf
+    exact ih (by simpa using zf)
+  | tapp _ _ _ _ _ ih =>
+    simp only [Exp.fv] at zf
+    exact ih zf
 
 
 /-- Well-typed expressions are locally closed (lc_at 0). Proved by induction on
@@ -184,6 +203,8 @@ theorem Hastype.lc_at {κ Γ e t} (_h : Hastype κ Γ e t) : Exp.lc_at 0 e := by
   | fix _ _ _ _ ih =>
     simp only [Exp.lc_at]
     exact Exp.lc_at_of_openVar _ 1 _ (Exp.lc_at_of_openVar _ 0 _ ih)
+  | tabs _ _ _ _ ih => simpa [Exp.lc_at] using ih
+  | tapp _ _ _ _ _ ih => simpa [Exp.lc_at] using ih
 
 /-- WFBVars of `self x t`: `self` is the singleton `{ν | ν = x}` (kvar-free, no
     BVars), so it is `WFBVars` outright — independent of `t`. -/
@@ -250,3 +271,5 @@ theorem Hastype.wf_bvars {κ Γ e t} (h : Hastype κ Γ e t) : Ty.WFBVars t := b
   | ite _ _ hwf _ _ _ _ => exact hwf
   | unreach _ hwf => exact hwf
   | fix hwf _ _ _ _ => exact hwf
+  | tabs hwf _ _ _ _ => exact hwf
+  | tapp _ _ _ _ hres _ => exact Ty.wfB_WFBVars _ hres

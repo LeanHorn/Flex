@@ -486,6 +486,17 @@ def Val.fv (v : Val) : List EVar :=
 @[simp]
 def Val.closed (v : Val) : Prop := Val.fv v = []
 
+/-- An expression with no type information anywhere. -/
+def Exp.TypeFree : Exp → Prop
+  | .bvar _ | .fvar _ | .iconst _ | .bconst _ | .unreach => True
+  | .lam b | .not b | .fix b => b.TypeFree
+  | .letin e₁ e₂ | .app e₁ e₂ | .and e₁ e₂ | .leq e₁ e₂ | .add e₁ e₂ => e₁.TypeFree ∧ e₂.TypeFree
+  | .ite e₀ e₁ e₂ => e₀.TypeFree ∧ e₁.TypeFree ∧ e₂.TypeFree
+  | .ann _ _ | .tabs _ _ | .tapp _ _ => False
+
+/-- A value is erased when its syntax carries no types. -/
+def Val.Erased (v : Val) : Prop := v.toExp.TypeFree
+
 /-- Structural skeleton of `Ty`: counts arrow nesting, ignoring refinement
     bodies. Preserved by `openVar` / `openVarAt`. Used as a termination
     measure for the algorithmic subtyping function in `VCGen.lean`. -/

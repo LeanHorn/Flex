@@ -42,3 +42,15 @@ open STLC
 
 /-- info: 'sum_infer' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms sum_infer
+
+/-- info: 'poly_id_client' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms poly_id_client
+
+/-- info: 'poly_choose_client' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms poly_choose_client
+
+/-- info: 'poly_impredicative' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms poly_impredicative
+
+/-- info: 'poly_iter_client' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms poly_iter_client

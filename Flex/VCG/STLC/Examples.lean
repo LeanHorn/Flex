@@ -58,8 +58,8 @@ def ex1Exp : Exp := .iconst 5
 def ex1Ty  : Ty  := Pos
 
 example (κ : KEnv) : topVC κ [] ex1Exp ex1Ty := by
-  simp only [topVC, check, synth, sub, ex1Exp, ex1Ty, Pos, prim,
-             Cstr.interp, Cstr.triv, Refinement.openBVar,
+  simp only [topVC, check, synth, sub, ex1Exp, ex1Ty, Pos, prim, implyBindCstr, Ty.hyp?_int,
+             if_true, Cstr.interp, Cstr.triv, Refinement.openBVar,
              Formula.openBVar, Term.openBVar, REnv.update, REnv.write,
              Refinement.interp, Formula.interp, Term.interp]
   solve_fixpoint
@@ -372,7 +372,7 @@ theorem loopMain_vc (κ : KEnv) : topVC κ [] loopMain (.refine .int (.fmla .ff)
         Exp.openVar, Ty.openVar, Refinement.openBVar, Formula.openBVar, Term.openBVar]
 
 /-- By `vcgen_partial_correct`, `loop 0` never returns a value, whatever the fuel. -/
-example (n : Nat) : ¬ ∃ v m, Eval n loopMain (.val v m) := by
+example (n : Nat) : ¬ ∃ v m, Run n loopMain (.val v m) := by
   rintro ⟨v, m, hev⟩
   obtain ⟨_, hr⟩ := vcgen_partial_correct (κ := fun _ _ => True)
     (by simp [loopMain, loop, loopTy, Exp.WFBVars, Ty.WFBVars, Ty.WFBVarCtx,
@@ -412,5 +412,128 @@ theorem sum_infer :
           (.letin (.iconst 5) (.app (.bvar 1) (.bvar 0))))   -- sum 5
         (.refine .int (.fmla (.leqI (.const .int 5) (.bvar .int 0)))) := by
   simp only [sumBody]
+  generate
+  fix
+
+/-! ## Type polymorphism (λ_RF-style)
+
+  `Exp.tabs k e` is `Λα:k. e` and `Exp.tapp e τ` is `e[τ]`; inside a polymorphic
+  type `α` is `Base.tbvar 0`. Kinds: `B` variables may be refined and are
+  instantiated with refined base types; `⋆` variables are refined only with
+  `true` and may be instantiated with anything — including polymorphic types
+  (impredicativity). Instances are written explicitly, with κ-templates for the
+  refinements to infer. Instantiating `α{r}` at `b{r'}` yields `b{r' ∧ r}`. -/
+
+attribute [local simp] Exp.ftv Ty.ftv Refinement.ftv Formula.ftv Term.ftv Base.ftv TEnv.ftv TVar.fresh
+  Exp.openTv Ty.openTv Refinement.substB Formula.substB Term.substB Base.substB BSubst.openAt
+  BSubst.instAt Ty.instTy Ty.strengthen Ty.sortOf Ty.kindOf Kind.le Ty.wfB Refinement.wfB
+  Formula.wfB Term.wfB Base.isTv Base.sortOK Base.fvOK Base.tyOK Base.isStarB Refinement.isTT
+  Base.recast Ty.optBase Base.shiftT
+
+/-- `α{r}` for the innermost bound type variable. -/
+abbrev TV (r : Refinement) : Ty := .refine (.tbvar 0) r
+abbrev ttR : Refinement := .fmla .tt
+abbrev BoolT : Ty := .refine .bool ttR
+
+/-! ### `id : ∀α:B. x:α → α{ν = x}` — refinement strengthening at instantiation -/
+
+abbrev idTy : Ty :=
+  .forall .B (.arrow (TV ttR)
+    (TV (.fmla (.eq (.tbvar 0) (.bvar (.tbvar 0) 0) (.bvar (.tbvar 0) 1)))))
+abbrev idPoly : Exp := .tabs .B (.lam (.bvar 0))
+
+theorem poly_id (κ : KEnv) : topVC κ [] idPoly idTy := by
+  simp [topVC, idPoly, idTy]
+
+/-- `let five = 5 in id[int{k}] five ⇐ {ν = 5}`: the instance's result type is
+    `int{k(ν) ∧ ν = five}` — the `ν = x` of `id`'s signature is conjoined into
+    the instance, so any `k` admitting `5` works. -/
+theorem poly_id_client : ∃ κ : KEnv, Check κ []
+    (.letin (.iconst 5) (.app (.tapp (.ann idPoly idTy) (IntK "k")) (.bvar 0)))
+    (IntN 5) := by
+  generate
+  zap
+  grind
+
+/-! ### The book's §6.1 client, with `choose : ∀α:B. Bool → α → α → α`
+
+  (`max` would need a polymorphic `≤`; our `leq` primitive is `Int`-only.) The
+  instance refinement `k` is inferred: it must admit `0` and `5` and give
+  `0 < r + 1`. -/
+
+abbrev chooseTy : Ty := .forall .B (.arrow BoolT (.arrow (TV ttR) (.arrow (TV ttR) (TV ttR))))
+abbrev choosePoly : Exp := .tabs .B (.lam (.lam (.lam (.ite (.bvar 2) (.bvar 1) (.bvar 0)))))
+
+theorem poly_choose (κ : KEnv) : topVC κ [] choosePoly chooseTy := by
+  simp [topVC, choosePoly, chooseTy]
+
+/-- `λc. let z = 0; let f = 5; let r = choose[int{k}] c z f; let one = 1; r + one`
+    `⇐ Bool → {0 < ν}`. -/
+theorem poly_choose_client : ∃ κ : KEnv, Check κ []
+    (.lam
+      (.letin (.iconst 0)
+      (.letin (.iconst 5)
+      (.letin (.app (.app (.app (.tapp (.ann choosePoly chooseTy) (IntK "k")) (.bvar 2)) (.bvar 1))
+                (.bvar 0))
+      (.letin (.iconst 1)
+      (.add (.bvar 1) (.bvar 0)))))))
+    (.arrow BoolT Pos) := by
+  generate
+  zap
+  grind
+
+/-! ### Impredicative instantiation: `idF[∀β:⋆. β → β] idF` -/
+
+abbrev idFTy : Ty := .forall .star (.arrow (TV ttR) (TV ttR))
+abbrev idF : Exp := .tabs .star (.lam (.bvar 0))
+
+theorem poly_impredicative (κ : KEnv) : topVC κ []
+    (.letin (.ann idF idFTy) (.app (.tapp (.bvar 0) idFTy) (.bvar 0))) idFTy := by
+  simp [topVC, idF, idFTy]
+
+/-! ### Polymorphism + recursion + inference: `iter : ∀α:⋆. (α → α) → Int → α → α`
+
+  `iter f n x` applies `f` to `x` `n` times. Instantiated at `int{k}` and used
+  with `inc` from `0`, the instance refinement `k` must be an *invariant* of
+  `inc` — a cyclic κ, solved by predicate abstraction (`fix`), which infers
+  `k(ν) := 0 ≤ ν`. -/
+
+abbrev iterTy : Ty :=
+  .forall .star (.arrow (.arrow (TV ttR) (TV ttR)) (.arrow TT (.arrow (TV ttR) (TV ttR))))
+
+/-- `Λα. fix iter. λf. λn. λx. let z = 0; let c = n ≤ z;
+      if c then x else let m = -1; let n1 = n + m; let fx = f x;
+                       let g1 = iter f; let g2 = g1 n1; g2 fx` -/
+abbrev iterPoly : Exp :=
+  .tabs .star (.fix
+    (.lam (.lam                                  -- n, x
+      (.letin (.iconst 0)                        -- z      x=1 n=2 f=3 self=4
+      (.letin (.leq (.bvar 2) (.bvar 0))         -- c      z=1 x=2 n=3 f=4 self=5
+      (.ite (.bvar 0)
+        (.bvar 2)
+        (.letin (.iconst (-1))                   -- m      c=1 z=2 x=3 n=4 f=5 self=6
+        (.letin (.add (.bvar 4) (.bvar 0))       -- n1     m=1 .. x=4 n=5 f=6 self=7
+        (.letin (.app (.bvar 6) (.bvar 4))       -- fx     n1=1 .. x=5 n=6 f=7 self=8
+        (.letin (.app (.bvar 8) (.bvar 7))       -- g1     fx=1 n1=2 .. f=8 self=9
+        (.letin (.app (.bvar 0) (.bvar 2))       -- g2     g1=1 fx=2 n1=3
+        (.app (.bvar 0) (.bvar 2)))))))))))))    -- g2 fx
+
+theorem poly_iter (κ : KEnv) : topVC κ [] iterPoly iterTy := by
+  simp [topVC, iterPoly, iterTy]
+
+/-- `inc : x:Int → {ν = x + 1}` -/
+abbrev incTy : Ty :=
+  .arrow TT (.refine .int (.fmla (.eq .int (.bvar .int 0) (.add (.bvar .int 1) (.const .int 1)))))
+abbrev incE : Exp := .lam (.letin (.iconst 1) (.add (.bvar 1) (.bvar 0)))
+
+/-- `let inc = …; let three = 3; let zero = 0; iter[int{k}] inc three zero ⇐ {0 ≤ ν}`. -/
+theorem poly_iter_client : ∃ κ : KEnv, Check κ []
+    (.letin (.ann incE incTy)
+    (.letin (.iconst 3)
+    (.letin (.iconst 0)
+    (.letin (.app (.tapp (.ann iterPoly iterTy) (IntK "k")) (.bvar 2))   -- iter[k] inc
+    (.letin (.app (.bvar 0) (.bvar 2))                                   -- … three
+    (.app (.bvar 0) (.bvar 2)))))))                                      -- … zero
+    (.refine .int (.fmla (.leqI (.const .int 0) (.bvar .int 0)))) := by
   generate
   fix

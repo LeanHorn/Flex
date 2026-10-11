@@ -2,6 +2,7 @@ import Flex.VCG.STLC.Semantics
 import Flex.VCG.STLC.Declarative
 import Flex.VCG.STLC.Soundness
 import Flex.VCG.STLC.Model
+import Flex.VCG.STLC.TypeSubst
 
 open STLC
 
@@ -48,25 +49,28 @@ end STLC
 
 /-- Every value of a base denotation is locally closed and closed. -/
 theorem BaseDen.wf {δ : TyEnvSem} {k : Nat} {b : Base} {v : Val}
-    (h : BaseDen δ k b v) : Val.lc v ∧ Val.closed v := by
+    (h : BaseDen δ k b v) : Val.lc v ∧ Val.closed v ∧ Val.Erased v := by
   cases b with
-  | int  => obtain ⟨n, rfl⟩ := h; exact ⟨trivial, rfl⟩
-  | bool => obtain ⟨c, rfl⟩ := h; exact ⟨trivial, rfl⟩
+  | int  => obtain ⟨n, rfl⟩ := h; exact ⟨trivial, rfl, trivial⟩
+  | bool => obtain ⟨c, rfl⟩ := h; exact ⟨trivial, rfl, trivial⟩
   | tbvar _ => exact SemTy.wf _ h
   | tfvar _ => exact SemTy.wf _ h
 
 /-- Every value in a denotation is locally closed and closed. -/
 theorem TyDenote.wf {κ : KEnv} {δ : TyEnvSem} {k : Nat} {t : Ty} {γ : REnv} {v : Val}
-    (h : TyDenote κ δ k t γ v) : Val.lc v ∧ Val.closed v := by
+    (h : TyDenote κ δ k t γ v) : Val.lc v ∧ Val.closed v ∧ Val.Erased v := by
   induction t generalizing δ γ v with
   | refine b r => simp only [TyDenote] at h; exact BaseDen.wf h.1
-  | arrow s t => simp only [TyDenote] at h; exact ⟨h.2.1, h.2.2.1⟩
+  | arrow s t => simp only [TyDenote] at h; exact ⟨h.2.1, h.2.2.1, h.2.2.2.1⟩
   | «forall» kd t ih =>
     simp only [TyDenote] at h
     exact ih (h SemTy.ints (SemTy.ints_fits kd))
 
 theorem TyDenote.closed {κ : KEnv} {δ : TyEnvSem} {k : Nat} {t : Ty} {γ : REnv} {v : Val}
-    (h : TyDenote κ δ k t γ v) : Val.closed v := (TyDenote.wf h).2
+    (h : TyDenote κ δ k t γ v) : Val.closed v := (TyDenote.wf h).2.1
+
+theorem TyDenote.erased {κ : KEnv} {δ : TyEnvSem} {k : Nat} {t : Ty} {γ : REnv} {v : Val}
+    (h : TyDenote κ δ k t γ v) : Val.Erased v := (TyDenote.wf h).2.2
 
 theorem TyDenote.lc {κ : KEnv} {δ : TyEnvSem} {k : Nat} {t : Ty} {γ : REnv} {v : Val}
     (h : TyDenote κ δ k t γ v) : Val.lc v := (TyDenote.wf h).1
@@ -168,6 +172,25 @@ theorem EnvCloses.mem_closed {κ : KEnv} {δ : TyEnvSem} {k : Nat} :
       · exact TyDenote.closed hv
       · exact EnvCloses.mem_closed hΓ hx
 
+/-- Every Γ-bound name maps to a type-erased value under `EnvCloses`. -/
+theorem EnvCloses.mem_erased {κ : KEnv} {δ : TyEnvSem} {k : Nat} :
+    ∀ {Γ γ}, EnvCloses κ δ k Γ γ → ∀ {x}, x ∈ TEnv.dom Γ → Val.Erased (γ.map x)
+  | [],          _, _, _, hx => by simp [TEnv.dom] at hx
+  | (y, t) :: Γ, γ, h, x, hx => by
+      obtain ⟨hv, hΓ⟩ := h
+      simp only [TEnv.dom, List.mem_cons] at hx
+      rcases hx with rfl | hx
+      · exact TyDenote.erased hv
+      · exact EnvCloses.mem_erased hΓ hx
+
+/-- Rebinding a type variable absent from Γ preserves `EnvCloses`. -/
+theorem EnvCloses.set_fresh {κ : KEnv} {δ : TyEnvSem} {k : Nat} {a : TVar} {R : SemTy} :
+    ∀ {Γ γ}, a ∉ TEnv.ftv Γ → EnvCloses κ δ k Γ γ → EnvCloses κ (δ.set a R) k Γ γ
+  | [],          _, _, _ => trivial
+  | (_, t) :: _, _, ha, ⟨h, hΓ⟩ => by
+      simp only [TEnv.ftv, List.mem_append, not_or] at ha
+      exact ⟨(TyDenote.set_fresh_iff t ha.1 _ _ _ _).mpr h, EnvCloses.set_fresh ha.2 hΓ⟩
+
 /-! ## extendBy commutativity and extendBy_fresh -/
 
 /-- Writing a fresh `x` (`x ∉ r.fv`) does not change `Refinement.interp` under
@@ -211,7 +234,8 @@ theorem TyDenote.extendBy_fresh_iff {κ : KEnv} (t : Ty) :
     intro δ k γ v x va hx
     simp only [Ty.fv, List.mem_append, not_or] at hx
     simp only [TyDenote]
-    refine and_congr_right (fun _ => and_congr_right (fun _ => and_congr_right (fun _ => ?_)))
+    refine and_congr_right (fun _ => and_congr_right (fun _ => and_congr_right (fun _ =>
+      and_congr_right (fun _ => ?_))))
     constructor
     · intro hLR j hj va' htd
       obtain ⟨body, o, hap, hev, hres⟩ := hLR j hj va' ((ihs δ j γ va' x va hx.1).mpr htd)
@@ -269,7 +293,8 @@ private theorem TyDenote.insertBV_openVar_aux {κ : KEnv} (t : Ty) :
     intro ρ δ k x γ va v hlen hxf
     simp only [Ty.fv, List.mem_append, not_or] at hxf
     simp only [Ty.openVar, TyDenote]
-    refine and_congr_right (fun _ => and_congr_right (fun _ => and_congr_right (fun _ => ?_)))
+    refine and_congr_right (fun _ => and_congr_right (fun _ => and_congr_right (fun _ =>
+      and_congr_right (fun _ => ?_))))
     constructor
     · intro hLR j hj va' htd
       obtain ⟨body, o, hap, hev, hres⟩ :=
@@ -338,6 +363,7 @@ private theorem Subtyp.optBase_eq {κ Γ s t} (h : Subtyp κ Γ s t) : s.optBase
   cases h with
   | refine _ _ => rfl
   | arrow => simp [Ty.optBase]
+  | «forall» => rfl
 
 /-- ModelsEnv is preserved when extending γ at z fresh from Γ. -/
 private theorem ModelsEnv.extendBy_fresh_aux {κ : KEnv} {Γ : TEnv} {γ : REnv}
@@ -416,8 +442,8 @@ theorem subtyp_sound {κ Γ s t} (hsub : Subtyp κ Γ s t)
     obtain ⟨⟨⟨⟨⟨hx_Γdom, hx_Γfv⟩, hx_s1fv⟩, hx_s2fv⟩, hx_t1fv⟩, hx_t2fv⟩ := hfresh
     intro δ hδ k γ hm v htd
     simp only [TyDenote] at htd ⊢
-    obtain ⟨hfun, hlc, hcl, hLR⟩ := htd
-    refine ⟨hfun, hlc, hcl, fun j hj va htd_va => ?_⟩
+    obtain ⟨hfun, hlc, hcl, her, hLR⟩ := htd
+    refine ⟨hfun, hlc, hcl, her, fun j hj va htd_va => ?_⟩
     -- Domain conversion (contravariant): s₂ <: s₁
     have htd_va_s1 : TyDenote κ δ j s₁ γ va := ih_hdom hWF_s2 hWF_s1 hδ hm htd_va
     obtain ⟨body, o, hap, hev, hres⟩ := hLR j hj va htd_va_s1
@@ -431,6 +457,20 @@ theorem subtyp_sound {κ Γ s t} (hsub : Subtyp κ Γ s t)
       ModelsEnv.extendBy_cons hδ hm s₂ x va hx_Γdom hx_Γfv hx_s2fv htd_va
     exact (TyDenote.push_iff κ δ m t₂ x γ va vr hx_t2fv).mpr
       (ih_hcodom hWF_t1x hWF_t2x hδ hm_ext htd_vr_t1)
+  | «forall» hka hfresh hbody ih =>
+    rename_i Γ' kd t₁ t₂ a
+    simp only [List.mem_append, not_or] at hfresh
+    have hWF₁ : Ty.WFBVars (t₁.openTv 0 a) :=
+      Ty.WFBVars_openTv t₁ 0 a (by simpa [Ty.WFBVars, Ty.WFBVarCtx] using hWF_s)
+    have hWF₂ : Ty.WFBVars (t₂.openTv 0 a) :=
+      Ty.WFBVars_openTv t₂ 0 a (by simpa [Ty.WFBVars, Ty.WFBVarCtx] using hWF_t)
+    intro δ hδ k γ hm v htd
+    simp only [TyDenote] at htd ⊢
+    intro R hR
+    -- Interpret the binder by `R` on both sides, i.e. open with `a ↦ R`.
+    have hδ' : (δ.set a R).WK := TyEnvSem.set_WK hδ a R (hka ▸ hR)
+    have h₁ := (TyDenote.push_openTv_iff δ a R t₁ hfresh.1 k γ v).mp (htd R hR)
+    exact (TyDenote.push_openTv_iff δ a R t₂ hfresh.2 k γ v).mpr (ih hWF₁ hWF₂ hδ' hm h₁)
 
 /-! ## T2 — Fundamental Lemma -/
 
@@ -463,7 +503,8 @@ private theorem TyDenote.self {κ : KEnv} {δ : TyEnvSem} {k : Nat} {γ : REnv} 
   | «forall» _ _ => simpa only [self] using hv
 
 theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
-    ∀ {δ}, δ.WK → ∀ {k γ}, EnvCloses κ δ k Γ γ → ExpDenote κ δ k t γ (Exp.substEnv γ e) := by
+    ∀ {δ}, δ.WK → ∀ {k γ}, EnvCloses κ δ k Γ γ →
+      ExpDenote κ δ k t γ (Exp.substEnv γ e).erase := by
   induction h with
   | unreach hent _ =>
       intro δ hδ k γ hE
@@ -471,8 +512,9 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
   | var hlk _ =>
       rename_i Γ x t hwf
       intro δ hδ k γ hE
-      rw [Exp.substEnv_fvar]
-      exact ExpDenote.of_val (TyDenote.self (EnvCloses.lookup hE hlk))
+      have hv := EnvCloses.lookup hE hlk
+      rw [Exp.substEnv_fvar, Exp.erase_of_typeFree _ (TyDenote.erased hv)]
+      exact ExpDenote.of_val (TyDenote.self hv)
   | int_const =>
       rename_i n
       intro δ hδ k γ _
@@ -489,8 +531,8 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
       exact ⟨⟨b, rfl⟩, by simp [Refinement.interp, Formula.interp, Term.interp]⟩
   | ann _ _ ih =>
       intro δ hδ k γ hE
-      obtain ⟨o, hev, hres⟩ := ih hδ hE
-      exact ⟨o, Eval.ann hev, hres⟩
+      rw [Exp.substEnv_ann]
+      exact ih hδ hE
   | sub hhs hsub hwf_t ih =>
       intro δ hδ k γ hE
       obtain ⟨o, hev, hres⟩ := ih hδ hE
@@ -506,7 +548,7 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
       have hx : Exp.substEnv γ (.fvar x) = .iconst n₁ := by simp [Exp.substEnv_fvar, hγx]
       have hy : Exp.substEnv γ (.fvar y) = .iconst n₂ := by simp [Exp.substEnv_fvar, hγy]
       refine ⟨.val (.iconst (n₁ + n₂)) k, ?_, fun v m ho => ?_⟩
-      · rw [Exp.substEnv_add, hx, hy]; exact Eval.add Eval.iconst Eval.iconst
+      · rw [Exp.substEnv_add, hx, hy]; simp only [Exp.erase]; exact Eval.add Eval.iconst Eval.iconst
       · injection ho with h₁ h₂; subst h₁ h₂
         simp only [TyDenote, BaseDen]
         refine ⟨⟨n₁ + n₂, rfl⟩, ?_⟩
@@ -522,7 +564,7 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
       have hx : Exp.substEnv γ (.fvar x) = .iconst n₁ := by simp [Exp.substEnv_fvar, hγx]
       have hy : Exp.substEnv γ (.fvar y) = .iconst n₂ := by simp [Exp.substEnv_fvar, hγy]
       refine ⟨.val (.bconst (decide (n₁ ≤ n₂))) k, ?_, fun v m ho => ?_⟩
-      · rw [Exp.substEnv_leq, hx, hy]; exact Eval.leq Eval.iconst Eval.iconst
+      · rw [Exp.substEnv_leq, hx, hy]; simp only [Exp.erase]; exact Eval.leq Eval.iconst Eval.iconst
       · injection ho with h₁ h₂; subst h₁ h₂
         simp only [TyDenote, BaseDen]
         refine ⟨⟨_, rfl⟩, ?_⟩
@@ -539,7 +581,7 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
       simp only [TyDenote, BaseDen] at hv₁; obtain ⟨⟨b, hγx⟩, _⟩ := hv₁
       have hx : Exp.substEnv γ (.fvar x) = .bconst b := by simp [Exp.substEnv_fvar, hγx]
       refine ⟨.val (.bconst (!b)) k, ?_, fun v m ho => ?_⟩
-      · rw [Exp.substEnv_not, hx]; exact Eval.not_ Eval.bconst
+      · rw [Exp.substEnv_not, hx]; simp only [Exp.erase]; exact Eval.not_ Eval.bconst
       · injection ho with h₁ h₂; subst h₁ h₂
         simp only [TyDenote, BaseDen]
         refine ⟨⟨_, rfl⟩, ?_⟩
@@ -555,7 +597,7 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
       have hxx : Exp.substEnv γ (.fvar x) = .bconst bx := by simp [Exp.substEnv_fvar, hγx]
       have hyy : Exp.substEnv γ (.fvar y) = .bconst by_ := by simp [Exp.substEnv_fvar, hγy]
       refine ⟨.val (.bconst (bx && by_)) k, ?_, fun v m ho => ?_⟩
-      · rw [Exp.substEnv_and, hxx, hyy]; exact Eval.and_ Eval.bconst Eval.bconst
+      · rw [Exp.substEnv_and, hxx, hyy]; simp only [Exp.erase]; exact Eval.and_ Eval.bconst Eval.bconst
       · injection ho with h₁ h₂; subst h₁ h₂
         simp only [TyDenote, BaseDen]
         refine ⟨⟨_, rfl⟩, ?_⟩
@@ -569,17 +611,20 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
         intro z hz
         obtain ⟨t', hzΓ⟩ := (Hastype.lam hwf_arr hfresh ih).fv_subset z (by simpa [Exp.fv] using hz)
         exact mem_TEnv_dom hzΓ
-      show ExpDenote _ _ _ _ _ (Val.clos (Exp.substEnv γ body)).toExp
+      show ExpDenote _ _ _ _ _ (Val.clos (Exp.substEnv γ body).erase).toExp
       apply ExpDenote.of_val
       simp only [TyDenote]
-      refine ⟨⟨_, Or.inl rfl⟩, ?_, ?_, ?_⟩
+      refine ⟨⟨_, Or.inl rfl⟩, ?_, ?_, ?_, ?_⟩
       · simp only [Val.lc]
-        exact Exp.substEnv_lc_at γ body 1
+        exact Exp.lc_at_erase _ 1 (Exp.substEnv_lc_at γ body 1
           (fun z hz => EnvCloses.mem_lc hE (hbody_dom z hz))
-          (Hastype.lam hwf_arr hfresh ih).lc_at
+          (Hastype.lam hwf_arr hfresh ih).lc_at)
       · simp only [Val.closed, Val.fv]
-        exact Exp.substEnv_fv_nil γ body
+        have h := Exp.substEnv_fv_nil γ body
           (fun z hz => EnvCloses.mem_closed hE (hbody_dom z hz))
+        exact List.eq_nil_iff_forall_not_mem.mpr fun z hz =>
+          by simpa [h] using Exp.fv_erase_subset _ z hz
+      · exact Exp.typeFree_erase _
       · intro j hj va htd_va
         simp [List.mem_append, not_or] at hfresh
         obtain ⟨hxΓ, hxΓfv, hxbody, hxs₁, hxs₂⟩ := hfresh
@@ -588,13 +633,15 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
             (TyDenote.extendBy_fresh x va hxs₁ htd_va)
         obtain ⟨o, hev, hres⟩ := ih_fund hδ hEx
         rw [Exp.substEnv_write_openVar body γ va x 0 hxbody
-              (fun w hw => EnvCloses.mem_lc hE (hbody_dom w hw))] at hev
+              (fun w hw => EnvCloses.mem_lc hE (hbody_dom w hw)),
+            Exp.erase_openExp, Exp.erase_of_typeFree _ (TyDenote.erased htd_va)] at hev
         exact ⟨_, o, rfl, hev, fun vr m ho =>
           (TyDenote.push_iff κ δ m s₂ x γ va vr hxs₂).mpr (hres vr m ho)⟩
   | app h_fn h_arg hyfv ih_fn ih_arg =>
       rename_i e₁ y s t
       intro δ hδ k γ hE
       rw [Exp.substEnv_app]
+      simp only [Exp.erase]
       obtain ⟨o₁, hev₁, hres₁⟩ := ih_fn hδ hE
       cases o₁ with
       | timeout => exact ⟨.timeout, Eval.app_to₁ hev₁, fun _ _ ho => by cases ho⟩
@@ -602,13 +649,17 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
         have htd_f := hres₁ f n₁ rfl
         have hn₁ := Eval.fuel_le hev₁
         -- The argument is the variable `y`: it evaluates to `γ.map y` for free.
+        have hy_er : Val.Erased (γ.map y) := by
+          obtain ⟨t', hyΓ⟩ := h_arg.fv_subset y (by simp [Exp.fv])
+          exact EnvCloses.mem_erased hE (mem_TEnv_dom hyΓ)
         obtain ⟨o₂, hev₂, hres₂⟩ := ih_arg hδ (hE.mono hn₁)
-        rw [Exp.substEnv_fvar] at hev₂ ⊢
+        rw [Exp.substEnv_fvar, Exp.erase_of_typeFree _ hy_er] at hev₂
+        rw [Exp.substEnv_fvar, Exp.erase_of_typeFree _ hy_er]
         have ho₂ := Eval.toExp_inv hev₂
         subst ho₂
         have htd_va := hres₂ _ _ rfl
         simp only [TyDenote] at htd_f
-        obtain ⟨hfun, _, _, hLR⟩ := htd_f
+        obtain ⟨hfun, _, _, _, hLR⟩ := htd_f
         cases n₁ with
         | zero =>
           obtain ⟨body, hap⟩ := Val.apply_isSome hfun (γ.map y)
@@ -622,6 +673,7 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
   | @letin Γ' e₁ e₂ s' t' x hwfbv hht xf hhto ih₁ ih₂ =>
       intro δ hδ k γ hE
       rw [Exp.substEnv_letin]
+      simp only [Exp.erase]
       obtain ⟨o₁, hev₁, hres₁⟩ := ih₁ hδ hE
       cases o₁ with
       | timeout => exact ⟨.timeout, Eval.letin_to hev₁, fun _ _ ho => by cases ho⟩
@@ -639,7 +691,8 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
             (TyDenote.extendBy_fresh x v₁ hxs htd₁)
         obtain ⟨o, hev, hres⟩ := ih₂ hδ hEx
         rw [Exp.substEnv_write_openVar e₂ γ v₁ x 0 hxbody
-              (fun w hw => EnvCloses.mem_lc hE (he₂_dom w hw))] at hev
+              (fun w hw => EnvCloses.mem_lc hE (he₂_dom w hw)),
+            Exp.erase_openExp, Exp.erase_of_typeFree _ (TyDenote.erased htd₁)] at hev
         exact ⟨o, Eval.letin hev₁ hev, fun vr m ho =>
           TyDenote.of_extendBy_fresh x v₁ hxt (hres vr m ho)⟩
   | ite hlk hfresh _ h₁ h₂ ih_e₁ ih_e₂ =>
@@ -660,6 +713,7 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
       have hy_tfv : y ∉ t.fv := fun hm => hfresh (by simp [hm])
       have hyx : y ≠ x := fun he => hfresh (by simp [he])
       rw [Exp.substEnv_ite, hxfv]
+      simp only [Exp.erase]
       cases bx with
       | true =>
         have htd_guard : TyDenote κ δ k (.refine .bool r_true)
@@ -696,6 +750,7 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
   | @fix Γ' e s t f x hwf hf hx hbody ih =>
       intro δ hδ k γ hE
       rw [Exp.substEnv_fix]
+      simp only [Exp.erase]
       have hfix := Hastype.fix hwf hf hx hbody
       have he_dom : ∀ w ∈ e.fv, w ∈ TEnv.dom Γ' := by
         intro w hw
@@ -708,22 +763,25 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
       -- The recursive closure is in the relation at every index, by induction
       -- on the index: a recursive call happens after a β-step, i.e. at `j < k`.
       have key : ∀ k, EnvCloses κ δ k Γ' γ →
-          TyDenote κ δ k (.arrow s t) γ (.fclos (Exp.substEnv γ e)) := by
+          TyDenote κ δ k (.arrow s t) γ (.fclos (Exp.substEnv γ e).erase) := by
         intro k
         induction k using Nat.strongRecOn with
         | ind k IH =>
         intro hE
         simp only [TyDenote]
-        refine ⟨⟨_, Or.inr rfl⟩, ?_, ?_, ?_⟩
+        refine ⟨⟨_, Or.inr rfl⟩, ?_, ?_, ?_, ?_⟩
         · simp only [Val.lc]
-          exact Exp.substEnv_lc_at γ e 2
-            (fun z hz => EnvCloses.mem_lc hE (he_dom z hz)) he_lc
+          exact Exp.lc_at_erase _ 2 (Exp.substEnv_lc_at γ e 2
+            (fun z hz => EnvCloses.mem_lc hE (he_dom z hz)) he_lc)
         · simp only [Val.closed, Val.fv]
-          exact Exp.substEnv_fv_nil γ e
+          have h := Exp.substEnv_fv_nil γ e
             (fun z hz => EnvCloses.mem_closed hE (he_dom z hz))
+          exact List.eq_nil_iff_forall_not_mem.mpr fun z hz =>
+            by simpa [h] using Exp.fv_erase_subset _ z hz
+        · exact Exp.typeFree_erase _
         · intro j hj va htd_va
           have hEj := hE.mono (Nat.le_of_lt hj)
-          let vf : Val := .fclos (Exp.substEnv γ e)
+          let vf : Val := .fclos (Exp.substEnv γ e).erase
           have htd_f : TyDenote κ δ j (.arrow s t) γ vf := IH j hj hEj
           have hf_st : f ∉ (Ty.arrow s t).fv := by simp [Ty.fv, hfs, hft]
           have hx_st : x ∉ (Ty.arrow s t).fv := by simp [Ty.fv, hxs, hxt]
@@ -751,7 +809,10 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
             · exact hxf h
           rw [Exp.substEnv_write_openVar _ _ va x 0 hx_open hγ₁,
               Exp.substEnv_write_openVar e γ vf f 1 hfe
-                (fun w hw => EnvCloses.mem_lc hE (he_dom w hw))] at hev
+                (fun w hw => EnvCloses.mem_lc hE (he_dom w hw)),
+              Exp.erase_openExp, Exp.erase_openExp,
+              Exp.erase_of_typeFree _ (TyDenote.erased htd_va),
+              Exp.erase_of_typeFree _ (TyDenote.erased htd_f)] at hev
           refine ⟨_, o, rfl, hev, fun vr m ho => ?_⟩
           have h := (TyDenote.push_iff κ δ m t x (γ.write f vf) va vr hxt).mpr (hres vr m ho)
           rw [REnv.push_write_comm] at h
@@ -759,13 +820,81 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
       exact ⟨_, Eval.fix, fun v m ho => by
         injection ho with h₁ h₂; subst h₁ h₂; exact key k hE⟩
 
+  | @tabs Γ' kd e t a hwf hka hfresh hbody ih =>
+      intro δ hδ k γ hE
+      rw [Exp.substEnv_tabs]
+      simp only [Exp.erase]
+      simp only [List.mem_append, not_or] at hfresh
+      obtain ⟨⟨haΓ, hae⟩, hat⟩ := hfresh
+      have hfix := Hastype.tabs hwf hka (by simp [haΓ, hae, hat]) hbody
+      have he_er : ∀ z ∈ e.fv, Val.Erased (γ.map z) := by
+        intro z hz
+        obtain ⟨t', hzΓ⟩ := hfix.fv_subset z (by simpa [Exp.fv] using hz)
+        exact EnvCloses.mem_erased hE (mem_TEnv_dom hzΓ)
+      -- The body, opened with `a`, evaluates like the body itself (types erased).
+      have hbody_eq : (Exp.substEnv γ (e.openTv 0 a)).erase = (Exp.substEnv γ e).erase := by
+        rw [Exp.substEnv_openTv γ 0 a e he_er, Exp.erase_openTv]
+      have hden : ∀ R : SemTy, R.Fits kd →
+          ExpDenote κ (δ.set a R) k (t.openTv 0 a) γ (Exp.substEnv γ e).erase := by
+        intro R hR
+        have := ih (TyEnvSem.set_WK hδ a R (hka ▸ hR)) (EnvCloses.set_fresh haΓ hE)
+        rwa [hbody_eq] at this
+      -- One outcome for every interpretation of α (evaluation is deterministic).
+      obtain ⟨o, hev, _⟩ := hden SemTy.ints (SemTy.ints_fits kd)
+      refine ⟨o, hev, fun v m ho => ?_⟩
+      simp only [TyDenote]
+      intro R hR
+      obtain ⟨o', hev', hres'⟩ := hden R hR
+      cases Eval.det hev hev'
+      exact (TyDenote.push_openTv_iff δ a R t hat m γ v).mpr (hres' v m ho)
+  | @tapp Γ' e kd t s hhe hk hw₁ hw₂ hw₃ ih =>
+      intro δ hδ k γ hE
+      rw [Exp.substEnv_tapp]
+      simp only [Exp.erase]
+      obtain ⟨o, hev, hres⟩ := ih hδ hE
+      refine ⟨o, hev, fun v m ho => ?_⟩
+      have h := hres v m ho
+      simp only [TyDenote] at h
+      -- Instantiate the type variable by the instance's own denotation.
+      let R : SemTy := ⟨fun j w => TyDenote κ δ j s γ w,
+        fun hjk h => TyDenote.mono hjk h, fun h => TyDenote.wf h⟩
+      have hRfits : R.Fits kd := by
+        cases kd with
+        | star => trivial
+        | B =>
+          have hsB : s.kindOf = .B := by rcases hk with h | h; exact h; cases h
+          obtain ⟨b', r', rfl, hb'⟩ := Ty.kindOf_B hsB
+          rcases hb' with rfl | rfl | ⟨n, rfl⟩
+          · exact ⟨.int, Or.inl rfl, fun j w hw => by
+              simp only [R, TyDenote, BaseDen] at hw; obtain ⟨⟨n, rfl⟩, _⟩ := hw; rfl⟩
+          · exact ⟨.bool, Or.inr rfl, fun j w hw => by
+              simp only [R, TyDenote, BaseDen] at hw; obtain ⟨⟨c, rfl⟩, _⟩ := hw; rfl⟩
+          · obtain ⟨b0, hb0, hall⟩ := hδ (n, .B)
+            exact ⟨b0, hb0, fun j w hw => by
+              simp only [R, TyDenote, BaseDen] at hw; exact hall j w hw.1⟩
+      have hwt : t.wfB [kd] [] = true := by simpa [Ty.wfB] using hw₁
+      have key := TyDenote.instTy_iff (κ := κ) s kd hw₂ hk δ γ R (fun _ _ => Iff.rfl)
+        t [] δ.bv [kd] [] m γ v hwt rfl rfl rfl (fun _ i hi => by simp at hi)
+      simp only [List.nil_append, List.length_nil] at key
+      exact key.mp (by simpa [TyEnvSem.push] using h R hRfits)
+
 /-! ## T3 — Closed-term type safety (corollary of T2) -/
+
+namespace STLC
+
+/-- The operational semantics of a program: run its type erasure. (Types never
+    influence evaluation; erasing them first is what makes type abstraction and
+    application, and the opening of type binders during checking, invisible at
+    runtime.) -/
+def Run (n : Nat) (e : Exp) (o : Outcome) : Prop := Eval n e.erase o
+
+end STLC
 
 /-- A well-typed closed program never gets stuck: for every fuel budget `n` it
     either times out or returns a value, and every returned value (with `m`
     fuel left) is in its type's denotation at index `m`. -/
 theorem type_safety {κ : KEnv} {e : Exp} {t : Ty} (h : Hastype κ [] e t) :
-    ∀ n, ∃ o, Eval n e o ∧
+    ∀ n, ∃ o, Run n e o ∧
       ∀ v m, o = .val v m → TyDenote κ TyEnvSem.empty m t REnv.empty v := by
   intro n
   have hfv : e.fv = [] :=
@@ -783,14 +912,14 @@ theorem type_safety {κ : KEnv} {e : Exp} {t : Ty} (h : Hastype κ [] e t) :
 
 theorem vcgen_safety {κ : KEnv} {e : Exp} {t : Ty}
     (hE : Exp.WFBVars e) (ht : Ty.WFBVars t) (h : topVC κ [] e t) :
-    ∀ n, ∃ o, Eval n e o ∧
+    ∀ n, ∃ o, Run n e o ∧
       ∀ v m, o = .val v m → TyDenote κ TyEnvSem.empty m t REnv.empty v :=
   type_safety (topVC_decl_sound κ e t hE ht h)
 
 /-- Progress: a program accepted by VCGen never gets stuck. -/
 theorem vcgen_no_stuck {κ : KEnv} {e : Exp} {t : Ty}
     (hE : Exp.WFBVars e) (ht : Ty.WFBVars t) (h : topVC κ [] e t) :
-    ∀ n, ∃ o, Eval n e o := fun n =>
+    ∀ n, ∃ o, Run n e o := fun n =>
   let ⟨o, hev, _⟩ := vcgen_safety hE ht h n
   ⟨o, hev⟩
 
@@ -799,7 +928,7 @@ theorem vcgen_no_stuck {κ : KEnv} {e : Exp} {t : Ty}
     result refinement. -/
 theorem vcgen_partial_correct {κ : KEnv} {e : Exp} {b : Base} {r : Refinement}
     (hE : Exp.WFBVars e) (ht : Ty.WFBVars (.refine b r)) (h : topVC κ [] e (.refine b r))
-    {n m : Nat} {v : Val} (hev : Eval n e (.val v m)) :
+    {n m : Nat} {v : Val} (hev : Run n e (.val v m)) :
     BaseDen TyEnvSem.empty m b v ∧ Refinement.interp κ r (REnv.empty.push v) := by
   obtain ⟨o, hev', hres⟩ := vcgen_safety hE ht h n
   cases Eval.det hev hev'

@@ -34,6 +34,13 @@ inductive Subtyp : KEnv → TEnv → Ty → Ty → Prop where
       Subtyp κ ((x, s₂) :: Γ) (t₁.openVar 0 x) (t₂.openVar 0 x) →
       Subtyp κ Γ (.arrow s₁ t₁) (.arrow s₂ t₂)
 
+  /-- S-POLY: open both bodies with the same fresh type variable. -/
+  | «forall» {κ Γ k t₁ t₂ a} :
+      a.2 = k →
+      a ∉ t₁.ftv ++ t₂.ftv →
+      Subtyp κ Γ (t₁.openTv 0 a) (t₂.openTv 0 a) →
+      Subtyp κ Γ (.forall k t₁) (.forall k t₂)
+
 /-! ## Bidirectional typing -/
 
 mutual
@@ -79,6 +86,16 @@ mutual
         Γ.lookup y = some (.refine .bool ry) →
         Synth κ Γ (.and (.fvar x) (.fvar y)) <ty|Bool{ν : ν = x ∧ y} |>
 
+    /-- T-TAPP: instantiate a polymorphic type with a (well-formed) type of an
+        appropriate kind; refinements on the type variable strengthen the instance. -/
+    | tapp {κ Γ e k t s} :
+        Synth κ Γ e (.forall k t) →
+        Kind.le s.kindOf k →
+        (Ty.forall k t).wfB [] [] = true →
+        s.wfB [] [] = true →
+        (Ty.instTy 0 s t).wfB [] [] = true →
+        Synth κ Γ (.tapp e s) (Ty.instTy 0 s t)
+
   inductive Check : KEnv → TEnv → Exp → Ty → Prop where
     | sub {κ Γ e s t} :
         Synth κ Γ e s  →
@@ -118,4 +135,12 @@ mutual
         Check κ ((x, s) :: (f, .arrow s t) :: Γ)
           ((e.openVar 1 f).openVar 0 x) (t.openVar 0 x) →
         Check κ Γ (.fix e) (.arrow s t)
+
+    /-- T-TABS: check the body against the opened type, with a fresh type
+        variable of the abstraction's kind. -/
+    | tabs {κ Γ k e t a} :
+        a.2 = k →
+        a ∉ TEnv.ftv Γ ++ e.ftv ++ t.ftv →
+        Check κ Γ (e.openTv 0 a) (t.openTv 0 a) →
+        Check κ Γ (.tabs k e) (.forall k t)
 end

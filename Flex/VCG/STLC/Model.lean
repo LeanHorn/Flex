@@ -30,13 +30,23 @@ def Formula.interp (γ : REnv) : Formula → Prop
   | .ex b φ       => ∃ x : b.interp,  Formula.interp (γ.push (Val.inj b x)) φ
   | .all b φ      => ∀ x : b.interp,  Formula.interp (γ.push (Val.inj b x)) φ
 
+/-- Package a κ-argument with its sort. Arguments at a type-variable sort are
+    all tagged with one canonical sort, so that renaming type variables (opening
+    a type binder) never changes what a κ sees. Int and Bool arguments are
+    passed as is. -/
+@[simp] def Base.canonArg : (b : Base) → b.interp → (Σ b : Base, b.interp)
+  | .int,     v => ⟨.int, v⟩
+  | .bool,    v => ⟨.bool, v⟩
+  | .tbvar _, v => ⟨.tbvar 0, v⟩
+  | .tfvar _, v => ⟨.tbvar 0, v⟩
+
 /-- Interpret a refinement under `γ`. This is the *only* interpretation
     that consults the κ-assignment. -/
 def Refinement.interp (κ : KEnv) (r : Refinement) (γ : REnv) : Prop :=
   match r with
   | .fmla φ       => Formula.interp γ φ
   | .kapp kn args =>
-      κ kn (args.map (fun a => ⟨a.1, Term.interp γ a.2⟩))
+      κ kn (args.map (fun a => Base.canonArg a.1 (Term.interp γ a.2)))
   | .conj r₁ r₂   => Refinement.interp κ r₁ γ ∧ Refinement.interp κ r₂ γ
 
 /-- Interpret a syntactic constraint as a `κ`-indexed `REnv` predicate. -/
@@ -49,14 +59,14 @@ def Cstr.interp : Cstr → KEnv → REnv → Prop
 /-! ## Semantic types for type variables
 
   A type variable is interpreted by a `SemTy`: a step-indexed, downward-closed
-  predicate on (locally closed, closed) values. `Fits k` restricts the
+  predicate on (locally closed, closed, type-erased) values. `Fits k` restricts the
   interpretations of a `B`-kinded variable to the values of one base sort —
   exactly the instances λ_RF allows (refined `Int`/`Bool`). -/
 
 structure SemTy where
   rel  : Nat → Val → Prop
   mono : ∀ {j k : Nat} {v : Val}, j ≤ k → rel k v → rel j v
-  wf   : ∀ {k : Nat} {v : Val}, rel k v → Val.lc v ∧ Val.closed v
+  wf   : ∀ {k : Nat} {v : Val}, rel k v → Val.lc v ∧ Val.closed v ∧ Val.Erased v
 
 /-- `R` is a legal interpretation of a type variable of kind `k`. -/
 def SemTy.Fits (R : SemTy) : Kind → Prop
@@ -66,13 +76,13 @@ def SemTy.Fits (R : SemTy) : Kind → Prop
 /-- The interpretation used for unbound type variables (never consulted for
     well-scoped types): all locally closed, closed values. -/
 def SemTy.top : SemTy :=
-  ⟨fun _ v => Val.lc v ∧ Val.closed v, fun _ h => h, fun h => h⟩
+  ⟨fun _ v => Val.lc v ∧ Val.closed v ∧ Val.Erased v, fun _ h => h, fun h => h⟩
 
 /-- The integers, as a semantic type. Fits both kinds; the default
     interpretation of `B`-kinded type variables. -/
 def SemTy.ints : SemTy :=
   ⟨fun _ v => ∃ n, v = .iconst n, fun _ h => h,
-   fun h => by obtain ⟨n, rfl⟩ := h; exact ⟨trivial, rfl⟩⟩
+   fun h => by obtain ⟨n, rfl⟩ := h; exact ⟨trivial, rfl, trivial⟩⟩
 
 theorem SemTy.ints_fits (k : Kind) : SemTy.ints.Fits k := by
   cases k with
@@ -125,7 +135,7 @@ def TyDenote : KEnv → TyEnvSem → Nat → Ty → REnv → Val → Prop
   | κ, δ, k, .refine b r, γ, v => BaseDen δ k b v ∧ Refinement.interp κ r (γ.push v)
   | κ, δ, k, .arrow s t,  γ, v =>
       (∃ body, v = .clos body ∨ v = .fclos body) ∧
-        Val.lc v ∧ Val.closed v ∧
+        Val.lc v ∧ Val.closed v ∧ Val.Erased v ∧
         ∀ j < k, ∀ va, TyDenote κ δ j s γ va →
           ∃ body o, Val.apply v va = some body ∧ Eval j body o ∧
             ∀ vr m, o = .val vr m → TyDenote κ δ m t (γ.push va) vr
@@ -158,8 +168,8 @@ theorem TyDenote.mono {κ : KEnv} {δ : TyEnvSem} {j k : Nat} {t : Ty} {γ : REn
     exact ⟨BaseDen.mono hjk h.1, h.2⟩
   | arrow s t =>
     simp only [TyDenote] at h ⊢
-    obtain ⟨hf, hlc, hcl, hLR⟩ := h
-    exact ⟨hf, hlc, hcl, fun i hi => hLR i (by omega)⟩
+    obtain ⟨hf, hlc, hcl, her, hLR⟩ := h
+    exact ⟨hf, hlc, hcl, her, fun i hi => hLR i (by omega)⟩
   | «forall» kd t ih =>
     simp only [TyDenote] at h ⊢
     exact fun R hR => ih (h R hR)

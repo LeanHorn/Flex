@@ -26,12 +26,13 @@ end STLC
     by `Ty.skel` (preserved under `openVar`). Takes `Γ` so the fresh name
     for the arrow / base cases is picked away from the context domain. -/
 def sub (Γ : TEnv) : Ty → Ty → Option Cstr
-  | .refine .int  r₁, .refine .int  r₂ =>
-      let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ r₁.fv ++ r₂.fv)
-      some (.all x .int (.imp (r₁.openBVar 0 x) (.head (r₂.openBVar 0 x))))
-  | .refine .bool r₁, .refine .bool r₂ =>
-      let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ r₁.fv ++ r₂.fv)
-      some (.all x .bool (.imp (r₁.openBVar 0 x) (.head (r₂.openBVar 0 x))))
+  | .refine b₁ r₁, .refine b₂ r₂ =>
+      if b₁ = b₂ then
+        let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ r₁.fv ++ r₂.fv)
+        -- `∀x:b. r₁[x] ⇒ r₂[x]`; sorts without a model hypothesis (⋆-kinded
+        -- type variables) bind nothing — see `implyBindCstr`.
+        some (implyBindCstr x (.refine b₁ r₁) (.head (r₂.openBVar 0 x)))
+      else none
   | .arrow s₁ t₁, .arrow s₂ t₂ =>
       let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ
                             ++ s₁.fv ++ s₂.fv ++ t₁.fv ++ t₂.fv)
@@ -39,12 +40,17 @@ def sub (Γ : TEnv) : Ty → Ty → Option Cstr
       | some c₁, some c₂ =>
           some (.conj c₁ (implyBindCstr x s₂ c₂))
       | _, _ => none
+  | .forall k₁ t₁, .forall k₂ t₂ =>
+      if k₁ = k₂ then
+        let a := TVar.fresh (t₁.ftv ++ t₂.ftv) k₁
+        sub Γ (t₁.openTv 0 a) (t₂.openTv 0 a)
+      else none
   | _, _ => none
 termination_by s t => s.skel + t.skel
 decreasing_by all_goals
   first
-    | (simp_wf; simp only [Ty.skel, Ty.skel_openVar]; omega)
-    | (simp only [Ty.skel, Ty.skel_openVar]; omega)
+    | (simp_wf; simp only [Ty.skel, Ty.skel_openVar, Ty.skel_openTv]; omega)
+    | (simp only [Ty.skel, Ty.skel_openVar, Ty.skel_openTv]; omega)
     | omega
 
 mutual
@@ -85,6 +91,14 @@ mutual
         | some (.refine .bool _), some (.refine .bool _) =>
             some (Cstr.triv, <ty| Bool{ν : ν = x ∧ y} |>)
         | _, _ => none
+    | .tapp e s =>
+        match synth Γ e with
+        | some (c, .forall k t) =>
+            if Kind.le s.kindOf k ∧ (Ty.forall k t).wfB [] [] = true ∧ s.wfB [] [] = true ∧
+                (Ty.instTy 0 s t).wfB [] [] = true then
+              some (c, Ty.instTy 0 s t)
+            else none
+        | _ => none
     | _ => none
   termination_by e => 2 * e.skel
   decreasing_by all_goals
@@ -107,6 +121,11 @@ mutual
                 ((e.openVar 1 f).openVar 0 x) (t.openVar 0 x) with
         | some c => some (implyBindCstr x s c)
         | none   => none
+    | .tabs k e, .forall k' t =>
+        if k = k' then
+          let a := TVar.fresh (TEnv.ftv Γ ++ e.ftv ++ t.ftv) k
+          check Γ (e.openTv 0 a) (t.openTv 0 a)
+        else none
     | .letin e₁ e₂, t =>
         match synth Γ e₁ with
         | some (c₁, s) =>
@@ -146,7 +165,7 @@ mutual
         | none => none
   termination_by e _ => 2 * e.skel + 1
   decreasing_by all_goals
-    (first | (simp only [Exp.skel, Exp.skel_openVar]; omega) | omega)
+    (first | (simp only [Exp.skel, Exp.skel_openVar, Exp.skel_openTv]; omega) | omega)
 end
 
 /-- Top-level: produce a closed Lean `Prop` (parameterized by a κ-assignment)

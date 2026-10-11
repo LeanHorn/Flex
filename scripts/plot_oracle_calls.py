@@ -79,10 +79,12 @@ def per_call_rows(records: list[Record]) -> list[tuple[str, dict[str, float], in
             if calls:
                 med = {k: statistics.median(c[k] for c in calls) for k in ("mono", "other", "solve")}
                 rows.append((f"{case} · flex_auto, {outcome}", med, len(calls)))
-        lean = [c["total_ms"] for r in measured(records, case, LEAN_CONFIG)
-                for c in r["calls"] if c["oracle"] == "lean"]
-        if lean:
-            rows.append((f"{case} · Lean oracle", {"lean": statistics.median(lean)}, len(lean)))
+        for outcome in ("proved", "refuted"):
+            lean = [c["total_ms"] for r in measured(records, case, LEAN_CONFIG)
+                    for c in r["calls"] if c["oracle"] == "lean" and c["outcome"] == outcome]
+            if lean:
+                rows.append((f"{case} · Lean oracle, {outcome}",
+                             {"lean": statistics.median(lean)}, len(lean)))
     return rows
 
 
@@ -165,7 +167,7 @@ def main() -> None:
             ax_call.text(args.xmax * 0.985, y, text, va="center", ha="right",
                          color="white", fontsize=11, fontweight="bold")
         else:
-            ax_call.text(end + 0.8, y, text, va="center", color=INK, fontsize=11)
+            ax_call.text(end + args.xmax * 0.01, y, text, va="center", color=INK, fontsize=11)
     ax_call.set_yticks(range(len(calls)), [label for label, _, _ in calls])
     style_axis(ax_call, args.xmax, "median ms per call")
     ax_call.set_title(f"Per query: one z3 process, each query scoped by {args.scoping}",

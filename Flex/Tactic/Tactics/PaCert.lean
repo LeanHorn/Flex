@@ -7,6 +7,7 @@ import Flex.Tactic.Utils
 import Flex.PA.Fixpoint
 import Flex.PA.Cert
 import Flex.PA.Scrape
+import Flex.Tactic.Oracles.Stats
 
 open Lean Elab Meta Tactic
 
@@ -141,6 +142,7 @@ elab_rules : tactic
     let proofOracle ← match proof with
       | none => pure oracle
       | some tac => pure (withPAPriority (← `(tactic| ($tac:tacticSeq))) trust)
+    Flex.OracleStats.reset
     paCertImpl synthOracle { mode, defs } (some proofOracle)
     benchFixPhase "residual" do
       let mut remaining := []
@@ -151,3 +153,6 @@ elab_rules : tactic
           | none => pure false
         unless closed do remaining := remaining ++ [goal]
       setGoals remaining
+    if flex.benchOracles.get (← getOptions) then
+      for (key, ns, count) in ← Flex.OracleStats.snapshot do
+        IO.println s!"FIX_ORACLE_STAT {key} ns={ns} count={count}"

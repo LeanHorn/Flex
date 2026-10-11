@@ -1,6 +1,7 @@
 import Lean
 import Aesop
 import Flex.Tactic.Utils
+import Flex.Tactic.Oracles.Stats
 
 open Lean Meta Elab Tactic
 
@@ -62,6 +63,8 @@ def proveLeafWith (tac : TSyntax `tactic) (goal : Expr)
     Used by `walkPAProof` to build the certificate, and by `checkExprVC` on
     whole clauses. `proveLeafWith` introduces any remaining binders. -/
 def proveLeaf (goal : Expr) : TermElabM (Option Expr) := do
+  Flex.OracleStats.reportCall ((← getOptions).getBool `flex.benchOracles) "lean"
+    (fun r => if r.isSome then "proved" else "refuted") do
   proveLeafWith (← `(tactic| pa_oracle)) goal
 
 /-- Try the existing Lean oracle first, then an optional imported tactic.

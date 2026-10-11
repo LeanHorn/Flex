@@ -58,11 +58,14 @@ def memoVC : Prop := ∃ k : Int → Int → Prop,
     }
 
 
-CONFIGS = ["lean", "lean_auto_fallback", "auto_synth", "smt_proof", "auto_synth_smt_proof"]
+CONFIGS = ["lean", "lean_auto_fallback", "auto_synth", "smt_proof", "auto_synth_smt_proof",
+           "lean_auto_fallback_stock", "auto_synth_stock"]
 
 
 def tactic(case, config):
     auto = "flex_auto " + case["auto"]
+    # Stock lean-auto pipeline: fresh z3 per query, full monomorphization.
+    stock = "flex_auto_stock " + case["auto"]
     smt = "smt (timeout := some 1) " + case["smt"]
     routes = {
         "lean": "",
@@ -70,6 +73,8 @@ def tactic(case, config):
         "auto_synth": f"(synth := {auto})",
         "smt_proof": f"(proof := {smt})",
         "auto_synth_smt_proof": f"(synth := {auto}) (proof := {smt})",
+        "lean_auto_fallback_stock": f"(oracle := {stock})",
+        "auto_synth_stock": f"(synth := {stock})",
     }
     return f"fix {case['options']} {routes[config]}"
 
@@ -101,6 +106,14 @@ def run_one(prelude, case, config, timeout):
         result["success"] = result["success"] and proc.returncode == 0 and not timed_out
         result["phases_ms"] = {phase: int(ns) / 1e6 for phase, ns in
                                re.findall(r"^FIX_PHASE (\w+) ns=(\d+)$", output, re.MULTILINE)}
+        result["oracle_stats"] = {key: {"ms": int(ns) / 1e6, "count": int(n)} for key, ns, n in
+                                  re.findall(r"^FIX_ORACLE_STAT (\S+) ns=(\d+) count=(\d+)$",
+                                             output, re.MULTILINE)}
+        result["calls"] = [
+            {"oracle": oracle, "outcome": outcome, "total_ms": int(total) / 1e6,
+             **{k: int(v) / 1e6 for k, v in re.findall(r"(\S+)=(\d+)", rest)}}
+            for oracle, outcome, total, rest in re.findall(
+                r"^ORACLE_CALL oracle=(\S+) outcome=(\S+) total=(\d+)(.*)$", output, re.MULTILINE)]
         counts = re.search(r"FIX_CANDIDATES initial=(\d+) surviving=(\d+)", output)
         if counts:
             result["candidates"] = {"initial": int(counts[1]), "surviving": int(counts[2])}

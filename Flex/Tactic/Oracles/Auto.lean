@@ -32,6 +32,11 @@ register_option flex.auto.shareSolver : Bool := {
   descr := "flex_auto: reuse one z3 process across queries instead of spawning one per query."
 }
 
+register_option flex.auto.dumpDir : String := {
+  defValue := ""
+  descr := "flex_auto: if set, write each shared-solver query and its answer to this directory."
+}
+
 register_option flex.auto.fastMono : Bool := {
   defValue := true
   descr := "flex_auto: skip monomorphization saturation when all lemmas are already monomorphic."
@@ -160,7 +165,14 @@ def reifAndQuery (uvalids uinhs : Array UMonoFact) (minds : Array (Array SimpleI
   let unsat ← OracleStats.time "auto.solver" do
     if flex.auto.shareSolver.get opts then
       let timeoutMs := auto.smt.timeout.get opts * 1000
-      pure ((← queryShared commands timeoutMs) == some "unsat")
+      let answer ← queryShared commands timeoutMs
+      let dir := flex.auto.dumpDir.get opts
+      unless dir.isEmpty do
+        let n := ((← sessionRef.get).map (·.queries)).getD 0
+        let body := commands.foldl (fun acc c => acc ++ s!"{c}\n") ""
+        IO.FS.createDirAll dir
+        IO.FS.writeFile s!"{dir}/q{n}.smt2" s!"; answer: {answer}\n{body}(check-sat)\n"
+      pure (answer == some "unsat")
     else
       pure (← Solver.SMT.querySolver commands).isSome
   unless unsat do throwError "flex_auto :: SMT solver did not prove the goal"

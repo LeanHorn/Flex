@@ -29,4 +29,6 @@ liquid-fixpoint-develop
 
 literature/
 docs/
-eval/oracle_results.jsoneval/scratch/
+eval/oracle_results.json
+eval/scratch/
+eval/tmp*.lean

@@ -137,9 +137,12 @@ def main() -> None:
     smax = max(total for *_, total in synth) * 1.25
     colors = {**COLORS, "flex": COLORS["solve"], "rest": REST}
     for y, (label, med, total) in enumerate(synth):
-        draw_stacked(ax_s, y, [(k, med[k]) for k in ("flex", "lean", "spawn", "rest")], 0.56,
-                     colors=colors)
-        ax_s.text(total + smax * 0.01, y, f"{total:.0f} ms", va="center", color=INK, fontsize=11)
+        # Segments are medians of their own, so the stack can differ from the
+        # median total slightly; anchor the label at whichever ends later.
+        end = draw_stacked(ax_s, y, [(k, med[k]) for k in ("flex", "lean", "spawn", "rest")],
+                           0.56, colors=colors)
+        ax_s.text(max(end, total) + smax * 0.01, y, f"{total:.0f} ms", va="center",
+                  color=INK, fontsize=11)
     ax_s.set_yticks(range(len(synth)), [label for label, _, _ in synth])
     style_axis(ax_s, smax, "median ms of the synthesis phase per run")
     ax_s.set_title("Whole synthesis phase: where the time goes", loc="left", color=INK,

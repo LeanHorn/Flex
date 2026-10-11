@@ -35,3 +35,4 @@ eval/tmp*.lean
 eval/oracle_results_shared.json
 eval/oracle_results_reset.json
 eval/oracle_results_pushpop.json
+eval/oracle_results_batch.json

@@ -59,7 +59,7 @@ def memoVC : Prop := ∃ k : Int → Int → Prop,
 
 
 CONFIGS = ["lean", "lean_auto_fallback", "auto_synth", "smt_proof", "auto_synth_smt_proof",
-           "lean_auto_fallback_stock", "auto_synth_stock"]
+           "lean_auto_fallback_stock", "auto_synth_stock", "auto_synth_per_query"]
 
 
 def tactic(case, config):
@@ -75,8 +75,11 @@ def tactic(case, config):
         "auto_synth_smt_proof": f"(synth := {auto}) (proof := {smt})",
         "lean_auto_fallback_stock": f"(oracle := {stock})",
         "auto_synth_stock": f"(synth := {stock})",
+        "auto_synth_per_query": f"(synth := {auto})",
     }
-    return f"fix {case['options']} {routes[config]}"
+    # Per-clause batching off: one flex_auto call per query, as before batching.
+    prefix = "set_option flex.auto.batchClauses false in " if config == "auto_synth_per_query" else ""
+    return f"{prefix}fix {case['options']} {routes[config]}"
 
 
 def run_one(prelude, case, config, timeout):
@@ -109,11 +112,21 @@ def run_one(prelude, case, config, timeout):
         result["oracle_stats"] = {key: {"ms": int(ns) / 1e6, "count": int(n)} for key, ns, n in
                                   re.findall(r"^FIX_ORACLE_STAT (\S+) ns=(\d+) count=(\d+)$",
                                              output, re.MULTILINE)}
-        result["calls"] = [
-            {"oracle": oracle, "outcome": outcome, "total_ms": int(total) / 1e6,
-             **{k: int(v) / 1e6 for k, v in re.findall(r"(\S+)=(\d+)", rest)}}
-            for oracle, outcome, total, rest in re.findall(
-                r"^ORACLE_CALL oracle=(\S+) outcome=(\S+) total=(\d+)(.*)$", output, re.MULTILINE)]
+        # Calls print when they finish and each FIX_PHASE line when its phase
+        # ends, so a call belongs to the first phase reported after it.
+        result["calls"] = []
+        pending = []
+        for line in output.splitlines():
+            if m := re.match(r"ORACLE_CALL oracle=(\S+) outcome=(\S+) total=(\d+)(.*)$", line):
+                oracle, outcome, total, rest = m.groups()
+                pending.append({"oracle": oracle, "outcome": outcome, "total_ms": int(total) / 1e6,
+                                **{k: int(v) / 1e6 for k, v in re.findall(r"(\S+)=(\d+)", rest)}})
+            elif m := re.match(r"FIX_PHASE (\w+) ns=", line):
+                for call in pending:
+                    call["phase"] = m[1]
+                result["calls"] += pending
+                pending = []
+        result["calls"] += pending
         counts = re.search(r"FIX_CANDIDATES initial=(\d+) surviving=(\d+)", output)
         if counts:
             result["candidates"] = {"initial": int(counts[1]), "surviving": int(counts[2])}

@@ -124,12 +124,14 @@ def style_axis(ax: plt.Axes, xmax: float, xlabel: str) -> None:
     ax.set_xlabel(xlabel, color=INK, fontsize=11)
 
 
-def draw_stacked(ax: plt.Axes, y: int, parts: list[tuple[str, float]], height: float) -> float:
+def draw_stacked(ax: plt.Axes, y: int, parts: list[tuple[str, float]], height: float,
+                 colors: dict[str, str] | None = None) -> float:
+    colors = colors or COLORS
     left = 0.0
     for key, width in parts:
         if width <= 0:
             continue
-        ax.barh(y, width, left=left, height=height, color=COLORS[key],
+        ax.barh(y, width, left=left, height=height, color=colors[key],
                 edgecolor=SURFACE, linewidth=1.5)
         left += width
     return left

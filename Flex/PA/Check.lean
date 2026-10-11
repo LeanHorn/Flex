@@ -119,14 +119,6 @@ def ofOracle (oracle : PAOracle) : PASynthOracle where
     if (← oracle vacuity).isSome then return none
     return some (← candidates.mapM fun vc => return (← oracle vc).isSome)
 
-/-- External first, Lean on whatever it does not establish (`withPAPriority`). -/
-def priority (ext : PASynthOracle) (lean : PAOracle := proveLeaf) : PASynthOracle where
-  checkClause vacuity candidates := do
-    let some extOk ← ext.checkClause vacuity candidates | return none
-    if (← lean vacuity).isSome then return none
-    return some (← (candidates.zip extOk).mapM fun (vc, ok) =>
-      if ok then pure true else return (← lean vc).isSome)
-
 /-- Lean first, external on whatever Lean does not establish (`withPAFallback`).
     The external oracle still decides vacuity when Lean cannot, as before. -/
 def fallback (ext : PASynthOracle) (lean : PAOracle := proveLeaf) : PASynthOracle where

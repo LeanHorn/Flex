@@ -13,7 +13,7 @@ open Lean Meta Elab Tactic Auto Embedding.Lam
   do not depend on the query:
 
   * **A fresh solver process.** `Auto.Solver.SMT.querySolver` spawns `z3` for
-    every call. Here one `z3 -in` process is kept per Lean process and reused;
+    every call. Here `z3 -in` processes are pooled and reused (normally one);
     each query runs in a `(push)`/`(pop)` scope so no state leaks between
     queries, and a `:timeout` option replaces the process-wide `-T`.
   * **Monomorphization saturation.** PA queries are first-order facts over
@@ -56,16 +56,22 @@ register_option flex.auto.fastMono : Bool := {
 
 namespace Flex.AutoOracle
 
-/-! ## Shared solver session -/
+/-! ## Shared solver sessions
+
+  z3 processes are kept in a pool and reused. An oracle call checks one out
+  for its whole exchange (a per-clause batch holds it across its scopes) and
+  returns it afterwards, so concurrent elaboration (`Elab.async` runs theorem
+  bodies in parallel) never interleaves on one pipe. A process is spawned only
+  when all pooled ones are in use; sequential elaboration uses exactly one. -/
 
 abbrev Z3Proc := IO.Process.Child ⟨.piped, .piped, .null⟩
 
 structure Session where
   proc      : Z3Proc
-  queries   : Nat
+  queries   : Nat := 0
   timeoutMs : Option Nat := none
 
-initialize sessionRef : IO.Ref (Option Session) ← IO.mkRef none
+initialize poolRef : IO.Ref (Array Session) ← IO.mkRef #[]
 
 /-- Spawn z3 and wait until it answers, so start-up cost is measured here
     (`auto.spawn`) rather than in the first query. -/
@@ -79,45 +85,50 @@ private def spawnZ3 : IO Z3Proc := OracleStats.time "auto.spawn" do
     throw <| IO.userError s!"flex_auto: unexpected z3 start-up output: {line}"
   return proc
 
-private def dropSession : IO Unit := do
-  if let some s ← sessionRef.get then
-    try s.proc.kill catch _ => pure ()
-  sessionRef.set none
+abbrev SessionM := StateT Session IO
 
-/-- Write a script to the shared z3 process and collect answers. `build`
+/-- Run `k` with exclusive use of a pooled z3 process. A process whose
+    exchange failed is killed rather than returned, since its state is unknown. -/
+def withSession {α : Type} (k : SessionM α) : IO α := do
+  let pooled ← poolRef.modifyGet fun pool => (pool.back?, pool.pop)
+  let s ← match pooled with
+    | some s => pure s
+    | none => pure { proc := ← spawnZ3 }
+  try
+    let (a, s) ← k.run s
+    poolRef.modify (·.push s)
+    return a
+  catch e =>
+    try s.proc.kill catch _ => pure ()
+    throw e
+
+/-- Write a script to the session's z3 process and collect answers. `build`
     receives a tag unique to this exchange and returns the script and the
     markers it echoes, in order; for each marker the result is the last
     `check-sat` answer printed before it. Echoed markers keep reads aligned even
-    if z3 prints error lines. A dead process is replaced on next use. -/
+    if z3 prints error lines. -/
 def exchange (timeoutMs : Nat) (build : String → String × Array String)
-    : IO (Array (Option String)) := do
-  let s ← match ← sessionRef.get with
-    | some s => pure s
-    | none => pure { proc := ← spawnZ3, queries := 0 }
-  sessionRef.set (some s)
+    : SessionM (Array (Option String)) := do
+  let s ← get
   let (script, markers) := build s!"flex-{s.queries}"
-  try
-    let pre := if s.timeoutMs == some timeoutMs then ""
-      else s!"(set-option :timeout {timeoutMs})\n"
-    s.proc.stdin.putStr (pre ++ script)
-    s.proc.stdin.flush
-    let mut answers := #[]
-    for marker in markers do
-      let mut answer := none
-      repeat
-        let line ← s.proc.stdout.getLine
-        if line.isEmpty then
-          throw <| IO.userError "flex_auto: z3 exited unexpectedly"
-        let line := line.trimAscii.toString
-        if line == marker then break
-        if line == "sat" || line == "unsat" || line == "unknown" then
-          answer := some line
-      answers := answers.push answer
-    sessionRef.set (some { s with queries := s.queries + 1, timeoutMs := some timeoutMs })
-    return answers
-  catch e =>
-    dropSession
-    throw e
+  let pre := if s.timeoutMs == some timeoutMs then ""
+    else s!"(set-option :timeout {timeoutMs})\n"
+  s.proc.stdin.putStr (pre ++ script)
+  s.proc.stdin.flush
+  let mut answers := #[]
+  for marker in markers do
+    let mut answer := none
+    repeat
+      let line ← s.proc.stdout.getLine
+      if line.isEmpty then
+        throw <| IO.userError "flex_auto: z3 exited unexpectedly"
+      let line := line.trimAscii.toString
+      if line == marker then break
+      if line == "sat" || line == "unsat" || line == "unknown" then
+        answer := some line
+    answers := answers.push answer
+  set { s with queries := s.queries + 1, timeoutMs := some timeoutMs }
+  return answers
 
 def render (cmds : Array IR.SMT.Command) : String :=
   cmds.foldl (fun acc c => acc ++ s!"{c}\n") ""
@@ -126,9 +137,11 @@ def render (cmds : Array IR.SMT.Command) : String :=
     declarations and assertions. `(reset)` would too, but costs ~4 ms per query
     against ~0.2 ms. -/
 def queryShared (cmds : Array IR.SMT.Command) (timeoutMs : Nat) : IO (Option String) := do
-  let answers ← exchange timeoutMs fun tag =>
+  let answers ← withSession <| exchange timeoutMs fun tag =>
     (s!"(push)\n{render cmds}(check-sat)\n(pop)\n(echo \"{tag}\")\n", #[tag])
   return answers[0]!
+
+initialize dumpCounter : IO.Ref Nat ← IO.mkRef 0
 
 /-! ## Monomorphization fast path -/
 
@@ -202,7 +215,7 @@ def reifAndQuery (uvalids uinhs : Array UMonoFact) (minds : Array (Array SimpleI
       let answer ← queryShared commands timeoutMs
       let dir := flex.auto.dumpDir.get opts
       unless dir.isEmpty do
-        let n := ((← sessionRef.get).map (·.queries)).getD 0
+        let n ← dumpCounter.modifyGet fun n => (n, n + 1)
         IO.FS.createDirAll dir
         IO.FS.writeFile s!"{dir}/q{n}.smt2" s!"; answer: {answer}\n{render commands}(check-sat)\n"
       pure (answer == some "unsat")
@@ -325,23 +338,26 @@ def checkClause (hs : TSyntax ``Auto.hints) (us : Array (TSyntax ``Auto.uord))
           (translateClause goals.size s.facts s.inhTys s.inds).run' { u := u })
         (orderPreserving := true)
     let timeoutMs := auto.smt.timeout.get (← getOptions) * 1000
-    OracleStats.time "auto.solver" do
+    let ids := (List.range goalCmds.size).toArray.filter (!goalCmds[·]!.isEmpty)
+    -- One session for the whole clause: the context scope stays open across
+    -- both exchanges.
+    let answers? ← OracleStats.time "auto.solver" <| withSession do
       let guard ← exchange timeoutMs fun tag =>
         (s!"(push)\n{render shared}(check-sat)\n(echo \"{tag}\")\n", #[tag])
       if guard[0]! == some "unsat" then
         discard <| exchange timeoutMs fun _ => ("(pop)\n", #[])
         return none
-      let ids := (List.range goalCmds.size).toArray.filter (!goalCmds[·]!.isEmpty)
-      let answers ← exchange timeoutMs fun tag =>
+      some <$> exchange timeoutMs fun tag =>
         let checks := ids.foldl (init := "") fun acc i =>
           acc ++ s!"(push)\n{render goalCmds[i]!}(check-sat)\n(pop)\n(echo \"{tag}-{i}\")\n"
         (checks ++ s!"(pop)\n(echo \"{tag}\")\n", (ids.map (s!"{tag}-{·}")).push tag)
-      let mut ok := Array.replicate goalCmds.size false
-      for (i, answer) in ids.zip answers do
-        ok := ok.set! i (answer == some "unsat")
-      trace[flex.oracle] "flex_auto batch: {goals.size} candidates, untranslated \
-        {(List.range goalCmds.size).filter (goalCmds[·]!.isEmpty)}, answers {answers}"
-      return some ok
+    let some answers := answers? | return none
+    let mut ok := Array.replicate goalCmds.size false
+    for (i, answer) in ids.zip answers do
+      ok := ok.set! i (answer == some "unsat")
+    trace[flex.oracle] "flex_auto batch: {goals.size} candidates, untranslated \
+      {(List.range goalCmds.size).filter (goalCmds[·]!.isEmpty)}, answers {answers}"
+    return some ok
 
 end Flex.AutoOracle
 
@@ -349,8 +365,9 @@ end Flex.AutoOracle
     Solver timeout uses `auto.smt.timeout`; the solver is always z3. Accepts
     auto's hypothesis and definition hints, e.g. `[*] d[fib]`.
 
-    Use `fix (synth := flex_auto)` to prefer it during candidate checking,
-    or `fix (oracle := flex_auto)` as a Lean-first fallback for all phases.
+    Use `fix (synth := flex_auto)` for pure-SMT candidate checking (z3's
+    verdicts are final), or `fix (oracle := flex_auto)` as a Lean-first
+    fallback for all phases.
     Successful SMT calls use lean-auto's `autoSMTSorry` axiom; a separate proof
     oracle rebuilds the certificate without those synthesis proof terms. -/
 syntax (name := flexAuto) "flex_auto" hints uord* : tactic

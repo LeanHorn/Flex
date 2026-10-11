@@ -103,11 +103,14 @@ syntax "pa_cert" : tactic
 elab_rules : tactic
   | `(tactic| pa_cert) => paCertImpl
 
-/-- `oracle` preserves the legacy Lean-first fallback for every phase.
-    `synth` and `proof` independently override it with an external-first oracle
-    for weakening and proof construction respectively. Each falls back to Lean.
-    Evidence from synthesis is discarded; only the proof oracle enters the
-    resulting certificate. External tactics require their package imports. -/
+/-- `synth` chooses the synthesis (weakening) oracle: the given tactic alone,
+    with no Lean retry. Only `unsat`/a closed goal counts as valid, so
+    `synth := flex_auto` is pure SMT. Without `synth`, weakening uses the Lean
+    oracle (or `oracle`, below). Evidence from synthesis is discarded; only the
+    proof oracle enters the resulting certificate.
+    `proof` prefers its tactic for certificate leaves and residual goals,
+    falling back to Lean. `oracle` is the legacy Lean-first fallback for every
+    phase not overridden. External tactics require their package imports. -/
 syntax "fix" (atomic("(" &"scrape" ":=") ident ")")?
   (atomic("(" &"defs" ":=") "[" ident,* "]" ")")?
   (atomic("(" &"oracle" ":=") tacticSeq ")")?
@@ -138,9 +141,10 @@ elab_rules : tactic
       | none => pure proveLeaf
       | some tac => pure (withPAFallback (← `(tactic| ($tac:tacticSeq))) trust)
     -- Weakening asks per clause visit; a batched backend (e.g. `flex_auto`)
-    -- answers all of a clause's queries from one translation.
+    -- answers all of a clause's queries from one translation. `synth` is that
+    -- oracle alone: its verdicts are final.
     let synthOracle ← match synth, fallback with
-      | some tac, _ => pure (PASynthOracle.priority (← PASynthOracle.ofTactic tac trust))
+      | some tac, _ => PASynthOracle.ofTactic tac trust
       | none, some tac => pure (PASynthOracle.fallback (← PASynthOracle.ofTactic tac trust))
       | none, none => pure (.ofOracle proveLeaf)
     let proofOracle ← match proof with

@@ -23,9 +23,15 @@ open Lean Meta Elab Tactic Auto Embedding.Lam
     instance map the later translation needs. Otherwise it uses lean-auto's
     full monomorphization.
 
+  * **One translation per query.** As a synthesis oracle, `flex_auto` gets
+    a whole clause visit at once (`PASynthOracle`): the sat-guard and every
+    candidate share binders and hypotheses, so they are translated together
+    and checked in one solver scope (see "Per-clause batches" below).
+
   The translation (reification, verified preprocessing, `lamFOL2SMT`) is
-  lean-auto's own. Options `flex.auto.shareSolver` and `flex.auto.fastMono`
-  restore the stock behaviour of each part, for comparison.
+  lean-auto's own. Options `flex.auto.shareSolver`, `flex.auto.fastMono` and
+  `flex.auto.batchClauses` restore the stock behaviour of each part, for
+  comparison.
 -/
 
 register_option flex.auto.shareSolver : Bool := {

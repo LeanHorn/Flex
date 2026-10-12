@@ -49,11 +49,12 @@ inductive Subtyp : DEnv → KEnv → TEnv → Ty → Ty → Prop where
       Subtyp de κ ((x, s₁) :: Γ) (t₁.openVar 0 x) (t₂.openVar 0 x) →
       Subtyp de κ Γ (.prod s₁ t₁) (.prod s₂ t₂)
 
-  /-- Datatypes: the same datatype, with each type argument equivalent
-      (invariance — sound regardless of how the parameters are used). -/
+  /-- Datatypes: the same datatype, with each type argument related according
+      to the parameter's declared variance (covariant: `<:`; contravariant:
+      `:>`; invariant: both). -/
   | data {de κ Γ C n args₁ args₂} :
-      (∀ i, Subtyp de κ Γ (args₁ i) (args₂ i)) →
-      (∀ i, Subtyp de κ Γ (args₂ i) (args₁ i)) →
+      (∀ i : Fin n, de.var C i.val ≠ .contra → Subtyp de κ Γ (args₁ i) (args₂ i)) →
+      (∀ i : Fin n, de.var C i.val ≠ .co → Subtyp de κ Γ (args₂ i) (args₁ i)) →
       Subtyp de κ Γ (.data C n args₁) (.data C n args₂)
 
 /-! ## Bidirectional typing -/

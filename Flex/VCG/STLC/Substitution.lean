@@ -301,7 +301,8 @@ def Exp.WFBVars : Exp → Prop
   | .tapp e _     => Exp.WFBVars e
   | .pair e₁ e₂   => Exp.WFBVars e₁ ∧ Exp.WFBVars e₂
   | .split e₁ e₂  => Exp.WFBVars e₁ ∧ Exp.WFBVars e₂
-  | .ctor _ _ τs e => (∀ τ ∈ τs, Ty.WFBVars τ) ∧ Exp.WFBVars e
+  -- instances are checked by `DEnv.instOK` (after opening) instead
+  | .ctor _ _ _ e  => Exp.WFBVars e
   | .case e _ alts => Exp.WFBVars e ∧ ∀ j, Exp.WFBVars (alts j)
 
 theorem TEnv.WFBVars.empty : TEnv.WFBVars [] := by intros x t h ; trivial
@@ -1105,7 +1106,8 @@ def Exp.openVar (k : Nat) (x : EVar) : Exp → Exp
   | .tapp e t      => .tapp (e.openVar k x) (t.openVar k x)
   | .pair e₁ e₂    => .pair (e₁.openVar k x) (e₂.openVar k x)
   | .split e₁ e₂   => .split (e₁.openVar k x) (e₂.openVar (k+2) x)
-  | .ctor C j τs e => .ctor C j τs (e.openVar k x)
+  -- the instance may mention enclosing term binders: open them too
+  | .ctor C j τs e => .ctor C j (τs.map (Ty.openVar k x)) (e.openVar k x)
   | .case e n alts => .case (e.openVar k x) n (fun j => (alts j).openVar (k+1) x)
 
 /-- Structural skeleton size: counts constructor depth, ignoring leaf details
@@ -1199,11 +1201,6 @@ theorem Exp.WFBVars_openTv (e : Exp) (k : Nat) (a : TVar) (h : Exp.WFBVars e) :
   | ann e t ih =>
     simp only [Exp.WFBVars, Exp.openTv] at h ⊢
     exact ⟨Ty.WFBVars_openTv t k a h.1, ih k h.2⟩
-  | ctor C j τs e ih =>
-    simp only [Exp.WFBVars, Exp.openTv, List.mem_map] at h ⊢
-    refine ⟨?_, ih k h.2⟩
-    rintro _ ⟨τ, hτ, rfl⟩
-    exact Ty.WFBVars_openTv τ k a (h.1 τ hτ)
   | _ => simp_all [Exp.WFBVars, Exp.openTv]
 
 @[simp] theorem Exp.lc_at_openTv (k : Nat) (a : TVar) (e : Exp) (n : Nat) :
@@ -1251,7 +1248,8 @@ def Exp.substEnv (γ : REnv) : Exp → Exp
   | .tapp e _     => .tapp (Exp.substEnv γ e) (.refine .int (.fmla .tt))
   | .pair e₁ e₂   => .pair (Exp.substEnv γ e₁) (Exp.substEnv γ e₂)
   | .split e₁ e₂  => .split (Exp.substEnv γ e₁) (Exp.substEnv γ e₂)
-  | .ctor C j τs e => .ctor C j τs (Exp.substEnv γ e)
+  -- types are erased before running, so the closing substitution drops instances
+  | .ctor C j _ e  => .ctor C j [] (Exp.substEnv γ e)
   | .case e n alts => .case (Exp.substEnv γ e) n (fun j => Exp.substEnv γ (alts j))
 
 /-- Free type variables of the type annotations in an expression. -/
@@ -1519,7 +1517,7 @@ theorem Exp.substEnv_tapp (γ : REnv) (e : Exp) (t : Ty) :
     Exp.substEnv γ (.tapp e t) = .tapp (Exp.substEnv γ e) (.refine .int (.fmla .tt)) := rfl
 
 /-- A closed expression is fixed, up to erasure, under the closing substitution
-    (which drops type-application instances). -/
+    (which drops type-application and constructor instances). -/
 theorem Exp.substEnv_closed (γ : REnv) (e : Exp) (he : e.fv = []) :
     (Exp.substEnv γ e).erase = e.erase := by
   induction e with
@@ -2323,27 +2321,41 @@ theorem DEnv.instOK_payload_wfB {de : DEnv} {C : String} {τs : List Ty} {j : Na
   have := Ty.instTysOK_wfB (hctors c (List.mem_of_getElem? hc))
   simpa using this
 
+theorem List.mem_of_lookup_eq_some' {β : Type} :
+    ∀ {l : List (String × β)} {a : String} {b : β}, l.lookup a = some b → (a, b) ∈ l
+  | [], _, _, h => by simp at h
+  | (a', b') :: tl, a, b, h => by
+    simp only [List.lookup] at h
+    by_cases ha : a = a'
+    · subst ha
+      simp only [beq_self_eq_true, Option.some.injEq] at h
+      subst h; simp
+    · have hne : (a == a') = false := by simp [ha]
+      simp only [hne] at h
+      exact List.mem_cons_of_mem _ (List.mem_of_lookup_eq_some' h)
+
+/-- The declaration and payload behind a successful `payload?` lookup. -/
+theorem DEnv.payload?_mem {de : DEnv} {C : String} {j : Nat} {P : Ty}
+    (hP : de.payload? C j = some P) :
+    ∃ d c, de.decl? C = some d ∧ (C, d) ∈ de ∧ c ∈ d.ctors ∧ c.2 = P := by
+  simp only [DEnv.payload?, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hP
+  obtain ⟨d, hd, c, hc, rfl⟩ := hP
+  exact ⟨d, c, hd, List.mem_of_lookup_eq_some' hd, List.mem_of_getElem? hc, rfl⟩
+
+theorem DEnv.wfB_payload_all {de : DEnv} (h : de.wfB = true) {C : String} {j : Nat} {P : Ty}
+    (hP : de.payload? C j = some P) :
+    ∃ d, de.decl? C = some d ∧ P.fv = [] ∧ P.ftv = [] ∧ Ty.varOK de d.variances 0 .pos P = true := by
+  obtain ⟨d, c, hd, hmem, hc, rfl⟩ := DEnv.payload?_mem hP
+  simp only [DEnv.wfB, List.all_eq_true] at h
+  have := h (C, d) hmem c hc
+  simp only [Bool.and_eq_true, List.isEmpty_iff] at this
+  exact ⟨d, hd, this.1.1, this.1.2, this.2⟩
+
 /-- Payloads of well-formed declarations have no free term or type variables. -/
 theorem DEnv.wfB_payload {de : DEnv} (h : de.wfB = true) {C : String} {j : Nat} {P : Ty}
     (hP : de.payload? C j = some P) : P.fv = [] ∧ P.ftv = [] := by
-  simp only [DEnv.payload?, DEnv.decl?, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hP
-  obtain ⟨d, hd, c, hc, rfl⟩ := hP
-  simp only [DEnv.wfB, List.all_eq_true] at h
-  induction de with
-  | nil => simp at hd
-  | cons hd' tl ih =>
-    obtain ⟨C', d'⟩ := hd'
-    simp only [List.lookup] at hd
-    by_cases hC : C = C'
-    · subst hC
-      simp only [beq_self_eq_true, Option.some.injEq] at hd
-      subst hd
-      have := h (C, d') (by simp) c (List.mem_of_getElem? hc)
-      simp only [Bool.and_eq_true, List.isEmpty_iff] at this
-      exact this.1
-    · have hne : (C == C') = false := by simp [hC]
-      simp only [hne] at hd
-      exact ih hd (fun x hx => h x (by simp [hx]))
+  obtain ⟨_, _, h1, h2, _⟩ := DEnv.wfB_payload_all h hP
+  exact ⟨h1, h2⟩
 
 /-- The facts a legal instance gives about one constructor's payload. -/
 theorem DEnv.instOK_payload_ok {de : DEnv} {C : String} {τs : List Ty} {j : Nat} {P : Ty}

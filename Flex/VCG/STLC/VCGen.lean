@@ -53,7 +53,7 @@ end STLC
 /-- Algorithmic subtyping. Returns `none` on shape mismatch. Termination
     by `Ty.skel` (preserved under `openVar`). Takes `Γ` so the fresh name
     for the arrow / base cases is picked away from the context domain. -/
-def sub (Γ : TEnv) : Ty → Ty → Option Cstr
+def sub (de : DEnv) (Γ : TEnv) : Ty → Ty → Option Cstr
   | .refine b₁ r₁, .refine b₂ r₂ =>
       if b₁ = b₂ then
         let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ r₁.fv ++ r₂.fv)
@@ -64,28 +64,32 @@ def sub (Γ : TEnv) : Ty → Ty → Option Cstr
   | .arrow s₁ t₁, .arrow s₂ t₂ =>
       let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ
                             ++ s₁.fv ++ s₂.fv ++ t₁.fv ++ t₂.fv)
-      match sub Γ s₂ s₁, sub ((x, s₂) :: Γ) (t₁.openVar 0 x) (t₂.openVar 0 x) with
+      match sub de Γ s₂ s₁, sub de ((x, s₂) :: Γ) (t₁.openVar 0 x) (t₂.openVar 0 x) with
       | some c₁, some c₂ =>
           some (.conj c₁ (implyBindCstr x s₂ c₂))
       | _, _ => none
   | .forall k₁ t₁, .forall k₂ t₂ =>
       if k₁ = k₂ then
         let a := TVar.fresh (t₁.ftv ++ t₂.ftv) k₁
-        sub Γ (t₁.openTv 0 a) (t₂.openTv 0 a)
+        sub de Γ (t₁.openTv 0 a) (t₂.openTv 0 a)
       else none
   | .prod s₁ t₁, .prod s₂ t₂ =>
       let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ
                             ++ s₁.fv ++ s₂.fv ++ t₁.fv ++ t₂.fv)
-      match sub Γ s₁ s₂, sub ((x, s₁) :: Γ) (t₁.openVar 0 x) (t₂.openVar 0 x) with
+      match sub de Γ s₁ s₂, sub de ((x, s₁) :: Γ) (t₁.openVar 0 x) (t₂.openVar 0 x) with
       | some c₁, some c₂ => some (.conj c₁ (implyBindCstr x s₁ c₂))
       | _, _ => none
   | .data C₁ n₁ a₁, .data C₂ n₂ a₂ =>
-      -- invariant type arguments: subtyping in both directions
+      -- type arguments related according to the declared variances
       if h : C₁ = C₂ ∧ n₁ = n₂ then
         Cstr.conjAll (fun i =>
-          match sub Γ (a₁ i) (a₂ (Fin.cast h.2 i)), sub Γ (a₂ (Fin.cast h.2 i)) (a₁ i) with
-          | some c, some c' => some (.conj c c')
-          | _, _ => none) (List.finRange n₁)
+          match de.var C₁ i.val with
+          | .co     => sub de Γ (a₁ i) (a₂ (Fin.cast h.2 i))
+          | .contra => sub de Γ (a₂ (Fin.cast h.2 i)) (a₁ i)
+          | .inv    =>
+            match sub de Γ (a₁ i) (a₂ (Fin.cast h.2 i)), sub de Γ (a₂ (Fin.cast h.2 i)) (a₁ i) with
+            | some c, some c' => some (.conj c c')
+            | _, _ => none) (List.finRange n₁)
       else none
   | _, _ => none
 termination_by s t => s.skel + t.skel
@@ -247,7 +251,7 @@ mutual
         -- Catch-all (Chk-Syn): synthesize, then subtype.
         match synth de Γ e with
         | some (c, s) =>
-            match sub Γ s t with
+            match sub de Γ s t with
             | some c' => some (Cstr.conj c c')
             | none    => none
         | none => none

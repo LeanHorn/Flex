@@ -18,7 +18,7 @@ attribute [local simp] Exp.ftv Ty.ftv Refinement.ftv Formula.ftv Term.ftv Base.f
   Formula.wfB Term.wfB Base.isTv Base.sortOK Base.fvOK Base.tyOK Base.isStarB Refinement.isTT
   Base.recast Ty.optBase Base.shiftT
   DEnv.payload? DEnv.decl? DEnv.nCtors DEnv.instOK Ty.instTysOK Ty.instTysFrom Ty.instTys
-  Cstr.conjAll List.finRange
+  Cstr.conjAll List.finRange DEnv.var
 
 /-- `case e of alts`, with the alternatives as a list. -/
 abbrev caseL (e : Exp) (alts : List Exp) : Exp := .case e alts.length alts.get
@@ -80,7 +80,8 @@ theorem data_mkOrd_bad (κ : KEnv) : ¬ topVC κ []
 /-- `list` applied to one type argument. -/
 abbrev ListT (τ : Ty) : Ty := .dataL "list" [τ]
 def listDecl : DataDecl :=
-  { params := [.star], ctors := [("Nil", UnitT), ("Cons", .prod (Par 0) (ListT (Par 0)))] }
+  { params := [.star], ctors := [("Nil", UnitT), ("Cons", .prod (Par 0) (ListT (Par 0)))],
+    variances := [.co] }
 def listEnv : DEnv := [("list", listDecl)]
 
 abbrev nilE (τ : Ty) : Exp := .ctor "list" 0 [τ] unitE
@@ -102,8 +103,8 @@ theorem data_sumList (κ : KEnv) : topVC κ [] sumListE sumListTy listEnv := by
   intros; omega
 
 /-- Inference: build `[1, 2]` with `Cons[int{k}]` and sum it. The element
-    refinement `k` is inferred (it must admit `1` and `2`, and — the type
-    argument is invariant — coincide with `Nat` at the call `sum l`). -/
+    refinement `k` is inferred (it must admit `1` and `2`, and imply `Nat` at
+    the call `sum l`, by covariance of `list`). -/
 theorem data_sumList_client : ∃ κ : KEnv, Check listEnv κ []
     (.letin (.ann sumListE sumListTy)                    -- sum
     (.letin (.iconst 1)                                  -- one
@@ -182,3 +183,139 @@ theorem data_sumList_safe (n : Nat) :
   simp only [TyDenote, BaseDen] at this
   obtain ⟨⟨i, rfl⟩, hi⟩ := this
   exact ⟨i, rfl, by simpa [Refinement.interp, Formula.interp, Term.interp] using hi⟩
+
+/-! ## Variance
+
+  `list` is declared covariant (checked against its payloads by `DEnv.wfB`), so
+  a `list(Pos)` is a `list(Nat)`. -/
+
+theorem data_sumList_pos (κ : KEnv) : topVC κ [] (.lam (.app (.ann sumListE sumListTy) (.bvar 0)))
+    (.arrow (ListT Pos) NatT) listEnv := by
+  simp [topVC, sumListE, sumListTy, listEnv, listDecl]
+  intro _; constructor <;> intros <;> omega
+
+/-- A contravariant datatype: predicates `pred α = Pred (α → Bool)`. -/
+def predDecl : DataDecl :=
+  { params := [.star], ctors := [("Pred", .arrow (Par 0) (.refine .bool ttR))],
+    variances := [.contra] }
+def predEnv : DEnv := [("pred", predDecl)]
+
+theorem predEnv_wf : predEnv.wfB = true := by decide
+
+/-- A predicate on integers is a predicate on naturals (but not conversely). -/
+theorem data_pred_contra (κ : KEnv) : topVC κ [] (.lam (.bvar 0))
+    (.arrow (.dataL "pred" [TT]) (.dataL "pred" [NatT])) predEnv := by
+  simp [topVC, predEnv, predDecl]
+
+theorem data_pred_contra_bad (κ : KEnv) : ¬ topVC κ [] (.lam (.bvar 0))
+    (.arrow (.dataL "pred" [NatT]) (.dataL "pred" [TT])) predEnv := by
+  simp [topVC, predEnv, predDecl]
+  exact ⟨REnv.empty, -1, by omega⟩
+
+/-- Declaring `pred` covariant is rejected by the well-formedness check. -/
+theorem predEnv_co_bad : DEnv.wfB [("pred", { predDecl with variances := [.co] })] = false := by
+  decide
+
+/-! ## The book's `range` (§7.1.1)
+
+  `range hi lo` returns the integers in `[lo, hi)`, and its type says so:
+  `hi:Int → lo:Int → list(Int{lo ≤ ν ∧ ν < hi})`. The `Cons` instance is a
+  κ-template over `lo` and `hi` (instances may mention program variables); the
+  solver infers `k(lo, hi, ν) := lo ≤ ν ∧ ν < hi`. The empty list is built at
+  `Int{false}` and widened by covariance. -/
+
+/-- `Int{lo ≤ ν ∧ ¬(hi ≤ ν)}` with `lo`, `hi` the two enclosing arrow binders. -/
+abbrev rangeElem : Ty :=
+  .refine .int (.fmla (.and (.leqI (.bvar .int 1) (.bvar .int 0))
+                            (.not (.leqI (.bvar .int 2) (.bvar .int 0)))))
+abbrev rangeTy : Ty := .arrow TT (.arrow TT (ListT rangeElem))
+abbrev FalseInt : Ty := .refine .int (.fmla .ff)
+
+/-- `λhi. fix go. λlo. let c = hi ≤ lo in
+      if c then Nil[Int{false}] else let one = 1; let lo1 = lo + one; let rest = go lo1;
+      let h = lo; Cons[Int{k(lo, hi, ν)}] (h, rest)`
+    (The head is rebound to `h` because the pair rule's first component must not
+    occur free in the second component's type, which mentions `lo`.) -/
+abbrev rangeE : Exp :=
+  .lam (.fix
+    (.letin (.leq (.bvar 2) (.bvar 0))                 -- c        lo=1 go=2 hi=3
+      (.ite (.bvar 0)
+        (nilE FalseInt)
+        (.letin (.iconst 1)                            -- one      c=1 lo=2 go=3 hi=4
+        (.letin (.add (.bvar 2) (.bvar 0))             -- lo1      one=1 c=2 lo=3 go=4 hi=5
+        (.letin (.app (.bvar 4) (.bvar 0))             -- rest     lo1=1 one=2 c=3 lo=4 go=5 hi=6
+        (.letin (.bvar 4)                              -- h = lo   rest=1 lo1=2 one=3 c=4 lo=5 go=6 hi=7
+          -- in the instance: ν=0 h=1 rest=2 lo1=3 one=4 c=5 lo=6 go=7 hi=8
+          (consE (.refine .int (.kapp "k" [⟨.int, .bvar .int 6⟩, ⟨.int, .bvar .int 8⟩,
+                                          ⟨.int, .bvar .int 0⟩]))
+            (.bvar 0) (.bvar 1)))))))))
+
+theorem data_range : ∃ κ : KEnv, Check listEnv κ [] rangeE rangeTy := by
+  simp only [listEnv, listDecl]
+  generate
+  zap
+  grind
+
+/-! ## Path-sensitive filtering: `filterGe : lo:Int → list(Int) → list(Int{lo ≤ ν})`
+
+  The kept elements are exactly those that passed the test, which the branch
+  condition records; the `Cons` instance `Int{k(lo, ν)}` is inferred. -/
+
+abbrev filterGeTy : Ty :=
+  .arrow TT (.arrow (ListT TT) (ListT (.refine .int (.fmla (.leqI (.bvar .int 2) (.bvar .int 0))))))
+
+/-- `λlo. fix go. λxs. case xs of
+      Nil _  => Nil[Int{false}]
+      Cons p => let (h, t) = p; let r = go t; let c = lo ≤ h;
+                if c then (let h' = h; Cons[Int{k(lo, ν)}] (h', r)) else r` -/
+abbrev filterGeE : Exp :=
+  .lam (.fix (caseL (.bvar 0)
+    [ nilE FalseInt
+    , .split (.bvar 0)                                  -- t=0 h=1 p=2 xs=3 go=4 lo=5
+        (.letin (.app (.bvar 4) (.bvar 0))              -- r     t=1 h=2 … go=5 lo=6
+        (.letin (.leq (.bvar 6) (.bvar 2))              -- c     r=1 t=2 h=3 … lo=7
+        (.ite (.bvar 0)
+          (.letin (.bvar 3)                             -- h'    c=1 r=2 t=3 h=4 … lo=8
+            -- in the instance: ν=0 h'=1 c=2 r=3 t=4 h=5 p=6 xs=7 go=8 lo=9
+            (consE (.refine .int (.kapp "k" [⟨.int, .bvar .int 9⟩, ⟨.int, .bvar .int 0⟩]))
+              (.bvar 0) (.bvar 2)))
+          (.bvar 1)))) ]))
+
+theorem data_filterGe : ∃ κ : KEnv, Check listEnv κ [] filterGeE filterGeTy := by
+  simp only [listEnv, listDecl]
+  generate
+  zap
+  grind
+
+/-! ## Polymorphic `append`, instantiated by inference under covariance
+
+  `append : ∀α:⋆. list α → list α → list α`. Appending a `list(Pos)` to a
+  `list(Nat)`, the instance `int{k}` must contain both element types and fit the
+  result `list(Nat)`: the solver picks `k(ν) := 0 ≤ ν`. -/
+
+abbrev appendTy : Ty :=
+  .forall .star (.arrow (ListT (Par 0)) (.arrow (ListT (Par 0)) (ListT (Par 0))))
+
+/-- `Λα. fix go. λxs. λys. case xs of
+      Nil _  => ys
+      Cons p => let (h, t) = p; let g = go t; let r = g ys; Cons[α] (h, r)` -/
+abbrev appendE : Exp :=
+  .tabs .star (.fix (.lam (caseL (.bvar 1)
+    [ .bvar 1
+    , .split (.bvar 0)                                  -- t=0 h=1 p=2 ys=3 xs=4 go=5
+        (.letin (.app (.bvar 5) (.bvar 0))              -- g = go t
+        (.letin (.app (.bvar 0) (.bvar 4))              -- r = g ys   (g=0 t=1 h=2 p=3 ys=4)
+        (consE (Par 0) (.bvar 3) (.bvar 0)))) ])))
+
+theorem data_append (κ : KEnv) : topVC κ [] appendE appendTy listEnv := by
+  simp [topVC, appendE, appendTy, listEnv, listDecl]
+
+theorem data_append_client : ∃ κ : KEnv, Check listEnv κ []
+    (.lam (.lam                                                    -- xs=1 ys=0
+      (.letin (.app (.tapp (.ann appendE appendTy) (IntK "k")) (.bvar 1))   -- g = append[k] xs
+      (.app (.bvar 0) (.bvar 1)))))                                -- g ys
+    (.arrow (ListT Pos) (.arrow (ListT NatT) (ListT NatT))) := by
+  simp only [appendE, appendTy, listEnv, listDecl]
+  generate
+  zap
+  grind

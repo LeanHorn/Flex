@@ -615,6 +615,174 @@ theorem EnvCloses.extend {κ δ k Γ γ} (hE : EnvCloses κ δ k Γ γ)
   rw [show (γ.write x va).map x = va by exact REnv.write_self γ x va]
   exact htd
 
+/-! ## Variance: datatype denotations are monotone in their parameters
+
+  If the parameters' interpretations are related as their declared variances
+  require, a type in which they occur only at allowed polarities is related
+  accordingly. Proved by induction on the step index (datatype payloads are read
+  one step later), then on the type. -/
+
+def STLC.SemTy.Le (R R' : SemTy) : Prop := ∀ k w, R.rel k w → R'.rel k w
+
+/-- How two interpretations of a parameter of this variance must relate. -/
+def STLC.Variance.Rel : Variance → SemTy → SemTy → Prop
+  | .co,     R, R' => SemTy.Le R R'
+  | .contra, R, R' => SemTy.Le R' R
+  | .inv,    R, R' => SemTy.Le R R' ∧ SemTy.Le R' R
+
+/-- Parameter interpretations `ρ`, `ρ'` related as the variances `vs` require. -/
+def STLC.RelVar (vs : List Variance) (ρ ρ' : List SemTy) : Prop :=
+  ∀ i : Nat, ((vs[i]?).getD Variance.inv).Rel (ρ[i]?.getD SemTy.top) (ρ'[i]?.getD SemTy.top)
+
+theorem STLC.Pol.comp_ne_neg {p : Pol} {v : Variance} (hp : p ≠ .neg) (hv : v ≠ .contra) :
+    p.comp v ≠ .neg := by cases v <;> cases p <;> simp_all [Pol.comp, Pol.flip]
+theorem STLC.Pol.comp_ne_pos {p : Pol} {v : Variance} (hp : p ≠ .neg) (hv : v ≠ .co) :
+    p.comp v ≠ .pos := by cases v <;> cases p <;> simp_all [Pol.comp, Pol.flip]
+theorem STLC.Pol.comp_ne_pos' {p : Pol} {v : Variance} (hp : p ≠ .pos) (hv : v ≠ .contra) :
+    p.comp v ≠ .pos := by cases v <;> cases p <;> simp_all [Pol.comp, Pol.flip]
+theorem STLC.Pol.comp_ne_neg' {p : Pol} {v : Variance} (hp : p ≠ .pos) (hv : v ≠ .co) :
+    p.comp v ≠ .neg := by cases v <;> cases p <;> simp_all [Pol.comp, Pol.flip]
+
+theorem STLC.Variance.Rel_upto {i : Nat} {A B : Fin (i+1) → Val → Prop} (v : Variance)
+    (hf : v ≠ .contra → ∀ j w, A j w → B j w) (hb : v ≠ .co → ∀ j w, B j w → A j w) :
+    v.Rel (SemTy.upto i A) (SemTy.upto i B) := by
+  have le : ∀ {A B : Fin (i+1) → Val → Prop}, (∀ j w, A j w → B j w) →
+      SemTy.Le (SemTy.upto i A) (SemTy.upto i B) := by
+    intro A B h k w hw
+    obtain ⟨⟨j, hj, hA⟩, hwf⟩ := hw
+    exact ⟨⟨j, hj, h j w hA⟩, hwf⟩
+  cases v with
+  | co => exact le (hf (by simp))
+  | contra => exact le (hb (by simp))
+  | inv => exact ⟨le (hf (by simp)), le (hb (by simp))⟩
+
+theorem STLC.RelVar.ofFn {n i : Nat} (vs : List Variance) (A B : Fin n → Fin (i+1) → Val → Prop)
+    (h : ∀ l : Fin n, ((vs[l.val]?).getD .inv).Rel (SemTy.upto i (A l)) (SemTy.upto i (B l))) :
+    RelVar vs (List.ofFn fun l => SemTy.upto i (A l)) (List.ofFn fun l => SemTy.upto i (B l)) := by
+  intro j
+  by_cases hj : j < n
+  · simp only [List.getElem?_ofFn, hj, dif_pos, Option.getD_some]
+    exact h ⟨j, hj⟩
+  · simp only [List.getElem?_ofFn, hj, dif_neg, not_false_eq_true, Option.getD_none]
+    cases (vs[j]?).getD .inv <;>
+      simp [Variance.Rel, SemTy.Le]
+
+theorem TyDenote.var_mono {κ : KEnv} {de : DEnv} (hde : de.wfB = true) :
+    ∀ (k : Nat) (t : Ty) (vs : List Variance) (p : Pol) (inner ρ ρ' : List SemTy)
+      (η : TVar → SemTy) (γ : REnv) (v : Val),
+      t.varOK de vs inner.length p = true → RelVar vs ρ ρ' →
+      (p ≠ .neg → TyDenote κ ⟨inner ++ ρ, η, de⟩ k t γ v → TyDenote κ ⟨inner ++ ρ', η, de⟩ k t γ v) ∧
+      (p ≠ .pos → TyDenote κ ⟨inner ++ ρ', η, de⟩ k t γ v → TyDenote κ ⟨inner ++ ρ, η, de⟩ k t γ v) := by
+  intro k
+  induction k using Nat.strongRecOn with
+  | ind k IHk =>
+  intro t
+  induction t with
+  | refine b r =>
+    intro vs p inner ρ ρ' η γ v hok hrel
+    simp only [TyDenote]
+    suffices hb : (p ≠ .neg → BaseDen ⟨inner ++ ρ, η, de⟩ k b v → BaseDen ⟨inner ++ ρ', η, de⟩ k b v) ∧
+        (p ≠ .pos → BaseDen ⟨inner ++ ρ', η, de⟩ k b v → BaseDen ⟨inner ++ ρ, η, de⟩ k b v) by
+      exact ⟨fun hp h => ⟨hb.1 hp h.1, h.2⟩, fun hp h => ⟨hb.2 hp h.1, h.2⟩⟩
+    cases b with
+    | tbvar j =>
+      simp only [Ty.varOK] at hok
+      by_cases hj : j < inner.length
+      · simp only [BaseDen, List.getElem?_append_left hj]; exact ⟨fun _ h => h, fun _ h => h⟩
+      · simp only [hj, if_false] at hok
+        have e : ∀ ρ₀ : List SemTy, (inner ++ ρ₀)[j]? = ρ₀[j - inner.length]? :=
+          fun ρ₀ => List.getElem?_append_right (by omega)
+        simp only [BaseDen, e]
+        have hr := hrel (j - inner.length)
+        generalize ((vs[j - inner.length]?).getD .inv) = va at hok hr
+        generalize (ρ[j - inner.length]?.getD SemTy.top) = R at hr ⊢
+        generalize (ρ'[j - inner.length]?.getD SemTy.top) = R' at hr ⊢
+        cases va <;> cases p <;> simp_all [Variance.allows, Variance.Rel, SemTy.Le]
+    | _ => exact ⟨fun _ h => h, fun _ h => h⟩
+  | arrow s t _ _ =>
+    intro vs p inner ρ ρ' η γ v hok hrel
+    simp only [Ty.varOK, Bool.and_eq_true] at hok
+    simp only [TyDenote]
+    constructor
+    · rintro hp ⟨hf, hlc, hcl, her, hLR⟩
+      refine ⟨hf, hlc, hcl, her, fun j hj va hva => ?_⟩
+      have hp' : p.flip ≠ .pos := by cases p <;> simp_all [Pol.flip]
+      obtain ⟨body, o, hap, hev, hres⟩ :=
+        hLR j hj va ((IHk j hj s vs p.flip inner ρ ρ' η γ va hok.1 hrel).2 hp' hva)
+      exact ⟨body, o, hap, hev, fun vr m ho hm =>
+        (IHk m (by omega) t vs p inner ρ ρ' η _ vr hok.2 hrel).1 hp (hres vr m ho hm)⟩
+    · rintro hp ⟨hf, hlc, hcl, her, hLR⟩
+      refine ⟨hf, hlc, hcl, her, fun j hj va hva => ?_⟩
+      have hp' : p.flip ≠ .neg := by cases p <;> simp_all [Pol.flip]
+      obtain ⟨body, o, hap, hev, hres⟩ :=
+        hLR j hj va ((IHk j hj s vs p.flip inner ρ ρ' η γ va hok.1 hrel).1 hp' hva)
+      exact ⟨body, o, hap, hev, fun vr m ho hm =>
+        (IHk m (by omega) t vs p inner ρ ρ' η _ vr hok.2 hrel).2 hp (hres vr m ho hm)⟩
+  | «forall» kd t ih =>
+    intro vs p inner ρ ρ' η γ v hok hrel
+    simp only [Ty.varOK] at hok
+    simp only [TyDenote]
+    have h := fun R => ih vs p (R :: inner) ρ ρ' η γ v (by simpa using hok) hrel
+    constructor
+    · intro hp hv R hR
+      have := (h R).1 hp (by simpa [TyEnvSem.push] using hv R hR)
+      simpa [TyEnvSem.push] using this
+    · intro hp hv R hR
+      have := (h R).2 hp (by simpa [TyEnvSem.push] using hv R hR)
+      simpa [TyEnvSem.push] using this
+  | prod s t ihs iht =>
+    intro vs p inner ρ ρ' η γ v hok hrel
+    simp only [Ty.varOK, Bool.and_eq_true] at hok
+    simp only [TyDenote]
+    constructor
+    · rintro hp ⟨v₁, v₂, rfl, h₁, h₂⟩
+      exact ⟨v₁, v₂, rfl, (ihs vs p inner ρ ρ' η γ v₁ hok.1 hrel).1 hp h₁,
+        (iht vs p inner ρ ρ' η _ v₂ hok.2 hrel).1 hp h₂⟩
+    · rintro hp ⟨v₁, v₂, rfl, h₁, h₂⟩
+      exact ⟨v₁, v₂, rfl, (ihs vs p inner ρ ρ' η γ v₁ hok.1 hrel).2 hp h₁,
+        (iht vs p inner ρ ρ' η _ v₂ hok.2 hrel).2 hp h₂⟩
+  | data C n args _ =>
+    intro vs p inner ρ ρ' η γ v hok hrel
+    simp only [Ty.varOK, List.all_eq_true, List.mem_finRange, true_implies] at hok
+    -- the arguments are related at every index below `k`, by their polarity
+    have harg : ∀ l : Fin n, ∀ j < k, ∀ w,
+        (p.comp (de.var C l) ≠ .neg → TyDenote κ ⟨inner ++ ρ, η, de⟩ j (args l) γ w →
+          TyDenote κ ⟨inner ++ ρ', η, de⟩ j (args l) γ w) ∧
+        (p.comp (de.var C l) ≠ .pos → TyDenote κ ⟨inner ++ ρ', η, de⟩ j (args l) γ w →
+          TyDenote κ ⟨inner ++ ρ, η, de⟩ j (args l) γ w) :=
+      fun l j hj w => IHk j hj (args l) vs _ inner ρ ρ' η γ w (hok l) hrel
+    -- transfer a payload between related parameter interpretations
+    have hpay : ∀ i < k, ∀ (A B : Fin n → Fin (i+1) → Val → Prop) (j : Nat) (P : Ty) (w : Val),
+        de.payload? C j = some P →
+        (∀ l : Fin n, (de.var C l.val).Rel (SemTy.upto i (A l)) (SemTy.upto i (B l))) →
+        TyDenote κ ⟨List.ofFn (fun l => SemTy.upto i (A l)), fun _ => SemTy.top, de⟩ i P REnv.empty w →
+        TyDenote κ ⟨List.ofFn (fun l => SemTy.upto i (B l)), fun _ => SemTy.top, de⟩ i P REnv.empty w := by
+      intro i hi A B j P w hP hAB hw
+      obtain ⟨d, hd, -, -, hvar⟩ := DEnv.wfB_payload_all hde hP
+      have hvl : ∀ l, de.var C l = (d.variances[l]?).getD .inv := fun l => by simp [DEnv.var, hd]
+      have hrel' := RelVar.ofFn d.variances A B (fun l => by rw [← hvl]; exact hAB l)
+      have := (IHk i hi P d.variances .pos [] _ _ (fun _ => SemTy.top) REnv.empty w
+        (by simpa using hvar) hrel').1 (by simp)
+      simpa using this (by simpa using hw)
+    simp only [TyDenote]
+    constructor
+    · rintro hp ⟨hlc, hcl, her, j, w, P, rfl, hP, hw⟩
+      refine ⟨hlc, hcl, her, j, w, P, rfl, hP, fun i hi => ?_⟩
+      refine hpay i hi _ _ j P w hP (fun l => ?_) (hw i hi)
+      apply Variance.Rel_upto
+      · intro hv j' w' h
+        exact (harg l j'.val (by have := j'.isLt; omega) w').1 (Pol.comp_ne_neg hp hv) h
+      · intro hv j' w' h
+        exact (harg l j'.val (by have := j'.isLt; omega) w').2 (Pol.comp_ne_pos hp hv) h
+    · rintro hp ⟨hlc, hcl, her, j, w, P, rfl, hP, hw⟩
+      refine ⟨hlc, hcl, her, j, w, P, rfl, hP, fun i hi => ?_⟩
+      refine hpay i hi _ _ j P w hP (fun l => ?_) (hw i hi)
+      apply Variance.Rel_upto
+      · intro hv j' w' h
+        exact (harg l j'.val (by have := j'.isLt; omega) w').2 (Pol.comp_ne_pos' hp hv) h
+      · intro hv j' w' h
+        exact (harg l j'.val (by have := j'.isLt; omega) w').1 (Pol.comp_ne_neg' hp hv) h
+
 /-! ## T1 — Subtyping is semantic inclusion of denotations -/
 
 private theorem Subtyp.optBase_eq {de κ Γ s t} (h : Subtyp de κ Γ s t) : s.optBase = t.optBase := by
@@ -672,14 +840,14 @@ private theorem ModelsEnv.extendBy_cons {κ : KEnv} {δ : TyEnvSem} {Γ : TEnv} 
     rw [show (γ.write z va).lookup z = va from REnv.write_self γ z va, REnv.push_write_comm]
     exact (Refinement.interp_write_fresh r z va _ hz_rfv).mp hr
 
-theorem subtyp_sound {de κ Γ s t} (hsub : Subtyp de κ Γ s t)
+theorem subtyp_sound {de κ Γ s t} (hde : de.wfB = true) (hsub : Subtyp de κ Γ s t)
     (hWF_s : Ty.WFBVars s) (hWF_t : Ty.WFBVars t) :
-    ∀ {δ}, δ.WK → ∀ {k γ}, ModelsEnv κ γ Γ → ∀ {v},
+    ∀ {δ}, δ.WK → δ.denv = de → ∀ {k γ}, ModelsEnv κ γ Γ → ∀ {v},
       TyDenote κ δ k s γ v → TyDenote κ δ k t γ v := by
   induction hsub with
   | refine hfresh hent =>
       rename_i b r₁ r₂ x
-      intro δ hδ k γ hΓ v hs
+      intro δ hδ hD k γ hΓ v hs
       simp only [List.mem_append, not_or] at hfresh
       obtain ⟨⟨⟨hx_dom, hx_tyfv⟩, hx_r₁⟩, hx_r₂⟩ := hfresh
       have hx_r₁' : x ∉ (Ty.refine b r₁).fv := by simpa [Ty.fv] using hx_r₁
@@ -698,12 +866,12 @@ theorem subtyp_sound {de κ Γ s t} (hsub : Subtyp de κ Γ s t)
     have hWF_st1' : Ty.WFBVarCtx [s₂.optBase] t₁ := hopt_eq ▸ hWF_st1
     simp only [List.mem_append, not_or] at hfresh
     obtain ⟨⟨⟨⟨⟨hx_Γdom, hx_Γfv⟩, hx_s1fv⟩, hx_s2fv⟩, hx_t1fv⟩, hx_t2fv⟩ := hfresh
-    intro δ hδ k γ hm v htd
+    intro δ hδ hD k γ hm v htd
     simp only [TyDenote] at htd ⊢
     obtain ⟨hfun, hlc, hcl, her, hLR⟩ := htd
     refine ⟨hfun, hlc, hcl, her, fun j hj va htd_va => ?_⟩
     -- Domain conversion (contravariant): s₂ <: s₁
-    have htd_va_s1 : TyDenote κ δ j s₁ γ va := ih_hdom hWF_s2 hWF_s1 hδ hm htd_va
+    have htd_va_s1 : TyDenote κ δ j s₁ γ va := ih_hdom hWF_s2 hWF_s1 hδ hD hm htd_va
     obtain ⟨body, o, hap, hev, hres⟩ := hLR j hj va htd_va_s1
     refine ⟨body, o, hap, hev, fun vr m ho hm' => ?_⟩
     have hWF_t1x : Ty.WFBVars (t₁.openVar 0 x) :=
@@ -714,7 +882,7 @@ theorem subtyp_sound {de κ Γ s t} (hsub : Subtyp de κ Γ s t)
     have hm_ext : ModelsEnv κ (γ.write x va) ((x, s₂) :: Γ') :=
       ModelsEnv.extendBy_cons hδ hm s₂ x va hx_Γdom hx_Γfv hx_s2fv htd_va
     exact (TyDenote.push_iff κ δ m t₂ x γ va vr hx_t2fv).mpr
-      (ih_hcodom hWF_t1x hWF_t2x hδ hm_ext htd_vr_t1)
+      (ih_hcodom hWF_t1x hWF_t2x hδ hD hm_ext htd_vr_t1)
   | «forall» hka hfresh hbody ih =>
     rename_i Γ' kd t₁ t₂ a
     simp only [List.mem_append, not_or] at hfresh
@@ -722,13 +890,13 @@ theorem subtyp_sound {de κ Γ s t} (hsub : Subtyp de κ Γ s t)
       Ty.WFBVars_openTv t₁ 0 a (by simpa [Ty.WFBVars, Ty.WFBVarCtx] using hWF_s)
     have hWF₂ : Ty.WFBVars (t₂.openTv 0 a) :=
       Ty.WFBVars_openTv t₂ 0 a (by simpa [Ty.WFBVars, Ty.WFBVarCtx] using hWF_t)
-    intro δ hδ k γ hm v htd
+    intro δ hδ hD k γ hm v htd
     simp only [TyDenote] at htd ⊢
     intro R hR
     -- Interpret the binder by `R` on both sides, i.e. open with `a ↦ R`.
     have hδ' : (δ.set a R).WK := TyEnvSem.set_WK hδ a R (hka ▸ hR)
     have h₁ := (TyDenote.push_openTv_iff δ a R t₁ hfresh.1 k γ v).mp (htd R hR)
-    exact (TyDenote.push_openTv_iff δ a R t₂ hfresh.2 k γ v).mpr (ih hWF₁ hWF₂ hδ' hm h₁)
+    exact (TyDenote.push_openTv_iff δ a R t₂ hfresh.2 k γ v).mpr (ih hWF₁ hWF₂ hδ' hD hm h₁)
   | prod hfst hfresh hsnd ih_fst ih_snd =>
     rename_i Γ' s₁ t₁ s₂ t₂ x
     obtain ⟨hWF_s1, hWF_st1⟩ := hWF_s
@@ -737,10 +905,10 @@ theorem subtyp_sound {de κ Γ s t} (hsub : Subtyp de κ Γ s t)
     have hWF_t2' : Ty.WFBVarCtx [s₁.optBase] t₂ := hopt_eq ▸ hWF_t2
     simp only [List.mem_append, not_or] at hfresh
     obtain ⟨⟨⟨⟨⟨hx_Γdom, hx_Γfv⟩, hx_s1fv⟩, hx_s2fv⟩, hx_t1fv⟩, hx_t2fv⟩ := hfresh
-    intro δ hδ k γ hm v htd
+    intro δ hδ hD k γ hm v htd
     simp only [TyDenote] at htd ⊢
     obtain ⟨v₁, v₂, rfl, hv₁, hv₂⟩ := htd
-    refine ⟨v₁, v₂, rfl, ih_fst hWF_s1 hWF_s2 hδ hm hv₁, ?_⟩
+    refine ⟨v₁, v₂, rfl, ih_fst hWF_s1 hWF_s2 hδ hD hm hv₁, ?_⟩
     have hWF_t1x : Ty.WFBVars (t₁.openVar 0 x) :=
       Ty.WFBVarCtx_openVar_last t₁ [] s₁.optBase x hWF_st1
     have hWF_t2x : Ty.WFBVars (t₂.openVar 0 x) :=
@@ -748,11 +916,31 @@ theorem subtyp_sound {de κ Γ s t} (hsub : Subtyp de κ Γ s t)
     have hm_ext : ModelsEnv κ (γ.write x v₁) ((x, s₁) :: Γ') :=
       ModelsEnv.extendBy_cons hδ hm s₁ x v₁ hx_Γdom hx_Γfv hx_s1fv hv₁
     exact (TyDenote.push_iff κ δ k t₂ x γ v₁ v₂ hx_t2fv).mpr
-      (ih_snd hWF_t1x hWF_t2x hδ hm_ext ((TyDenote.push_iff κ δ k t₁ x γ v₁ v₂ hx_t1fv).mp hv₂))
+      (ih_snd hWF_t1x hWF_t2x hδ hD hm_ext ((TyDenote.push_iff κ δ k t₁ x γ v₁ v₂ hx_t1fv).mp hv₂))
   | data h₁ h₂ ih₁ ih₂ =>
-    intro δ hδ k γ hm v htd
-    exact (TyDenote.data_congr rfl (fun l j _ w =>
-      ⟨ih₁ l (hWF_s l) (hWF_t l) hδ hm, ih₂ l (hWF_t l) (hWF_s l) hδ hm⟩)).mp htd
+    rename_i Γ' C n args₁ args₂
+    intro δ hδ hD k γ hm v htd
+    simp only [TyDenote] at htd ⊢
+    obtain ⟨hlc, hcl, her, j, w, P, rfl, hP, hpay⟩ := htd
+    refine ⟨hlc, hcl, her, j, w, P, rfl, hP, fun i hi => ?_⟩
+    rw [hD] at hP ⊢
+    have hw := hpay i hi
+    rw [hD] at hw
+    obtain ⟨d, hd, -, -, hvar⟩ := DEnv.wfB_payload_all hde hP
+    have hvl : ∀ l, de.var C l = (d.variances[l]?).getD .inv := fun l => by simp [DEnv.var, hd]
+    have hrel := RelVar.ofFn d.variances
+      (fun l (j' : Fin (i+1)) w' => TyDenote κ δ j'.val (args₁ l) γ w')
+      (fun l (j' : Fin (i+1)) w' => TyDenote κ δ j'.val (args₂ l) γ w')
+      (fun l => by
+        rw [← hvl]
+        apply Variance.Rel_upto
+        · intro hv j' w' h
+          exact ih₁ l hv (hWF_s l) (hWF_t l) hδ hD hm h
+        · intro hv j' w' h
+          exact ih₂ l hv (hWF_t l) (hWF_s l) hδ hD hm h)
+    have := (TyDenote.var_mono (κ := κ) hde i P d.variances .pos [] _ _ (fun _ => SemTy.top)
+      REnv.empty w (by simpa using hvar) hrel).1 (by simp)
+    simpa using this (by simpa using hw)
 
 /-! ## T2 — Fundamental Lemma -/
 
@@ -818,7 +1006,7 @@ theorem hastype_fundamental {de κ Γ e t} (hde : de.wfB = true) (h : Hastype de
       intro δ hδ hD k γ hE
       obtain ⟨o, hev, hres⟩ := ih hδ hD hE
       exact ⟨o, hev, fun v m ho =>
-        subtyp_sound hsub hhs.wf_bvars hwf_t hδ (EnvCloses.toModelsEnv hδ hE) (hres v m ho)⟩
+        subtyp_sound hde hsub hhs.wf_bvars hwf_t hδ hD (EnvCloses.toModelsEnv hδ hE) (hres v m ho)⟩
   | add_var hlk₁ hlk₂ =>
       rename_i x y r₁ r₂
       intro δ hδ hD k γ hE

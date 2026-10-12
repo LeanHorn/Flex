@@ -70,3 +70,15 @@ open STLC
 
 /-- info: 'data_mkOrd_bad' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms data_mkOrd_bad
+
+/-- info: 'data_range' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms data_range
+
+/-- info: 'data_filterGe' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms data_filterGe
+
+/-- info: 'data_append_client' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms data_append_client
+
+/-- info: 'data_pred_contra_bad' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms data_pred_contra_bad

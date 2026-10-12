@@ -529,7 +529,10 @@ mutual
         · rename_i c₁ hc₁
           injection hcheck with hc
           subst hc
-          refine Check.fix hfF hxF (check_sound κ _ _ _ _ hc₁ ?_)
+          refine Check.fix _ (fun a ha => ?_) hfF hxF (check_sound κ _ _ _ _ hc₁ ?_)
+          · split at ha
+            · exact TEnv.genVars_fresh ha
+            · simp at ha
           intro γ hmγ
           have hcγ := hent γ hmγ.tail.tail
           have hxs : x ∉ s1.fv := by
@@ -574,7 +577,7 @@ mutual
       exact ⟨.and_var hxlk hylk, Ty.WFBVars_and_result _ _⟩
     | .tapp hsy hk h1 h2 h3 =>
       simp only [Exp.WFBVars] at hE
-      have ⟨hht, _⟩ := synth_to_hastype hΓ hE.2 hsy
+      have ⟨hht, _⟩ := synth_to_hastype hΓ hE hsy
       exact ⟨.tapp hht hk h1 h2 h3, Ty.wfB_WFBVars _ h3⟩
 
   theorem check_to_hastype {κ Γ e t}
@@ -625,15 +628,15 @@ mutual
       have hht1 := check_to_hastype hΓ1 hE1 ht hck1
       have hht2 := check_to_hastype hΓ2 hE2 ht hck2
       exact .ite hlk hfresh ht hht1 hht2
-    | .fix hf hx hck =>
+    | .fix as has hf hx hck =>
       rename_i e s t f x
       have ht_split : Ty.WFBVarCtx [] s ∧ Ty.WFBVarCtx [s.optBase] t := by
         simp only [Ty.WFBVars, Ty.WFBVarCtx] at ht; exact ht
-      have hΓ_ext : TEnv.WFBVars ((x, s) :: (f, .arrow s t) :: Γ) :=
-        (hΓ.cons ht).cons ht_split.1
+      have hΓ_ext : TEnv.WFBVars ((x, s) :: (f, Ty.gen as (.arrow s t)) :: Γ) :=
+        (hΓ.cons (Ty.WFBVars_gen as _ ht)).cons ht_split.1
       have hE_ext : Exp.WFBVars ((e.openVar 1 f).openVar 0 x) := by
         simp only [Exp.WFBVars] at hE; simp [hE]
-      exact .fix ht hf hx (check_to_hastype hΓ_ext hE_ext
+      exact .fix as has ht hf hx (check_to_hastype hΓ_ext hE_ext
         (Ty.WFBVarCtx_openVar_last t [] s.optBase x ht_split.2) hck)
     | .tabs hk hfresh hck =>
       rename_i k e t a

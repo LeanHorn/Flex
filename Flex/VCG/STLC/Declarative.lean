@@ -66,11 +66,12 @@ inductive Hastype : KEnv → TEnv → Exp → Ty → Prop where
       Hastype κ ((y, <ty|Bool{ν : x = true }|>) :: Γ) e₁ t →
       Hastype κ ((y, <ty|Bool{ν : x = false}|>) :: Γ) e₂ t →
       Hastype κ Γ (.ite (.fvar x) e₁ e₂) t
-  | fix {κ Γ e s t f x} :
+  | fix {κ Γ e s t f x} (as : List TVar) :
+      (∀ a ∈ as, a ∉ TEnv.ftv Γ) →
       Ty.WFBVars (.arrow s t) →
       f ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s.fv ++ t.fv →
       x ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s.fv ++ t.fv ++ [f] →
-      Hastype κ ((x, s) :: (f, .arrow s t) :: Γ)
+      Hastype κ ((x, s) :: (f, Ty.gen as (.arrow s t)) :: Γ)
         ((e.openVar 1 f).openVar 0 x) (t.openVar 0 x) →
       Hastype κ Γ (.fix e) (.arrow s t)
   | tabs {κ Γ k e t a} :
@@ -160,7 +161,7 @@ theorem Hastype.fv_subset {κ Γ e t} (_h : Hastype κ Γ e t) :
     exact ih zf
   | unreach =>
     simp [Exp.fv] at zf
-  | @fix Γ' e s t f x _ hf hx _ ih =>
+  | @fix Γ' e s t f x _ _ _ hf hx _ ih =>
     simp only [Exp.fv] at zf
     simp only [List.mem_append, List.mem_singleton, not_or] at hf hx
     obtain ⟨t', hz⟩ := ih (EVar.not_free_in_open (EVar.not_free_in_open zf))
@@ -200,7 +201,7 @@ theorem Hastype.lc_at {κ Γ e t} (_h : Hastype κ Γ e t) : Exp.lc_at 0 e := by
   | and_var => simp [Exp.lc_at]
   | ite _ _ _ _ _ ih₁ ih₂ => simp only [Exp.lc_at]; exact ⟨trivial, ih₁, ih₂⟩
   | unreach => simp [Exp.lc_at]
-  | fix _ _ _ _ ih =>
+  | fix _ _ _ _ _ _ ih =>
     simp only [Exp.lc_at]
     exact Exp.lc_at_of_openVar _ 1 _ (Exp.lc_at_of_openVar _ 0 _ ih)
   | tabs _ _ _ _ ih => simpa [Exp.lc_at] using ih
@@ -270,6 +271,6 @@ theorem Hastype.wf_bvars {κ Γ e t} (h : Hastype κ Γ e t) : Ty.WFBVars t := b
   | and_var => exact Ty.WFBVars_and_result _ _
   | ite _ _ hwf _ _ _ _ => exact hwf
   | unreach _ hwf => exact hwf
-  | fix hwf _ _ _ _ => exact hwf
+  | fix _ _ hwf _ _ _ => exact hwf
   | tabs hwf _ _ _ _ => exact hwf
   | tapp _ _ _ _ hres _ => exact Ty.wfB_WFBVars _ hres

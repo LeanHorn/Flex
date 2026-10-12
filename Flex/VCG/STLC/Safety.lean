@@ -191,6 +191,14 @@ theorem EnvCloses.set_fresh {κ : KEnv} {δ : TyEnvSem} {k : Nat} {a : TVar} {R 
       simp only [TEnv.ftv, List.mem_append, not_or] at ha
       exact ⟨(TyDenote.set_fresh_iff t ha.1 _ _ _ _).mpr h, EnvCloses.set_fresh ha.2 hΓ⟩
 
+/-- Re-interpreting type variables the context does not mention preserves it. -/
+theorem EnvCloses.reinterp {κ : KEnv} {δ δ' : TyEnvSem} {k : Nat} {as : List TVar} {Γ : TEnv}
+    {γ : REnv} (has : ∀ a ∈ as, a ∉ TEnv.ftv Γ) (h : TyEnvSem.Reinterp as δ δ')
+    (hE : EnvCloses κ δ k Γ γ) : EnvCloses κ δ' k Γ γ := by
+  induction h with
+  | refl => exact hE
+  | set a R ha _ _ ih => exact EnvCloses.set_fresh (has a ha) ih
+
 /-! ## extendBy commutativity and extendBy_fresh -/
 
 /-- Writing a fresh `x` (`x ∉ r.fv`) does not change `Refinement.interp` under
@@ -747,11 +755,11 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
         rw [Exp.substEnv_write_fresh e₂ γ y (.bconst (γ.bools y)) hy_e₂] at hev
         exact ⟨o, Eval.ite_f Eval.bconst hev, fun vr m ho =>
           TyDenote.of_extendBy_fresh y (.bconst (γ.bools y)) hy_tfv (hres vr m ho)⟩
-  | @fix Γ' e s t f x hwf hf hx hbody ih =>
-      intro δ hδ k γ hE
+  | @fix Γ' e s t f x as has hwf hf hx hbody ih =>
+      intro δ₀ hδ₀ k γ hE₀
       rw [Exp.substEnv_fix]
       simp only [Exp.erase]
-      have hfix := Hastype.fix hwf hf hx hbody
+      have hfix := Hastype.fix as has hwf hf hx hbody
       have he_dom : ∀ w ∈ e.fv, w ∈ TEnv.dom Γ' := by
         intro w hw
         obtain ⟨t', hwΓ⟩ := hfix.fv_subset w (by simpa [Exp.fv] using hw)
@@ -760,14 +768,18 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
       simp only [List.mem_append, List.mem_singleton, not_or] at hf hx
       obtain ⟨⟨⟨⟨hfΓ, hfΓfv⟩, hfe⟩, hfs⟩, hft⟩ := hf
       obtain ⟨⟨⟨⟨⟨hxΓ, hxΓfv⟩, hxe⟩, hxs⟩, hxt⟩, hxf⟩ := hx
-      -- The recursive closure is in the relation at every index, by induction
-      -- on the index: a recursive call happens after a β-step, i.e. at `j < k`.
-      have key : ∀ k, EnvCloses κ δ k Γ' γ →
+      -- The recursive closure is in the relation at every index, and under every
+      -- re-interpretation of the generalized type variables `as`, by induction
+      -- on the index: a recursive call happens after a β-step, i.e. at `j < k`
+      -- (and may use another interpretation of `as` — polymorphic recursion).
+      have key : ∀ k, EnvCloses κ δ₀ k Γ' γ → ∀ δ, TyEnvSem.Reinterp as δ₀ δ →
           TyDenote κ δ k (.arrow s t) γ (.fclos (Exp.substEnv γ e).erase) := by
         intro k
         induction k using Nat.strongRecOn with
         | ind k IH =>
-        intro hE
+        intro hE₀ δ hδδ
+        have hE : EnvCloses κ δ k Γ' γ := EnvCloses.reinterp has hδδ hE₀
+        have hδ : δ.WK := hδδ.WK hδ₀
         simp only [TyDenote]
         refine ⟨⟨_, Or.inr rfl⟩, ?_, ?_, ?_, ?_⟩
         · simp only [Val.lc]
@@ -781,13 +793,15 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
         · exact Exp.typeFree_erase _
         · intro j hj va htd_va
           have hEj := hE.mono (Nat.le_of_lt hj)
+          have hE₀j := hE₀.mono (Nat.le_of_lt hj)
           let vf : Val := .fclos (Exp.substEnv γ e).erase
-          have htd_f : TyDenote κ δ j (.arrow s t) γ vf := IH j hj hEj
-          have hf_st : f ∉ (Ty.arrow s t).fv := by simp [Ty.fv, hfs, hft]
-          have hx_st : x ∉ (Ty.arrow s t).fv := by simp [Ty.fv, hxs, hxt]
-          have hE₁ : EnvCloses κ δ j ((f, .arrow s t) :: Γ') (γ.write f vf) :=
+          have htd_f : TyDenote κ δ j (Ty.gen as (.arrow s t)) γ vf :=
+            TyDenote.gen_intro as δ (fun δ' h' => IH j hj hE₀j δ' (hδδ.trans h'))
+          have hf_st : f ∉ (Ty.gen as (.arrow s t)).fv := by simp [Ty.fv, hfs, hft]
+          have hx_st : x ∉ (Ty.gen as (.arrow s t)).fv := by simp [Ty.fv, hxs, hxt]
+          have hE₁ : EnvCloses κ δ j ((f, Ty.gen as (.arrow s t)) :: Γ') (γ.write f vf) :=
             EnvCloses.extend hEj f _ vf hfΓ hfΓfv (TyDenote.extendBy_fresh f vf hf_st htd_f)
-          have hE₂ : EnvCloses κ δ j ((x, s) :: (f, .arrow s t) :: Γ')
+          have hE₂ : EnvCloses κ δ j ((x, s) :: (f, Ty.gen as (.arrow s t)) :: Γ')
               ((γ.write f vf).write x va) :=
             EnvCloses.extend hE₁ x s va
               (by simp only [TEnv.dom, List.mem_cons, not_or]; exact ⟨hxf, hxΓ⟩)
@@ -818,7 +832,7 @@ theorem hastype_fundamental {κ Γ e t} (h : Hastype κ Γ e t) :
           rw [REnv.push_write_comm] at h
           exact TyDenote.of_extendBy_fresh f vf hft h
       exact ⟨_, Eval.fix, fun v m ho => by
-        injection ho with h₁ h₂; subst h₁ h₂; exact key k hE⟩
+        injection ho with h₁ h₂; subst h₁ h₂; exact key k hE₀ δ₀ (.refl δ₀)⟩
 
   | @tabs Γ' kd e t a hwf hka hfresh hbody ih =>
       intro δ hδ k γ hE

@@ -213,7 +213,8 @@ def Exp.WFBVars : Exp → Prop
   | .add e₁ e₂    => Exp.WFBVars e₁ ∧ Exp.WFBVars e₂
   | .fix e        => Exp.WFBVars e
   | .tabs _ e     => Exp.WFBVars e
-  | .tapp e t     => Ty.WFBVars t ∧ Exp.WFBVars e
+  -- the instance is checked by `Ty.wfB` (after opening) instead
+  | .tapp e _     => Exp.WFBVars e
 
 theorem TEnv.WFBVars.empty : TEnv.WFBVars [] := by intros x t h ; trivial
 
@@ -820,6 +821,85 @@ theorem Ty.WFBVars_openTv (t : Ty) (k : Nat) (a : TVar) (h : Ty.WFBVars t) :
   have := Ty.WFBVarCtx_openTv t k a [] h
   simpa using this
 
+/-! ### Generalization: closing a free type variable
+
+  `Ty.closeTv k a` abstracts the free type variable `a` as the type binder at
+  level `k` (shifting deeper levels up) — the inverse of `Ty.openTv`. `Ty.gen as t`
+  quantifies `t` over the type variables `as`: it is how a recursive function's
+  own name gets a polymorphic type (polymorphic recursion). -/
+
+def BSubst.closeAt (k : Nat) (a : TVar) : BSubst :=
+  ⟨fun j => if k ≤ j then .tbvar (j+1) else .tbvar j,
+   fun a' => if a' = a then .tbvar k else .tfvar a'⟩
+
+def Ty.closeTv (k : Nat) (a : TVar) : Ty → Ty
+  | .refine b r  => .refine (b.substB (BSubst.closeAt k a)) (r.substB (BSubst.closeAt k a))
+  | .arrow s t   => .arrow (s.closeTv k a) (t.closeTv k a)
+  | .forall κ t  => .forall κ (t.closeTv (k+1) a)
+
+/-- `∀ as. t`, outermost first. -/
+@[simp] def Ty.gen : List TVar → Ty → Ty
+  | [],      t => t
+  | a :: as, t => .forall a.2 ((Ty.gen as t).closeTv 0 a)
+
+@[simp] theorem Ty.fv_closeTv (k : Nat) (a : TVar) (t : Ty) : (t.closeTv k a).fv = t.fv := by
+  induction t generalizing k <;> simp_all [Ty.closeTv, Ty.fv]
+
+@[simp] theorem Ty.fv_gen (as : List TVar) (t : Ty) : (Ty.gen as t).fv = t.fv := by
+  induction as <;> simp_all [Ty.gen, Ty.fv]
+
+theorem Base.shiftT_substB_closeAt (k : Nat) (a : TVar) (b : Base) :
+    (b.substB (BSubst.closeAt k a)).shiftT = b.shiftT.substB (BSubst.closeAt (k+1) a) := by
+  cases b with
+  | tbvar j =>
+    simp only [Base.substB, BSubst.closeAt, Base.shiftT]
+    by_cases h : k ≤ j
+    · simp [h, show k + 1 ≤ j + 1 by omega]
+    · simp [h, show ¬ k + 1 ≤ j + 1 by omega]
+  | tfvar a' =>
+    simp only [Base.substB, BSubst.closeAt]
+    by_cases h : a' = a <;> simp [h, Base.shiftT]
+  | _ => rfl
+
+theorem Ty.WFBVarCtx_closeTv (t : Ty) : ∀ (k : Nat) (a : TVar) (ctx : List (Option Base)),
+    Ty.WFBVarCtx ctx t →
+    Ty.WFBVarCtx (ctx.map (Option.map (Base.substB (BSubst.closeAt k a)))) (t.closeTv k a) := by
+  induction t with
+  | refine br r =>
+    intro k a ctx h
+    simp only [Ty.closeTv, Ty.WFBVarCtx] at h ⊢
+    intro b i hbv
+    obtain ⟨b₀, rfl, hbv₀⟩ := Refinement.hasBVar_substB _ b r i hbv
+    have := h b₀ i hbv₀
+    show ((some br :: ctx).map (Option.map (Base.substB (BSubst.closeAt k a))))[i]? = _
+    rw [List.getElem?_map, this]; rfl
+  | arrow s t ihs iht =>
+    intro k a ctx h
+    simp only [Ty.closeTv, Ty.WFBVarCtx] at h ⊢
+    refine ⟨ihs k a ctx h.1, ?_⟩
+    have := iht k a (s.optBase :: ctx) h.2
+    have hopt : (s.closeTv k a).optBase = s.optBase.map (Base.substB (BSubst.closeAt k a)) := by
+      cases s <;> rfl
+    rw [hopt]; simpa using this
+  | «forall» κ t ih =>
+    intro k a ctx h
+    simp only [Ty.closeTv, Ty.WFBVarCtx] at h ⊢
+    have := ih (k+1) a (ctx.map (Option.map Base.shiftT)) h
+    have hmap : (ctx.map (Option.map (Base.substB (BSubst.closeAt k a)))).map (Option.map Base.shiftT)
+        = (ctx.map (Option.map Base.shiftT)).map (Option.map (Base.substB (BSubst.closeAt (k+1) a))) := by
+      simp only [List.map_map]
+      apply List.map_congr_left
+      intro o _
+      cases o <;> simp [Base.shiftT_substB_closeAt]
+    rw [hmap]; exact this
+
+theorem Ty.WFBVars_gen (as : List TVar) (t : Ty) (h : Ty.WFBVars t) : Ty.WFBVars (Ty.gen as t) := by
+  induction as with
+  | nil => exact h
+  | cons a as ih =>
+    have := Ty.WFBVarCtx_closeTv _ 0 a [] ih
+    simpa [Ty.gen, Ty.WFBVars, Ty.WFBVarCtx] using this
+
 /-! ### Free type variables and fresh type-variable names
 
   Free type variables can occur in the sorts of deep-embedded terms, so `ftv`
@@ -877,7 +957,8 @@ def Exp.openVar (k : Nat) (x : EVar) : Exp → Exp
   | .unreach       => .unreach
   | .fix body      => .fix (body.openVar (k+2) x)
   | .tabs κ e      => .tabs κ (e.openVar k x)
-  | .tapp e t      => .tapp (e.openVar k x) t
+  -- the instance may mention enclosing term binders: open them too
+  | .tapp e t      => .tapp (e.openVar k x) (t.openVar k x)
 
 /-- Structural skeleton size: counts constructor depth, ignoring leaf details
     (so `Exp.skel` is preserved under `openVar` / `subst`). Used as a
@@ -950,7 +1031,7 @@ def Exp.openTv (k : Nat) (a : TVar) : Exp → Exp
 theorem Exp.WFBVars_openTv (e : Exp) (k : Nat) (a : TVar) (h : Exp.WFBVars e) :
     Exp.WFBVars (e.openTv k a) := by
   induction e generalizing k with
-  | ann e t ih | tapp e t ih =>
+  | ann e t ih =>
     simp only [Exp.WFBVars, Exp.openTv] at h ⊢
     exact ⟨Ty.WFBVars_openTv t k a h.1, ih k h.2⟩
   | _ => simp_all [Exp.WFBVars, Exp.openTv]
@@ -996,7 +1077,8 @@ def Exp.substEnv (γ : REnv) : Exp → Exp
   | .unreach      => .unreach
   | .fix body     => .fix (Exp.substEnv γ body)
   | .tabs κ e     => .tabs κ (Exp.substEnv γ e)
-  | .tapp e t     => .tapp (Exp.substEnv γ e) t
+  -- types are erased before running, so the closing substitution drops instances
+  | .tapp e _     => .tapp (Exp.substEnv γ e) (.refine .int (.fmla .tt))
 
 /-- Free type variables of the type annotations in an expression. -/
 def Exp.ftv : Exp → List TVar
@@ -1010,6 +1092,26 @@ def Exp.ftv : Exp → List TVar
 def TEnv.ftv : TEnv → List TVar
   | []          => []
   | (_, t) :: Γ => t.ftv ++ TEnv.ftv Γ
+
+/-- The type variables of `t` that the context does not mention (in order of
+    first occurrence): those a recursive function's own name is generalized over. -/
+def TEnv.genVars (Γ : TEnv) (t : Ty) : List TVar :=
+  (t.ftv.filter (fun a => a ∉ TEnv.ftv Γ)).eraseDups
+
+theorem TEnv.genVars_fresh {Γ : TEnv} {t : Ty} {a : TVar} (h : a ∈ TEnv.genVars Γ t) :
+    a ∉ TEnv.ftv Γ := by
+  simp only [TEnv.genVars, List.mem_eraseDups, List.mem_filter, decide_eq_true_eq] at h
+  exact h.2
+
+/-- Does `e` instantiate the variable `f` at a type (`f[τ]`)? -/
+@[simp] def Exp.tappsVar (f : EVar) : Exp → Bool
+  | .bvar _ | .fvar _ | .iconst _ | .bconst _ | .unreach => false
+  | .lam e | .not e | .fix e | .tabs _ e | .ann e _ => e.tappsVar f
+  | .letin e₁ e₂ | .app e₁ e₂ | .and e₁ e₂ | .leq e₁ e₂ | .add e₁ e₂ =>
+      e₁.tappsVar f || e₂.tappsVar f
+  | .ite e₀ e₁ e₂ => e₀.tappsVar f || e₁.tappsVar f || e₂.tappsVar f
+  | .tapp (.fvar g) _ => g == f
+  | .tapp e _ => e.tappsVar f
 
 /-! ### Type erasure
 
@@ -1086,7 +1188,8 @@ theorem Exp.substEnv_openTv (γ : REnv) (k : Nat) (a : TVar) (e : Exp)
   | fvar x =>
     simp only [Exp.openTv, Exp.substEnv]
     exact (Exp.openTv_of_typeFree k a _ (hγ x (by simp [Exp.fv]))).symm
-  | _ => simp_all [Exp.substEnv, Exp.openTv, Exp.fv]
+  | _ => simp_all [Exp.substEnv, Exp.openTv, Exp.fv, Ty.openTv, Base.substB, Refinement.substB,
+      Formula.substB]
 
 /-! ## 9. Freshness helper
 
@@ -1221,25 +1324,15 @@ theorem Exp.substEnv_tabs (γ : REnv) (κ : Kind) (e : Exp) :
 
 @[simp]
 theorem Exp.substEnv_tapp (γ : REnv) (e : Exp) (t : Ty) :
-    Exp.substEnv γ (.tapp e t) = .tapp (Exp.substEnv γ e) t := rfl
+    Exp.substEnv γ (.tapp e t) = .tapp (Exp.substEnv γ e) (.refine .int (.fmla .tt)) := rfl
 
-/-- A closed expression is fixed under the closing substitution. -/
+/-- A closed expression is fixed, up to erasure, under the closing substitution
+    (which drops type-application instances). -/
 theorem Exp.substEnv_closed (γ : REnv) (e : Exp) (he : e.fv = []) :
-    Exp.substEnv γ e = e := by
+    (Exp.substEnv γ e).erase = e.erase := by
   induction e with
-  | bvar _ | iconst _ | bconst _ | unreach => rfl
   | fvar y => simp [Exp.fv] at he
-  | lam body ih => simp only [Exp.fv] at he; simp only [Exp.substEnv, ih he]
-  | fix body ih => simp only [Exp.fv] at he; simp only [Exp.substEnv, ih he]
-  | ann e t ih | tapp e t ih | tabs t e ih => simp only [Exp.fv] at he; simp only [Exp.substEnv, ih he]
-  | not e ih => simp only [Exp.fv] at he; simp only [Exp.substEnv, ih he]
-  | letin e₁ e₂ ih₁ ih₂ | app e₁ e₂ ih₁ ih₂ | and e₁ e₂ ih₁ ih₂
-  | leq e₁ e₂ ih₁ ih₂ | add e₁ e₂ ih₁ ih₂ =>
-    simp only [Exp.fv, List.append_eq_nil_iff] at he
-    simp only [Exp.substEnv, ih₁ he.1, ih₂ he.2]
-  | ite e₀ e₁ e₂ ih₀ ih₁ ih₂ =>
-    simp only [Exp.fv, List.append_eq_nil_iff] at he
-    simp only [Exp.substEnv, ih₀ he.1.1, ih₁ he.1.2, ih₂ he.2]
+  | _ => simp_all [Exp.substEnv, Exp.erase, Exp.fv]
 
 theorem Val.toExp_closed_of_closed {v : Val} (h : Val.closed v) : v.toExp.fv = [] := by
   cases v with

@@ -537,3 +537,52 @@ theorem poly_iter_client : ∃ κ : KEnv, Check κ []
     (.refine .int (.fmla (.leqI (.const .int 0) (.bvar .int 0)))) := by
   generate
   fix
+
+/-! ### Type arguments may mention program variables
+
+  `λn. let m = n in id[Int{n ≤ ν}] m ⇐ n:Int → Int{n ≤ ν}`: the instance refers
+  to the enclosing binder `n` (in the instance, ν is 0, `m` is 1 and `n` is 2).
+  The argument is rebound because the application rule requires it not to occur
+  in the result type, which now mentions `n`. -/
+
+theorem poly_tapp_var (κ : KEnv) : topVC κ []
+    (.lam (.letin (.bvar 0)
+      (.app (.tapp (.ann idPoly idTy) (.refine .int (.fmla (.leqI (.bvar .int 2) (.bvar .int 0)))))
+        (.bvar 0))))
+    (.arrow TT (.refine .int (.fmla (.leqI (.bvar .int 1) (.bvar .int 0))))) := by
+  simp [topVC, idPoly, idTy]
+  intros; omega
+
+/-! ### Polymorphic recursion
+
+  `nest : ∀α:⋆. α → Int → Nat` calls itself at the instance `Int → α`: its own
+  name is generalized over `α` inside its body (`Check.fix`), which the VC
+  generator does because the body type-applies it. -/
+
+attribute [local simp] TEnv.genVars Ty.closeTv BSubst.closeAt List.eraseDups_cons
+
+abbrev NatTy : Ty := .refine .int (.fmla (.leqI (.const .int 0) (.bvar .int 0)))
+abbrev nestTy : Ty := .forall .star (.arrow (TV ttR) (.arrow TT NatTy))
+
+/-- `Λα. fix f. λx. λn. let z = 0; let c = n ≤ z;
+       if c then z else let g = (λ_. x : Int → α); let m = n - 1; f[Int → α] g m` -/
+abbrev nestE (recCall : Exp) : Exp := .tabs .star (.fix (.lam   -- n=0 x=1 f=2
+  (.letin (.iconst 0)                                           -- z      n=1 x=2 f=3
+  (.letin (.leq (.bvar 1) (.bvar 0))                            -- c      z=1 n=2 x=3 f=4
+  (.ite (.bvar 0)
+    (.bvar 1)
+    (.letin (.ann (.lam (.bvar 4)) (.arrow TT (TV ttR)))         -- g      c=1 z=2 n=3 x=4 f=5
+    (.letin (.iconst (-1))                                      -- m1     g=1 … n=4 x=5 f=6
+    (.letin (.add (.bvar 4) (.bvar 0))                          -- m      m1=1 g=2 … n=5 f=7
+    (.letin recCall                                             -- h      m=1 m1=2 g=3
+    (.app (.bvar 0) (.bvar 1)))))))))))
+
+theorem poly_nest (κ : KEnv) : topVC κ []
+    (nestE (.app (.tapp (.bvar 7) (.arrow TT (TV ttR))) (.bvar 2))) nestTy := by
+  simp [topVC]
+
+/-- With a monomorphic recursive call `f g m`, the argument `g : Int → α` is not
+    an `α`: rejected. -/
+theorem poly_nest_mono_bad (κ : KEnv) : ¬ topVC κ []
+    (nestE (.app (.bvar 7) (.bvar 2))) nestTy := by
+  simp [topVC]

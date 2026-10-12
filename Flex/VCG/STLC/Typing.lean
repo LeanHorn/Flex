@@ -128,11 +128,15 @@ mutual
         Check κ Γ (.ite (.fvar x) e₁ e₂) t
 
     /-- FIX (Chk-Rec, assume–guarantee): check the body of the recursive
-        function `fix f. λx. e` assuming `f` already has the annotated type. -/
-    | fix {κ Γ e s t f x} :
+        function `fix f. λx. e` assuming `f` already has the annotated type,
+        *generalized* over type variables `as` that the context does not
+        mention — polymorphic recursion: the recursive calls may instantiate
+        them differently (`as = []` is the monomorphic rule). -/
+    | fix {κ Γ e s t f x} (as : List TVar) :
+        (∀ a ∈ as, a ∉ TEnv.ftv Γ) →
         f ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s.fv ++ t.fv →
         x ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s.fv ++ t.fv ++ [f] →
-        Check κ ((x, s) :: (f, .arrow s t) :: Γ)
+        Check κ ((x, s) :: (f, Ty.gen as (.arrow s t)) :: Γ)
           ((e.openVar 1 f).openVar 0 x) (t.openVar 0 x) →
         Check κ Γ (.fix e) (.arrow s t)
 

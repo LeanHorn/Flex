@@ -114,10 +114,13 @@ mutual
         | none   => none
     | .fix e, .arrow s t =>
         -- Chk-Rec: check the body assuming `f : s → t` (assume–guarantee). The
-        -- binding for `f` has arrow type, so it contributes no hypothesis.
+        -- binding for `f` has arrow or ∀ type, so it contributes no hypothesis.
+        -- Polymorphic recursion: if the body instantiates `f` at a type, `f` is
+        -- generalized over the annotation's type variables that `Γ` does not mention.
         let f := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s.fv ++ t.fv)
         let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s.fv ++ t.fv ++ [f])
-        match check ((x, s) :: (f, .arrow s t) :: Γ)
+        let as := if (e.openVar 1 f).tappsVar f then TEnv.genVars Γ (.arrow s t) else []
+        match check ((x, s) :: (f, Ty.gen as (.arrow s t)) :: Γ)
                 ((e.openVar 1 f).openVar 0 x) (t.openVar 0 x) with
         | some c => some (implyBindCstr x s c)
         | none   => none

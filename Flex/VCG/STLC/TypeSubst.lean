@@ -241,6 +241,109 @@ theorem TyDenote.push_openTv_iff {κ : KEnv} (δ : TyEnvSem) (a : TVar) (R : Sem
   have := TyDenote.openTv_iff (κ := κ) a R t ha [] δ.bv δ.fv k γ v
   simpa [TyEnvSem.push] using this
 
+/-! ## Closing a type variable (generalization) -/
+
+theorem BSubst.closeAt_ren (k : Nat) (a : TVar) : (BSubst.closeAt k a).IsRen := by
+  intro b hb
+  cases b with
+  | tbvar j => simp only [Base.substB, BSubst.closeAt]; split <;> rfl
+  | tfvar a' => simp only [Base.substB, BSubst.closeAt]; split <;> rfl
+  | int | bool => simp [Base.isTv] at hb
+
+theorem BaseDen.closeAt (ρ ρ₀ : List SemTy) (η : TVar → SemTy) (a : TVar) (R : SemTy)
+    {k : Nat} {b : Base} {v : Val} :
+    BaseDen ⟨ρ ++ R :: ρ₀, η⟩ k (b.substB (BSubst.closeAt ρ.length a)) v ↔
+    BaseDen ((⟨ρ ++ ρ₀, η⟩ : TyEnvSem).set a R) k b v := by
+  cases b with
+  | int | bool => rfl
+  | tfvar a' =>
+    simp only [Base.substB, BSubst.closeAt]
+    by_cases h : a' = a
+    · subst h; simp [BaseDen, TyEnvSem.set]
+    · simp [BaseDen, TyEnvSem.set, h]
+  | tbvar j =>
+    simp only [Base.substB, BSubst.closeAt]
+    by_cases h : ρ.length ≤ j
+    · simp only [h, if_true, BaseDen]
+      have e₁ : (ρ ++ R :: ρ₀)[j + 1]? = ρ₀[j - ρ.length]? := by
+        rw [List.getElem?_append_right (by omega)]
+        rw [show j + 1 - ρ.length = (j - ρ.length) + 1 by omega]
+        simp
+      have e₂ : (ρ ++ ρ₀)[j]? = ρ₀[j - ρ.length]? := List.getElem?_append_right h
+      simp [TyEnvSem.set, e₁, e₂]
+    · simp only [h, if_false, BaseDen]
+      have hj : j < ρ.length := by omega
+      simp [TyEnvSem.set, List.getElem?_append_left hj]
+
+/-- Closing `a` as a type binder interpreted by `R` is interpreting `a` by `R`. -/
+theorem TyDenote.closeTv_iff {κ : KEnv} (a : TVar) (R : SemTy) (t : Ty) :
+    ∀ (ρ ρ₀ : List SemTy) (η : TVar → SemTy) (k : Nat) (γ : REnv) (v : Val),
+      TyDenote κ ⟨ρ ++ R :: ρ₀, η⟩ k (t.closeTv ρ.length a) γ v ↔
+      TyDenote κ ((⟨ρ ++ ρ₀, η⟩ : TyEnvSem).set a R) k t γ v := by
+  induction t with
+  | refine b r =>
+    intro ρ ρ₀ η k γ v
+    simp only [Ty.closeTv, TyDenote]
+    rw [BaseDen.closeAt ρ ρ₀ η a R,
+        Refinement.interp_substB_ren (BSubst.closeAt_ren _ _)]
+  | arrow s t ihs iht =>
+    intro ρ ρ₀ η k γ v
+    simp only [Ty.closeTv, TyDenote]
+    refine and_congr_right (fun _ => and_congr_right (fun _ => and_congr_right (fun _ =>
+      and_congr_right (fun _ => ?_))))
+    refine forall_congr' (fun j => forall_congr' (fun _ => forall_congr' (fun va => ?_)))
+    rw [ihs ρ ρ₀ η]
+    refine imp_congr_right (fun _ => exists_congr (fun body => exists_congr (fun o =>
+      and_congr_right (fun _ => and_congr_right (fun _ => ?_)))))
+    exact forall_congr' (fun vr => forall_congr' (fun m => imp_congr_right (fun _ =>
+      iht ρ ρ₀ η m _ vr)))
+  | «forall» kd t ih =>
+    intro ρ ρ₀ η k γ v
+    simp only [Ty.closeTv, TyDenote]
+    refine forall_congr' (fun R' => forall_congr' (fun _ => ?_))
+    have := ih (R' :: ρ) ρ₀ η k γ v
+    simpa [TyEnvSem.push, TyEnvSem.set] using this
+
+/-- `δ'` re-interprets (some of) the type variables `as` of `δ`, legally. -/
+inductive TyEnvSem.Reinterp (as : List TVar) : TyEnvSem → TyEnvSem → Prop
+  | refl (δ : TyEnvSem) : TyEnvSem.Reinterp as δ δ
+  | set {δ δ' : TyEnvSem} (a : TVar) (R : SemTy) :
+      a ∈ as → R.Fits a.2 → TyEnvSem.Reinterp as δ δ' → TyEnvSem.Reinterp as δ (δ'.set a R)
+
+theorem TyEnvSem.Reinterp.trans {as : List TVar} {δ₁ δ₂ δ₃ : TyEnvSem}
+    (h₁ : TyEnvSem.Reinterp as δ₁ δ₂) (h₂ : TyEnvSem.Reinterp as δ₂ δ₃) :
+    TyEnvSem.Reinterp as δ₁ δ₃ := by
+  induction h₂ with
+  | refl => exact h₁
+  | set a R ha hR _ ih => exact .set a R ha hR ih
+
+theorem TyEnvSem.Reinterp.WK {as : List TVar} {δ δ' : TyEnvSem}
+    (h : TyEnvSem.Reinterp as δ δ') (hδ : δ.WK) : δ'.WK := by
+  induction h with
+  | refl => exact hδ
+  | set a R _ hR _ ih => exact TyEnvSem.set_WK ih a R hR
+
+theorem TyEnvSem.Reinterp.cons {a : TVar} {as : List TVar} {δ δ' : TyEnvSem} {R : SemTy}
+    (hR : R.Fits a.2) (h : TyEnvSem.Reinterp as (δ.set a R) δ') :
+    TyEnvSem.Reinterp (a :: as) δ δ' := by
+  induction h with
+  | refl => exact .set a R List.mem_cons_self hR (.refl δ)
+  | set a' R' ha' hR' _ ih => exact .set a' R' (List.mem_cons_of_mem _ ha') hR' ih
+
+/-- Introducing a generalized type: a value that is in `t` under every legal
+    re-interpretation of `as` is in `∀ as. t`. -/
+theorem TyDenote.gen_intro {κ : KEnv} {k : Nat} {t : Ty} {γ : REnv} {v : Val} :
+    ∀ (as : List TVar) (δ : TyEnvSem),
+      (∀ δ', TyEnvSem.Reinterp as δ δ' → TyDenote κ δ' k t γ v) →
+      TyDenote κ δ k (Ty.gen as t) γ v
+  | [], δ, h => h δ (.refl δ)
+  | a :: as, δ, h => by
+    simp only [Ty.gen, TyDenote]
+    intro R hR
+    have := TyDenote.closeTv_iff (κ := κ) a R (Ty.gen as t) [] δ.bv δ.fv k γ v
+    simp only [List.nil_append, List.length_nil] at this
+    exact this.mpr (TyDenote.gen_intro as _ (fun δ' h' => h δ' (TyEnvSem.Reinterp.cons hR h')))
+
 /-! ## Congruence: a refinement reads only the slots it mentions -/
 
 theorem Term.interp_congr {γ γ' : REnv} (hmap : γ.map = γ'.map) :

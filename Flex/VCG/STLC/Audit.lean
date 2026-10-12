@@ -1,5 +1,6 @@
 import Flex.VCG.STLC.Safety
 import Flex.VCG.STLC.Examples
+import Flex.VCG.STLC.DataExamples
 
 open STLC
 
@@ -57,3 +58,15 @@ open STLC
 
 /-- info: 'poly_nest' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms poly_nest
+
+/-- info: 'data_sumList_client' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms data_sumList_client
+
+/-- info: 'data_sumList_safe' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms data_sumList_safe
+
+/-- info: 'data_map_client' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms data_map_client
+
+/-- info: 'data_mkOrd_bad' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms data_mkOrd_bad

@@ -27,6 +27,8 @@ def STLC.Ty.hyp? : Ty → Option (Base × Refinement)
   | .refine b r                   => some (b, r)
   | .arrow _ _                    => none
   | .forall _ _                   => none
+  | .prod _ _                     => none
+  | .data _ _ _                   => none
 
 @[simp] theorem Ty.hyp?_int (r : Refinement) : (Ty.refine .int r).hyp? = some (.int, r) := rfl
 @[simp] theorem Ty.hyp?_bool (r : Refinement) : (Ty.refine .bool r).hyp? = some (.bool, r) := rfl
@@ -38,6 +40,9 @@ def STLC.Ty.hyp? : Ty → Option (Base × Refinement)
     (Ty.refine (.tbvar j) r).hyp? = none := rfl
 @[simp] theorem Ty.hyp?_arrow (s t : Ty) : (Ty.arrow s t).hyp? = none := rfl
 @[simp] theorem Ty.hyp?_forall (k : Kind) (t : Ty) : (Ty.forall k t).hyp? = none := rfl
+@[simp] theorem Ty.hyp?_prod (s t : Ty) : (Ty.prod s t).hyp? = none := rfl
+@[simp] theorem Ty.hyp?_data (C : String) (n : Nat) (args : Fin n → Ty) :
+    (Ty.data C n args).hyp? = none := rfl
 
 /-- A model for Γ under κ-assignment: every binding with a refined hypothesis
     stores a value of the binding's sort (`HasBase`) satisfying it. The

@@ -12,7 +12,7 @@ open STLC
   All examples re-stated under:
   - LN binders (`Exp.lam (.bvar 0)` etc.)
   - Deep `Formula` refinements
-  - κ-aware judgements (`topVC κ`, `Check κ`, `Hastype κ`)
+  - κ-aware judgements (`topVC κ`, `Check [] κ`, `Hastype [] κ`)
 
   Proofs preserve the *spirit* of the original tactics:
   `simp + solve_fixpoint`, `make_horn_under_k + solve_fixpoint`,
@@ -109,7 +109,7 @@ def Ge1 (i : Int) : Prop := 1 ≤ i
 
 example :
     ∃ κ : KEnv,
-      Check κ []
+      Check [] κ []
         (.letin (.iconst 99) (.app (.ann exId (ty_k "k")) (.bvar 0)))
         Pos := by
   generate
@@ -120,7 +120,7 @@ example :
 
 example :
     ∃ κ : KEnv,
-      Check κ []
+      Check [] κ []
         (.letin (.iconst 99) (.app (.ann exId (ty_xk "k")) (.bvar 0)))
         (IntN 99) := by
   generate
@@ -196,7 +196,7 @@ abbrev exMax : Exp :=
 
 example :
     ∃ κ : KEnv,
-      Check κ []
+      Check [] κ []
         (.letin (.iconst 99)
           (.letin (.iconst 100)
             (.app (.app (.ann exMax
@@ -244,7 +244,7 @@ example (κ : KEnv) : topVC κ [] exUnreachable tyUnreachable := by
 -- Declarative-side: `unreach` is directly derivable from a contradictory `Entail`.
 example (κ : KEnv) (Γ : TEnv) (t : Ty)
     (h : Entail κ Γ (fun _ => False)) (hwf : Ty.WFBVars t) :
-    Hastype κ Γ .unreach t := .unreach h hwf
+    Hastype [] κ Γ .unreach t := .unreach h hwf
 
 -- Sanity check: `unreach` genuinely gets stuck — it has no `Eval` rule, not
 -- even a timeout, at any fuel.
@@ -255,7 +255,7 @@ example (n : Nat) : ¬ ∃ o, Eval n .unreach o := by
 /-! ## Declarative-side examples (via `topVC_decl_sound`) -/
 
 -- Identity (λx. x) is declaratively typeable at Pos → Pos.
-example (κ : KEnv) : Hastype κ [] ex2Exp ex2Ty := by
+example (κ : KEnv) : Hastype [] κ [] ex2Exp ex2Ty := by
   apply topVC_decl_sound
     <;> simp [topVC, ex2Exp, exId, ex2Ty, Pos]
   · simp [Exp.WFBVars]
@@ -265,7 +265,7 @@ example (κ : KEnv) : Hastype κ [] ex2Exp ex2Ty := by
 
 
 -- let z = 5 in z is declaratively typeable at Pos.
-example (κ : KEnv) : Hastype κ [] ex3Exp ex3Ty := by
+example (κ : KEnv) : Hastype [] κ [] ex3Exp ex3Ty := by
   apply topVC_decl_sound <;>
   simp [topVC, check, synth, sub, implyBindCstr, Cstr.interp, Cstr.triv,
         Refinement.openBVar, Formula.openBVar, Term.openBVar, ex3Exp, ex3Ty, Pos,
@@ -275,11 +275,11 @@ example (κ : KEnv) : Hastype κ [] ex3Exp ex3Ty := by
 
 /-! ## Declarative-side: direct constructor derivations -/
 
-example (κ : KEnv) : Hastype κ [] (.iconst 5) (prim 5) := .int_const
+example (κ : KEnv) : Hastype [] κ [] (.iconst 5) (prim 5) := .int_const
 
-example (κ : KEnv) : Hastype κ [] (.bconst true) (primBool true) := .bool_const
+example (κ : KEnv) : Hastype [] κ [] (.bconst true) (primBool true) := .bool_const
 
-example (κ : KEnv) : Hastype κ [] (.ann (.iconst 5) (prim 5)) (prim 5) := by
+example (κ : KEnv) : Hastype [] κ [] (.ann (.iconst 5) (prim 5)) (prim 5) := by
   constructor
   constructor
   simp [Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar, Term.hasBVar]
@@ -287,7 +287,7 @@ example (κ : KEnv) : Hastype κ [] (.ann (.iconst 5) (prim 5)) (prim 5) := by
 example (κ : KEnv) (Γ : TEnv) (x y : EVar) (r₁ r₂ : Refinement)
     (hx : Γ.lookup x = some (.refine .int r₁))
     (hy : Γ.lookup y = some (.refine .int r₂)) :
-    Hastype κ Γ (.add (.fvar x) (.fvar y))
+    Hastype [] κ Γ (.add (.fvar x) (.fvar y))
       (.refine .int (.fmla (.eq .int (.bvar .int 0)
                           (.add (.fvar .int x) (.fvar .int y))))) := by
   apply Hastype.add_var <;> assumption
@@ -374,7 +374,7 @@ theorem loopMain_vc (κ : KEnv) : topVC κ [] loopMain (.refine .int (.fmla .ff)
 /-- By `vcgen_partial_correct`, `loop 0` never returns a value, whatever the fuel. -/
 example (n : Nat) : ¬ ∃ v m, Run n loopMain (.val v m) := by
   rintro ⟨v, m, hev⟩
-  obtain ⟨_, hr⟩ := vcgen_partial_correct (κ := fun _ _ => True)
+  obtain ⟨_, hr⟩ := vcgen_partial_correct (κ := fun _ _ => True) rfl
     (by simp [loopMain, loop, loopTy, Exp.WFBVars, Ty.WFBVars, Ty.WFBVarCtx,
               Refinement.hasBVar, Formula.hasBVar])
     (by simp [Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar])
@@ -407,7 +407,7 @@ abbrev sumTyK : Ty := .arrow TT (IntR "k")
 
 theorem sum_infer :
     ∃ κ : KEnv,
-      Check κ []
+      Check [] κ []
         (.letin (.ann (.fix sumBody) sumTyK)          -- rec sum = … : sumTyK in
           (.letin (.iconst 5) (.app (.bvar 1) (.bvar 0))))   -- sum 5
         (.refine .int (.fmla (.leqI (.const .int 5) (.bvar .int 0)))) := by
@@ -448,7 +448,7 @@ theorem poly_id (κ : KEnv) : topVC κ [] idPoly idTy := by
 /-- `let five = 5 in id[int{k}] five ⇐ {ν = 5}`: the instance's result type is
     `int{k(ν) ∧ ν = five}` — the `ν = x` of `id`'s signature is conjoined into
     the instance, so any `k` admitting `5` works. -/
-theorem poly_id_client : ∃ κ : KEnv, Check κ []
+theorem poly_id_client : ∃ κ : KEnv, Check [] κ []
     (.letin (.iconst 5) (.app (.tapp (.ann idPoly idTy) (IntK "k")) (.bvar 0)))
     (IntN 5) := by
   generate
@@ -469,7 +469,7 @@ theorem poly_choose (κ : KEnv) : topVC κ [] choosePoly chooseTy := by
 
 /-- `λc. let z = 0; let f = 5; let r = choose[int{k}] c z f; let one = 1; r + one`
     `⇐ Bool → {0 < ν}`. -/
-theorem poly_choose_client : ∃ κ : KEnv, Check κ []
+theorem poly_choose_client : ∃ κ : KEnv, Check [] κ []
     (.lam
       (.letin (.iconst 0)
       (.letin (.iconst 5)
@@ -527,7 +527,7 @@ abbrev incTy : Ty :=
 abbrev incE : Exp := .lam (.letin (.iconst 1) (.add (.bvar 1) (.bvar 0)))
 
 /-- `let inc = …; let three = 3; let zero = 0; iter[int{k}] inc three zero ⇐ {0 ≤ ν}`. -/
-theorem poly_iter_client : ∃ κ : KEnv, Check κ []
+theorem poly_iter_client : ∃ κ : KEnv, Check [] κ []
     (.letin (.ann incE incTy)
     (.letin (.iconst 3)
     (.letin (.iconst 0)

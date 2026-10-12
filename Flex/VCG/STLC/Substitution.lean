@@ -96,6 +96,8 @@ def Refinement.openBVar (k : Nat) (x : EVar)
   | x, .refine b _     => .refine b (.fmla (.eq b (.bvar b 0) (.fvar b x)))
   | _, .arrow t1 t2    => .arrow t1 t2
   | _, .forall k t     => .forall k t
+  | _, .prod s t       => .prod s t
+  | _, .data C n args  => .data C n args
 
 /-! ## 4. Ty operations (locally nameless)
 
@@ -108,6 +110,8 @@ def Ty.fv : Ty → List EVar
   | .refine _ r => r.fv
   | .arrow s t  => Ty.fv s ++ Ty.fv t
   | .forall _ t => Ty.fv t
+  | .prod s t   => Ty.fv s ++ Ty.fv t
+  | .data _ n args => (List.finRange n).flatMap fun i => Ty.fv (args i)
 
 /-- Open a `Ty`'s outermost binder at level `k` with free name `x`. Opens the
     refinement `BVar` at level `k+1` — the `+1` because ν occupies formula-level
@@ -117,6 +121,8 @@ def Ty.openVar (k : Nat) (x : EVar) : Ty → Ty
   | .refine b r => .refine b (r.openBVar (k+1) x)
   | .arrow s t  => .arrow (s.openVar k x) (t.openVar (k+1) x)
   | .forall κ t => .forall κ (t.openVar k x)
+  | .prod s t   => .prod (s.openVar k x) (t.openVar (k+1) x)
+  | .data C n args => .data C n (fun i => (args i).openVar k x)
 
 @[simp]
 theorem Ty.skel_openVar (k : Nat) (x : EVar) (t : Ty) :
@@ -125,6 +131,79 @@ theorem Ty.skel_openVar (k : Nat) (x : EVar) (t : Ty) :
   | refine _ _ => rfl
   | arrow s t ihs iht => simp [Ty.openVar, Ty.skel, ihs, iht]
   | «forall» _ t ih => simp [Ty.openVar, Ty.skel, ih]
+  | prod s t ihs iht => simp [Ty.openVar, Ty.skel, ihs, iht]
+  | data C n args ih => simp [Ty.openVar, Ty.skel, ih]
+
+theorem Term.fv_openBVar {k : Nat} {x z : EVar} : ∀ {b : Base} (t : Term b),
+    z ∈ (t.openBVar k x).fv → z ∈ t.fv ∨ z = x := by
+  intro b t
+  induction t with
+  | bvar b j =>
+    simp only [Term.openBVar]
+    split
+    · simp [Term.fv]
+    · split <;> simp [Term.fv]
+  | const => simp [Term.openBVar, Term.fv]
+  | fvar => simp only [Term.openBVar, Term.fv, List.mem_singleton]; exact Or.inl
+  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
+    simp only [Term.openBVar, Term.fv, List.mem_append]
+    rintro (h | h)
+    · rcases ih₁ h with h | h <;> simp [h]
+    · rcases ih₂ h with h | h <;> simp [h]
+  | not _ ih => simpa [Term.openBVar, Term.fv] using ih
+
+theorem Formula.fv_openBVar {x z : EVar} (φ : Formula) : ∀ {k : Nat},
+    z ∈ (φ.openBVar k x).fv → z ∈ φ.fv ∨ z = x := by
+  induction φ with
+  | tt | ff => simp [Formula.openBVar, Formula.fv]
+  | eq _ t₁ t₂ | leqI t₁ t₂ =>
+    intro k
+    simp only [Formula.openBVar, Formula.fv, List.mem_append]
+    rintro (h | h)
+    · rcases Term.fv_openBVar t₁ h with h | h <;> simp [h]
+    · rcases Term.fv_openBVar t₂ h with h | h <;> simp [h]
+  | and _ _ ih₁ ih₂ | or _ _ ih₁ ih₂ | imp _ _ ih₁ ih₂ =>
+    intro k
+    simp only [Formula.openBVar, Formula.fv, List.mem_append]
+    rintro (h | h)
+    · rcases ih₁ h with h | h <;> simp [h]
+    · rcases ih₂ h with h | h <;> simp [h]
+  | not _ ih | ex _ _ ih | all _ _ ih => intro k h; exact ih h
+
+theorem Refinement.fv_openBVar {k : Nat} {x z : EVar} (r : Refinement) :
+    z ∈ (r.openBVar k x).fv → z ∈ r.fv ∨ z = x := by
+  induction r with
+  | fmla φ => exact Formula.fv_openBVar φ
+  | kapp kn args =>
+    simp only [Refinement.openBVar, Refinement.fv, List.flatMap_map, List.mem_flatMap]
+    rintro ⟨a, ha, h⟩
+    rcases Term.fv_openBVar a.2 h with h | h
+    · exact Or.inl ⟨a, ha, h⟩
+    · exact Or.inr h
+  | conj _ _ ih₁ ih₂ =>
+    simp only [Refinement.openBVar, Refinement.fv, List.mem_append]
+    rintro (h | h)
+    · rcases ih₁ h with h | h <;> simp [h]
+    · rcases ih₂ h with h | h <;> simp [h]
+
+theorem Ty.fv_openVar {x z : EVar} (t : Ty) : ∀ {k : Nat},
+    z ∈ (t.openVar k x).fv → z ∈ t.fv ∨ z = x := by
+  induction t with
+  | refine b r => intro k h; exact Refinement.fv_openBVar r h
+  | arrow _ _ ih₁ ih₂ | prod _ _ ih₁ ih₂ =>
+    intro k
+    simp only [Ty.openVar, Ty.fv, List.mem_append]
+    rintro (h | h)
+    · rcases ih₁ h with h | h <;> simp [h]
+    · rcases ih₂ h with h | h <;> simp [h]
+  | «forall» _ _ ih => intro k h; exact ih h
+  | data C n args ih =>
+    intro k
+    simp only [Ty.openVar, Ty.fv, List.mem_flatMap, List.mem_finRange, true_and]
+    rintro ⟨i, h⟩
+    rcases ih i h with h | h
+    · exact Or.inl ⟨i, h⟩
+    · exact Or.inr h
 
 /-! ### Well-formedness: BVar base consistency (WFBVarCtx)
 
@@ -169,6 +248,8 @@ def Ty.optBase : Ty → Option Base
   | .refine b _ => some b
   | .arrow _ _  => none
   | .forall _ _ => none
+  | .prod _ _   => none
+  | .data _ _ _ => none
 
 /-- Shift the type-variable de Bruijn indices of a sort up by one (entering a
     `Ty.forall`). -/
@@ -188,6 +269,9 @@ def Ty.WFBVarCtx : List (Option Base) → Ty → Prop
   -- no term binder; the recorded sorts are re-expressed under the new type binder
   | ctx, .forall _ t =>
       Ty.WFBVarCtx (ctx.map (Option.map Base.shiftT)) t
+  | ctx, .prod s t  =>
+      Ty.WFBVarCtx ctx s ∧ Ty.WFBVarCtx (s.optBase :: ctx) t
+  | ctx, .data _ _ args => ∀ i, Ty.WFBVarCtx ctx (args i)
 
 /-- Shorthand: `t` is well-formed with no outer binders. -/
 def Ty.WFBVars (t : Ty) : Prop := Ty.WFBVarCtx [] t
@@ -215,6 +299,10 @@ def Exp.WFBVars : Exp → Prop
   | .tabs _ e     => Exp.WFBVars e
   -- the instance is checked by `Ty.wfB` (after opening) instead
   | .tapp e _     => Exp.WFBVars e
+  | .pair e₁ e₂   => Exp.WFBVars e₁ ∧ Exp.WFBVars e₂
+  | .split e₁ e₂  => Exp.WFBVars e₁ ∧ Exp.WFBVars e₂
+  | .ctor _ _ τs e => (∀ τ ∈ τs, Ty.WFBVars τ) ∧ Exp.WFBVars e
+  | .case e _ alts => Exp.WFBVars e ∧ ∀ j, Exp.WFBVars (alts j)
 
 theorem TEnv.WFBVars.empty : TEnv.WFBVars [] := by intros x t h ; trivial
 
@@ -367,6 +455,17 @@ theorem Ty.WFBVarCtx_openVar_last (t : Ty) (ctx : List (Option Base)) (opt : Opt
     have h := ih (ctx.map (Option.map Base.shiftT)) (opt.map Base.shiftT)
       (by simpa [List.map_append] using hWF)
     simpa using h
+  | prod s t ihs iht =>
+    simp only [Ty.WFBVarCtx] at hWF ⊢
+    simp only [Ty.openVar]
+    refine ⟨ihs ctx opt hWF.1, ?_⟩
+    have ih := iht (s.optBase :: ctx) opt (by simpa using hWF.2)
+    simp only [List.length_cons] at ih
+    rw [Ty.optBase_openVar]
+    exact ih
+  | data C n args ih =>
+    simp only [Ty.WFBVarCtx, Ty.openVar] at hWF ⊢
+    exact fun i => ih i ctx opt (hWF i)
 
 /-! ## 4b. Type variables: sort substitution, opening, instantiation
 
@@ -504,6 +603,8 @@ def Ty.openTv (k : Nat) (a : TVar) : Ty → Ty
   | .refine b r  => .refine (b.substB (BSubst.openAt k a)) (r.substB (BSubst.openAt k a))
   | .arrow s t   => .arrow (s.openTv k a) (t.openTv k a)
   | .forall κ t  => .forall κ (t.openTv (k+1) a)
+  | .prod s t    => .prod (s.openTv k a) (t.openTv k a)
+  | .data C n args => .data C n (fun i => (args i).openTv k a)
 
 @[simp] theorem Ty.skel_openTv (k : Nat) (a : TVar) (t : Ty) :
     (t.openTv k a).skel = t.skel := by
@@ -535,6 +636,8 @@ def Ty.instTy (k : Nat) (s : Ty) : Ty → Ty
       else .refine (b.substB (BSubst.instAt k s.sortOf)) (r.substB (BSubst.instAt k s.sortOf))
   | .arrow t₁ t₂ => .arrow (Ty.instTy k s t₁) (Ty.instTy k s t₂)
   | .forall κ t  => .forall κ (Ty.instTy (k+1) s t)
+  | .prod t₁ t₂  => .prod (Ty.instTy k s t₁) (Ty.instTy k s t₂)
+  | .data C n args => .data C n (fun i => Ty.instTy k s (args i))
 
 /-- The kind of a type: refined `Int`/`Bool` and `B`-kinded type variables are
     base (`B`); everything else is `⋆`. -/
@@ -608,9 +711,12 @@ def Formula.wfB (kctx : List Kind) (ctx : List (Option Base)) : Formula → Bool
   | .ex b φ         => !b.isTv && φ.wfB kctx (some b :: ctx)
   | .all b φ        => !b.isTv && φ.wfB kctx (some b :: ctx)
 
+/-- The refinement is trivially true (`tt`, or a conjunction of such — as
+    produced by instantiating a `true`-refined type variable). -/
 def Refinement.isTT : Refinement → Bool
-  | .fmla .tt => true
-  | _         => false
+  | .fmla .tt   => true
+  | .conj r₁ r₂ => r₁.isTT && r₂.isTT
+  | _           => false
 
 def Refinement.wfB (kctx : List Kind) (ctx : List (Option Base)) : Refinement → Bool
   | .fmla φ       => φ.wfB kctx ctx
@@ -621,6 +727,8 @@ def Ty.wfB (kctx : List Kind) (ctx : List (Option Base)) : Ty → Bool
   | .refine b r  => b.tyOK kctx && (!b.isStarB kctx || r.isTT) && r.wfB kctx (some b :: ctx)
   | .arrow s t   => s.wfB kctx ctx && t.wfB kctx (s.optBase :: ctx)
   | .forall κ t  => t.wfB (κ :: kctx) (ctx.map (Option.map Base.shiftT))
+  | .prod s t    => s.wfB kctx ctx && t.wfB kctx (s.optBase :: ctx)
+  | .data _ n args => (List.finRange n).all fun i => (args i).wfB kctx ctx
 
 theorem Term.wfB_hasBVar {kctx : List Kind} {ctx : List (Option Base)} :
     ∀ {b'' : Base} (t : Term b''), t.wfB kctx ctx = true →
@@ -709,6 +817,14 @@ theorem Ty.wfB_WFBVarCtx (t : Ty) : ∀ {kctx : List Kind} {ctx : List (Option B
     intro kctx ctx hw
     simp only [Ty.wfB] at hw
     exact ih hw
+  | prod s t ihs iht =>
+    intro kctx ctx hw
+    simp only [Ty.wfB, Bool.and_eq_true] at hw
+    exact ⟨ihs hw.1, iht hw.2⟩
+  | data C n args ih =>
+    intro kctx ctx hw
+    simp only [Ty.wfB, List.all_eq_true, List.mem_finRange, true_implies] at hw
+    exact fun i => ih i (hw i)
 
 theorem Ty.wfB_WFBVars (t : Ty) (h : t.wfB [] [] = true) : Ty.WFBVars t :=
   Ty.wfB_WFBVarCtx t h
@@ -815,6 +931,18 @@ theorem Ty.WFBVarCtx_openTv (t : Ty) : ∀ (k : Nat) (a : TVar) (ctx : List (Opt
       intro o _
       cases o <;> simp [Base.shiftT_substB_openAt]
     rw [hmap]; exact this
+  | prod s t ihs iht =>
+    intro k a ctx h
+    simp only [Ty.openTv, Ty.WFBVarCtx] at h ⊢
+    refine ⟨ihs k a ctx h.1, ?_⟩
+    have := iht k a (s.optBase :: ctx) h.2
+    have hopt : (s.openTv k a).optBase = s.optBase.map (Base.substB (BSubst.openAt k a)) := by
+      cases s <;> rfl
+    rw [hopt]; simpa using this
+  | data C n args ih =>
+    intro k a ctx h
+    simp only [Ty.openTv, Ty.WFBVarCtx] at h ⊢
+    exact fun i => ih i k a ctx (h i)
 
 theorem Ty.WFBVars_openTv (t : Ty) (k : Nat) (a : TVar) (h : Ty.WFBVars t) :
     Ty.WFBVars (t.openTv k a) := by
@@ -836,6 +964,8 @@ def Ty.closeTv (k : Nat) (a : TVar) : Ty → Ty
   | .refine b r  => .refine (b.substB (BSubst.closeAt k a)) (r.substB (BSubst.closeAt k a))
   | .arrow s t   => .arrow (s.closeTv k a) (t.closeTv k a)
   | .forall κ t  => .forall κ (t.closeTv (k+1) a)
+  | .prod s t    => .prod (s.closeTv k a) (t.closeTv k a)
+  | .data C n args => .data C n (fun i => (args i).closeTv k a)
 
 /-- `∀ as. t`, outermost first. -/
 @[simp] def Ty.gen : List TVar → Ty → Ty
@@ -892,6 +1022,18 @@ theorem Ty.WFBVarCtx_closeTv (t : Ty) : ∀ (k : Nat) (a : TVar) (ctx : List (Op
       intro o _
       cases o <;> simp [Base.shiftT_substB_closeAt]
     rw [hmap]; exact this
+  | prod s t ihs iht =>
+    intro k a ctx h
+    simp only [Ty.closeTv, Ty.WFBVarCtx] at h ⊢
+    refine ⟨ihs k a ctx h.1, ?_⟩
+    have := iht k a (s.optBase :: ctx) h.2
+    have hopt : (s.closeTv k a).optBase = s.optBase.map (Base.substB (BSubst.closeAt k a)) := by
+      cases s <;> rfl
+    rw [hopt]; simpa using this
+  | data C n args ih =>
+    intro k a ctx h
+    simp only [Ty.closeTv, Ty.WFBVarCtx] at h ⊢
+    exact fun i => ih i k a ctx (h i)
 
 theorem Ty.WFBVars_gen (as : List TVar) (t : Ty) (h : Ty.WFBVars t) : Ty.WFBVars (Ty.gen as t) := by
   induction as with
@@ -934,6 +1076,8 @@ def Ty.ftv : Ty → List TVar
   | .refine b r  => b.ftv ++ r.ftv
   | .arrow s t   => s.ftv ++ t.ftv
   | .forall _ t  => t.ftv
+  | .prod s t    => s.ftv ++ t.ftv
+  | .data _ n args => (List.finRange n).flatMap fun i => (args i).ftv
 
 /-! ## 5. Exp operations (locally nameless)
 
@@ -959,6 +1103,10 @@ def Exp.openVar (k : Nat) (x : EVar) : Exp → Exp
   | .tabs κ e      => .tabs κ (e.openVar k x)
   -- the instance may mention enclosing term binders: open them too
   | .tapp e t      => .tapp (e.openVar k x) (t.openVar k x)
+  | .pair e₁ e₂    => .pair (e₁.openVar k x) (e₂.openVar k x)
+  | .split e₁ e₂   => .split (e₁.openVar k x) (e₂.openVar (k+2) x)
+  | .ctor C j τs e => .ctor C j τs (e.openVar k x)
+  | .case e n alts => .case (e.openVar k x) n (fun j => (alts j).openVar (k+1) x)
 
 /-- Structural skeleton size: counts constructor depth, ignoring leaf details
     (so `Exp.skel` is preserved under `openVar` / `subst`). Used as a
@@ -982,6 +1130,16 @@ def Exp.skel : Exp → Nat
   | .fix body      => 1 + body.skel
   | .tabs _ e      => 1 + e.skel
   | .tapp e _      => 1 + e.skel
+  | .pair e₁ e₂    => 1 + e₁.skel + e₂.skel
+  | .split e₁ e₂   => 1 + e₁.skel + e₂.skel
+  | .ctor _ _ _ e  => 1 + e.skel
+  | .case e _ alts => 1 + e.skel + (List.ofFn fun j => (alts j).skel).sum
+
+theorem Exp.skel_case_lt (e : Exp) (n : Nat) (alts : Fin n → Exp) (j : Fin n) :
+    (alts j).skel < (Exp.case e n alts).skel := by
+  have := List.le_sum_of_mem_nat (List.mem_ofFn.mpr ⟨j, rfl⟩ :
+    (alts j).skel ∈ List.ofFn fun j => (alts j).skel)
+  simp only [Exp.skel]; omega
 
 @[simp]
 theorem Exp.skel_openVar (k : Nat) (x : EVar) (e : Exp) :
@@ -1002,6 +1160,9 @@ theorem Exp.skel_openVar (k : Nat) (x : EVar) (e : Exp) :
   | add _ _ ih₁ ih₂    => simp [Exp.openVar, Exp.skel, ih₁, ih₂]
   | unreach            => rfl
   | fix _ ih           => simp [Exp.openVar, Exp.skel, ih]
+  | pair _ _ ih₁ ih₂ | split _ _ ih₁ ih₂ => simp [Exp.openVar, Exp.skel, ih₁, ih₂]
+  | ctor _ _ _ _ ih    => simp [Exp.openVar, Exp.skel, ih]
+  | case _ _ _ ih ihs  => simp [Exp.openVar, Exp.skel, ih, ihs]
 
 /-- Open the type binder at level `k` with the free type variable `a` inside the
     type annotations of an expression (levels bump under `Exp.tabs`). -/
@@ -1023,6 +1184,10 @@ def Exp.openTv (k : Nat) (a : TVar) : Exp → Exp
   | .fix body      => .fix (body.openTv k a)
   | .tabs κ e      => .tabs κ (e.openTv (k+1) a)
   | .tapp e t      => .tapp (e.openTv k a) (t.openTv k a)
+  | .pair e₁ e₂    => .pair (e₁.openTv k a) (e₂.openTv k a)
+  | .split e₁ e₂   => .split (e₁.openTv k a) (e₂.openTv k a)
+  | .ctor C j τs e => .ctor C j (τs.map (Ty.openTv k a)) (e.openTv k a)
+  | .case e n alts => .case (e.openTv k a) n (fun j => (alts j).openTv k a)
 
 @[simp] theorem Exp.skel_openTv (k : Nat) (a : TVar) (e : Exp) :
     (e.openTv k a).skel = e.skel := by
@@ -1034,6 +1199,11 @@ theorem Exp.WFBVars_openTv (e : Exp) (k : Nat) (a : TVar) (h : Exp.WFBVars e) :
   | ann e t ih =>
     simp only [Exp.WFBVars, Exp.openTv] at h ⊢
     exact ⟨Ty.WFBVars_openTv t k a h.1, ih k h.2⟩
+  | ctor C j τs e ih =>
+    simp only [Exp.WFBVars, Exp.openTv, List.mem_map] at h ⊢
+    refine ⟨?_, ih k h.2⟩
+    rintro _ ⟨τ, hτ, rfl⟩
+    exact Ty.WFBVars_openTv τ k a (h.1 τ hτ)
   | _ => simp_all [Exp.WFBVars, Exp.openTv]
 
 @[simp] theorem Exp.lc_at_openTv (k : Nat) (a : TVar) (e : Exp) (n : Nat) :
@@ -1079,14 +1249,21 @@ def Exp.substEnv (γ : REnv) : Exp → Exp
   | .tabs κ e     => .tabs κ (Exp.substEnv γ e)
   -- types are erased before running, so the closing substitution drops instances
   | .tapp e _     => .tapp (Exp.substEnv γ e) (.refine .int (.fmla .tt))
+  | .pair e₁ e₂   => .pair (Exp.substEnv γ e₁) (Exp.substEnv γ e₂)
+  | .split e₁ e₂  => .split (Exp.substEnv γ e₁) (Exp.substEnv γ e₂)
+  | .ctor C j τs e => .ctor C j τs (Exp.substEnv γ e)
+  | .case e n alts => .case (Exp.substEnv γ e) n (fun j => Exp.substEnv γ (alts j))
 
 /-- Free type variables of the type annotations in an expression. -/
 def Exp.ftv : Exp → List TVar
   | .bvar _ | .fvar _ | .iconst _ | .bconst _ | .unreach => []
   | .lam b | .not b | .fix b | .tabs _ b => b.ftv
-  | .letin e₁ e₂ | .app e₁ e₂ | .and e₁ e₂ | .leq e₁ e₂ | .add e₁ e₂ => e₁.ftv ++ e₂.ftv
+  | .letin e₁ e₂ | .app e₁ e₂ | .and e₁ e₂ | .leq e₁ e₂ | .add e₁ e₂
+  | .pair e₁ e₂ | .split e₁ e₂ => e₁.ftv ++ e₂.ftv
   | .ite e₀ e₁ e₂ => e₀.ftv ++ e₁.ftv ++ e₂.ftv
   | .ann e t | .tapp e t => e.ftv ++ t.ftv
+  | .ctor _ _ τs e => τs.flatMap Ty.ftv ++ e.ftv
+  | .case e n alts => e.ftv ++ (List.finRange n).flatMap fun j => (alts j).ftv
 
 /-- Free type variables of the types in a context. -/
 def TEnv.ftv : TEnv → List TVar
@@ -1106,12 +1283,13 @@ theorem TEnv.genVars_fresh {Γ : TEnv} {t : Ty} {a : TVar} (h : a ∈ TEnv.genVa
 /-- Does `e` instantiate the variable `f` at a type (`f[τ]`)? -/
 @[simp] def Exp.tappsVar (f : EVar) : Exp → Bool
   | .bvar _ | .fvar _ | .iconst _ | .bconst _ | .unreach => false
-  | .lam e | .not e | .fix e | .tabs _ e | .ann e _ => e.tappsVar f
-  | .letin e₁ e₂ | .app e₁ e₂ | .and e₁ e₂ | .leq e₁ e₂ | .add e₁ e₂ =>
-      e₁.tappsVar f || e₂.tappsVar f
+  | .lam e | .not e | .fix e | .tabs _ e | .ann e _ | .ctor _ _ _ e => e.tappsVar f
+  | .letin e₁ e₂ | .app e₁ e₂ | .and e₁ e₂ | .leq e₁ e₂ | .add e₁ e₂ | .pair e₁ e₂
+  | .split e₁ e₂ => e₁.tappsVar f || e₂.tappsVar f
   | .ite e₀ e₁ e₂ => e₀.tappsVar f || e₁.tappsVar f || e₂.tappsVar f
   | .tapp (.fvar g) _ => g == f
   | .tapp e _ => e.tappsVar f
+  | .case e n alts => e.tappsVar f || (List.finRange n).any (fun j => (alts j).tappsVar f)
 
 /-! ### Type erasure
 
@@ -1139,6 +1317,10 @@ def Exp.erase : Exp → Exp
   | .fix body      => .fix body.erase
   | .tabs _ e      => e.erase
   | .tapp e _      => e.erase
+  | .pair e₁ e₂    => .pair e₁.erase e₂.erase
+  | .split e₁ e₂   => .split e₁.erase e₂.erase
+  | .ctor C j _ e  => .ctor C j [] e.erase
+  | .case e n alts => .case e.erase n (fun j => (alts j).erase)
 
 @[simp] theorem Exp.erase_erase (e : Exp) : e.erase.erase = e.erase := by
   induction e <;> simp_all [Exp.erase]
@@ -1177,6 +1359,11 @@ theorem Exp.erase_substEnv (γ : REnv) (e : Exp)
     (Exp.substEnv γ e).erase = Exp.substEnv γ e.erase := by
   induction e with
   | fvar x => exact Exp.erase_of_typeFree _ (hγ x (by simp [Exp.fv]))
+  | case e n alts ih ihs =>
+    simp only [Exp.substEnv, Exp.erase, Exp.fv, List.mem_append, List.mem_flatMap,
+      List.mem_finRange, true_and] at hγ ⊢
+    rw [ih (fun z hz => hγ z (Or.inl hz))]
+    congr 1; funext j; exact ihs j (fun z hz => hγ z (Or.inr ⟨j, hz⟩))
   | _ => simp_all [Exp.substEnv, Exp.erase, Exp.fv]
 
 /-- The closing substitution commutes with opening a type binder, provided the
@@ -1188,6 +1375,11 @@ theorem Exp.substEnv_openTv (γ : REnv) (k : Nat) (a : TVar) (e : Exp)
   | fvar x =>
     simp only [Exp.openTv, Exp.substEnv]
     exact (Exp.openTv_of_typeFree k a _ (hγ x (by simp [Exp.fv]))).symm
+  | case e n alts ih ihs =>
+    simp only [Exp.substEnv, Exp.openTv, Exp.fv, List.mem_append, List.mem_flatMap,
+      List.mem_finRange, true_and] at hγ ⊢
+    rw [ih k (fun z hz => hγ z (Or.inl hz))]
+    congr 1; funext j; exact ihs j k (fun z hz => hγ z (Or.inr ⟨j, hz⟩))
   | _ => simp_all [Exp.substEnv, Exp.openTv, Exp.fv, Ty.openTv, Base.substB, Refinement.substB,
       Formula.substB]
 
@@ -1332,31 +1524,16 @@ theorem Exp.substEnv_closed (γ : REnv) (e : Exp) (he : e.fv = []) :
     (Exp.substEnv γ e).erase = e.erase := by
   induction e with
   | fvar y => simp [Exp.fv] at he
+  | case e n alts ih ihs =>
+    simp only [Exp.fv, List.append_eq_nil_iff, List.flatMap_eq_nil_iff, List.mem_finRange,
+      true_implies] at he
+    simp only [Exp.substEnv, Exp.erase, ih he.1]
+    congr 1; funext j; exact ihs j (he.2 j)
   | _ => simp_all [Exp.substEnv, Exp.erase, Exp.fv]
 
-theorem Val.toExp_closed_of_closed {v : Val} (h : Val.closed v) : v.toExp.fv = [] := by
-  cases v with
-  | iconst _   => simp [Val.toExp, Exp.fv]
-  | bconst _   => simp [Val.toExp, Exp.fv]
-  | clos body  =>
-    simp [Val.closed, Val.fv] at h
-    simp [Val.toExp, Exp.fv, h]
-  | fclos body =>
-    simp [Val.closed, Val.fv] at h
-    simp [Val.toExp, Exp.fv, h]
+theorem Val.toExp_closed_of_closed {v : Val} (h : Val.closed v) : v.toExp.fv = [] := h
 
-theorem Val.toExp_lc_at_zero {v : Val} (h : Val.lc v) : Exp.lc_at 0 v.toExp := by
-  cases v with
-  | iconst _  => simp [Val.toExp, Exp.lc_at]
-  | bconst _  => simp [Val.toExp, Exp.lc_at]
-  | clos body =>
-    simp only [Val.lc] at h
-    simp only [Val.toExp, Exp.lc_at]
-    exact h
-  | fclos body =>
-    simp only [Val.lc] at h
-    simp only [Val.toExp, Exp.lc_at]
-    exact h
+theorem Val.toExp_lc_at_zero {v : Val} (h : Val.lc v) : Exp.lc_at 0 v.toExp := h
 
 /-- If every free name of `e` is mapped to a closed value by `γ`, then the
     closing substitution produces a closed expression. -/
@@ -1380,6 +1557,17 @@ theorem Exp.substEnv_fv_nil (γ : REnv) (e : Exp)
     exact ⟨⟨ih₀ fun z hz => hcl z (by simp [Exp.fv, hz]),
             ih₁ fun z hz => hcl z (by simp [Exp.fv, hz])⟩,
            ih₂ fun z hz => hcl z (by simp [Exp.fv, hz])⟩
+  | pair e₁ e₂ ih₁ ih₂ | split e₁ e₂ ih₁ ih₂ =>
+    simp only [Exp.substEnv, Exp.fv, List.append_eq_nil_iff]
+    exact ⟨ih₁ fun z hz => hcl z (by simp [Exp.fv, hz]),
+           ih₂ fun z hz => hcl z (by simp [Exp.fv, hz])⟩
+  | ctor C j τs e ih => exact ih fun z hz => hcl z (by simpa [Exp.fv] using hz)
+  | case e n alts ih ihs =>
+    simp only [Exp.substEnv, Exp.fv, List.append_eq_nil_iff, List.flatMap_eq_nil_iff,
+      List.mem_finRange, true_implies]
+    exact ⟨ih fun z hz => hcl z (by simp [Exp.fv, hz]),
+           fun j => ihs j fun z hz => hcl z (by simp only [Exp.fv, List.mem_append,
+             List.mem_flatMap, List.mem_finRange, true_and]; exact Or.inr ⟨j, hz⟩)⟩
 
 /-! ## 17b. openVar of lc_at is identity -/
 
@@ -1425,9 +1613,18 @@ theorem Exp.lc_at_of_openVar (e : Exp) (k : Nat) (x : EVar)
   | ite e₀ e₁ e₂ ih₀ ih₁ ih₂ =>
     simp only [Exp.openVar, Exp.lc_at] at h ⊢
     exact ⟨ih₀ k h.1, ih₁ k h.2.1, ih₂ k h.2.2⟩
-  | add e₁ e₂ ih₁ ih₂ =>
+  | add e₁ e₂ ih₁ ih₂ | pair e₁ e₂ ih₁ ih₂ =>
     simp only [Exp.openVar, Exp.lc_at] at h ⊢
     exact ⟨ih₁ k h.1, ih₂ k h.2⟩
+  | split e₁ e₂ ih₁ ih₂ =>
+    simp only [Exp.openVar, Exp.lc_at] at h ⊢
+    exact ⟨ih₁ k h.1, ih₂ (k + 2) h.2⟩
+  | ctor C j τs e ih =>
+    simp only [Exp.openVar, Exp.lc_at] at h ⊢
+    exact ih k h
+  | case e n alts ih ihs =>
+    simp only [Exp.openVar, Exp.lc_at] at h ⊢
+    exact ⟨ih k h.1, fun j => ihs j (k + 1) (h.2 j)⟩
 
 /-- Opening a binder with `y` adds at most `y` to the free names. -/
 theorem Exp.fv_openVar {e : Exp} {k : Nat} {y z : EVar}
@@ -1451,6 +1648,20 @@ theorem Exp.fv_openVar {e : Exp} {k : Nat} {y z : EVar}
     · rcases ih₀ h with h | h <;> simp [h]
     · rcases ih₁ h with h | h <;> simp [h]
     · rcases ih₂ h with h | h <;> simp [h]
+  | pair _ _ ih₁ ih₂ | split _ _ ih₁ ih₂ =>
+    simp only [Exp.openVar, Exp.fv, List.mem_append] at h ⊢
+    rcases h with h | h
+    · rcases ih₁ h with h | h <;> simp [h]
+    · rcases ih₂ h with h | h <;> simp [h]
+  | ctor _ _ _ _ ih => simp only [Exp.openVar, Exp.fv] at h ⊢; exact ih h
+  | case _ _ _ ih ihs =>
+    simp only [Exp.openVar, Exp.fv, List.mem_append, List.mem_flatMap, List.mem_finRange,
+      true_and] at h ⊢
+    rcases h with h | ⟨j, h⟩
+    · rcases ih h with h | h <;> simp [h]
+    · rcases ihs j h with h | h
+      · exact Or.inl (Or.inr ⟨j, h⟩)
+      · exact Or.inr h
 
 /-- openExp with any u is identity when e has lc_at k (no BVar k inside). -/
 theorem Exp.openExp_of_lc_at (e : Exp) (k : Nat) (u : Exp) (h : Exp.lc_at k e) :
@@ -1486,9 +1697,17 @@ theorem Exp.openExp_of_lc_at (e : Exp) (k : Nat) (u : Exp) (h : Exp.lc_at k e) :
   | ite e₀ e₁ e₂ ih₀ ih₁ ih₂ =>
     simp only [Exp.lc_at] at h; simp only [Exp.openExp]
     rw [ih₀ k h.1, ih₁ k h.2.1, ih₂ k h.2.2]
-  | add e₁ e₂ ih₁ ih₂ =>
+  | add e₁ e₂ ih₁ ih₂ | pair e₁ e₂ ih₁ ih₂ =>
     simp only [Exp.lc_at] at h; simp only [Exp.openExp]; congr 1
     exact ih₁ k h.1; exact ih₂ k h.2
+  | split e₁ e₂ ih₁ ih₂ =>
+    simp only [Exp.lc_at] at h; simp only [Exp.openExp]
+    rw [ih₁ k h.1, ih₂ (k+2) h.2]
+  | ctor C j τs e ih =>
+    simp only [Exp.lc_at] at h; simp only [Exp.openExp]; congr 1; exact ih k h
+  | case e n alts ih ihs =>
+    simp only [Exp.lc_at] at h; simp only [Exp.openExp]
+    rw [ih k h.1]; congr 1; funext j; exact ihs j (k+1) (h.2 j)
 
 /-- lc_at is monotone: lc_at j implies lc_at k for k ≥ j. -/
 theorem Exp.lc_at_mono (e : Exp) {j k : Nat} (hjk : j ≤ k) (h : Exp.lc_at j e) :
@@ -1526,9 +1745,18 @@ theorem Exp.lc_at_mono (e : Exp) {j k : Nat} (hjk : j ≤ k) (h : Exp.lc_at j e)
   | ite e₀ e₁ e₂ ih₀ ih₁ ih₂ =>
     simp only [Exp.lc_at] at *
     exact ⟨ih₀ hjk h.1, ih₁ hjk h.2.1, ih₂ hjk h.2.2⟩
-  | add e₁ e₂ ih₁ ih₂ =>
+  | add e₁ e₂ ih₁ ih₂ | pair e₁ e₂ ih₁ ih₂ =>
     simp only [Exp.lc_at] at *
     exact ⟨ih₁ hjk h.1, ih₂ hjk h.2⟩
+  | split e₁ e₂ ih₁ ih₂ =>
+    simp only [Exp.lc_at] at *
+    exact ⟨ih₁ hjk h.1, ih₂ (by omega) h.2⟩
+  | ctor C j τs e ih =>
+    simp only [Exp.lc_at] at *
+    exact ih hjk h
+  | case e n alts ih ihs =>
+    simp only [Exp.lc_at] at *
+    exact ⟨ih hjk h.1, fun j => ihs j (by omega) (h.2 j)⟩
 
 /-! ## 17b. subst/substEnv preserve lc_at -/
 
@@ -1561,6 +1789,22 @@ theorem Exp.substEnv_lc_at (γ : REnv) (e : Exp) (k : Nat)
     exact ⟨ih₀ k (fun z hz => hγ z (by simp [Exp.fv, hz])) h₀,
            ih₁ k (fun z hz => hγ z (by simp [Exp.fv, hz])) h₁,
            ih₂ k (fun z hz => hγ z (by simp [Exp.fv, hz])) h₂⟩
+  | pair e₁ e₂ ih₁ ih₂ =>
+    obtain ⟨h₁, h₂⟩ := hlc_e
+    exact ⟨ih₁ k (fun z hz => hγ z (by simp [Exp.fv, hz])) h₁,
+           ih₂ k (fun z hz => hγ z (by simp [Exp.fv, hz])) h₂⟩
+  | split e₁ e₂ ih₁ ih₂ =>
+    obtain ⟨h₁, h₂⟩ := hlc_e
+    exact ⟨ih₁ k (fun z hz => hγ z (by simp [Exp.fv, hz])) h₁,
+           ih₂ (k+2) (fun z hz => hγ z (by simp [Exp.fv, hz])) h₂⟩
+  | ctor C j τs e ih =>
+    exact ih k (fun z hz => hγ z (by simpa [Exp.fv] using hz)) hlc_e
+  | case e n alts ih ihs =>
+    obtain ⟨h₀, h₁⟩ := hlc_e
+    exact ⟨ih k (fun z hz => hγ z (by simp [Exp.fv, hz])) h₀,
+           fun j => ihs j (k+1) (fun z hz => hγ z (by
+             simp only [Exp.fv, List.mem_append, List.mem_flatMap, List.mem_finRange, true_and]
+             exact Or.inr ⟨j, hz⟩)) (h₁ j)⟩
 
 
 /-! ## 19. substEnv-openVal: key lemma for lam/letin cases -/
@@ -1603,6 +1847,18 @@ theorem Exp.substEnv_congr (e : Exp) (γ₁ γ₂ : REnv)
       ih₀ fun z hz => h z (by simp [Exp.fv, hz]),
       ih₁ fun z hz => h z (by simp [Exp.fv, hz]),
       ih₂ fun z hz => h z (by simp [Exp.fv, hz])]
+  | pair e₁ e₂ ih₁ ih₂ | split e₁ e₂ ih₁ ih₂ =>
+    simp only [Exp.substEnv,
+      ih₁ fun z hz => h z (by simp [Exp.fv, hz]),
+      ih₂ fun z hz => h z (by simp [Exp.fv, hz])]
+  | ctor _ _ _ e ih =>
+    simp only [Exp.substEnv, ih fun z hz => h z (by simpa [Exp.fv] using hz)]
+  | case e n alts ih ihs =>
+    simp only [Exp.substEnv, ih fun z hz => h z (by simp [Exp.fv, hz])]
+    congr 1; funext j
+    exact ihs j fun z hz => h z (by
+      simp only [Exp.fv, List.mem_append, List.mem_flatMap, List.mem_finRange, true_and]
+      exact Or.inr ⟨j, hz⟩)
 
 /-- Extending `γ` at a name `y` not free in `e` does not change `substEnv`. -/
 theorem Exp.substEnv_write_fresh (e : Exp) (γ : REnv) (y : EVar) (v : Val)
@@ -1665,6 +1921,30 @@ theorem Exp.substEnv_write_openVar (e : Exp) (γ : REnv) (va : Val) (z : EVar) (
       ih₀ k hz₀ (fun w hw => hγ w (by simp [Exp.fv, hw])),
       ih₁ k hz₁ (fun w hw => hγ w (by simp [Exp.fv, hw])),
       ih₂ k hz₂ (fun w hw => hγ w (by simp [Exp.fv, hw]))]
+  | pair e₁ e₂ ih₁ ih₂ =>
+    simp only [Exp.fv, List.mem_append, not_or] at hz_fv
+    simp only [Exp.openVar, Exp.substEnv, Exp.openExp,
+      ih₁ k hz_fv.1 (fun w hw => hγ w (by simp [Exp.fv, hw])),
+      ih₂ k hz_fv.2 (fun w hw => hγ w (by simp [Exp.fv, hw]))]
+  | split e₁ e₂ ih₁ ih₂ =>
+    simp only [Exp.fv, List.mem_append, not_or] at hz_fv
+    simp only [Exp.openVar, Exp.substEnv, Exp.openExp,
+      ih₁ k hz_fv.1 (fun w hw => hγ w (by simp [Exp.fv, hw])),
+      ih₂ (k+2) hz_fv.2 (fun w hw => hγ w (by simp [Exp.fv, hw]))]
+  | ctor C j τs e ih =>
+    simp only [Exp.openVar, Exp.substEnv, Exp.openExp]
+    rw [ih k (by simpa [Exp.fv] using hz_fv)
+        (fun w hw => hγ w (by simpa [Exp.fv] using hw))]
+  | case e n alts ih ihs =>
+    simp only [Exp.fv, List.mem_append, not_or, List.mem_flatMap, List.mem_finRange,
+      true_and, not_exists] at hz_fv
+    have hmem : ∀ j, ∀ w ∈ (alts j).fv, w ∈ (Exp.case e n alts).fv := fun j w hw => by
+      simp only [Exp.fv, List.mem_append, List.mem_flatMap, List.mem_finRange, true_and]
+      exact Or.inr ⟨j, hw⟩
+    simp only [Exp.openVar, Exp.substEnv, Exp.openExp,
+      ih k hz_fv.1 (fun w hw => hγ w (by simp [Exp.fv, hw]))]
+    congr 1; funext j
+    exact ihs j (k+1) (hz_fv.2 j) (fun w hw => hγ w (hmem j w hw))
 
 /-- `write` (on the name map) commutes with `push` (on the de Bruijn stack):
     they touch disjoint fields of `REnv`. -/
@@ -1896,5 +2176,195 @@ theorem Refinement.interp_openBVar (κ : KEnv) (r : Refinement) (γ : REnv)
         have h := Term.interp_openBVar x w a.2 γ k hk hxa
         simp only [Function.comp_apply, h]
       simp only [Refinement.openBVar, Refinement.interp, hmap]
+
+/-! ## Datatype instantiation
+
+  A constructor's payload type mentions the datatype's parameters as `tbvar i`.
+  Instantiating it at the type arguments `τs` substitutes the outermost
+  parameter first, so that every step is an `instTy` of the outermost free type
+  variable (the shape the semantic substitution lemma handles). -/
+
+/-- `instTysFrom i τs P` instantiates parameters `i, i+1, …` of `P` by `τs`. -/
+def Ty.instTysFrom (i : Nat) : List Ty → Ty → Ty
+  | [],      P => P
+  | τ :: τs, P => Ty.instTy i τ (Ty.instTysFrom (i+1) τs P)
+
+/-- The payload `P` at the type arguments `τs`. -/
+@[reducible] def Ty.instTys (τs : List Ty) (P : Ty) : Ty := Ty.instTysFrom 0 τs P
+
+/-- Every intermediate stage of `instTysFrom i τs P` is well-formed (stage `i`
+    still has parameters `0 … i-1` free). -/
+def Ty.instTysOK (ks : List Kind) (i : Nat) : List Ty → Ty → Bool
+  | [],      P => P.wfB (ks.take i) []
+  | τ :: τs, P => (Ty.instTysFrom i (τ :: τs) P).wfB (ks.take i) [] && Ty.instTysOK ks (i+1) τs P
+
+/-- The declaration of datatype `C`. -/
+def DEnv.nCtors (de : DEnv) (C : String) : Option Nat := (de.decl? C).map (·.ctors.length)
+
+/-- `C[τs]` is a legal instance: the arity matches, each argument is a closed
+    well-formed type of a kind its parameter admits, and every constructor's
+    payload instantiates to well-formed types (at every stage). -/
+def DEnv.instOK (de : DEnv) (C : String) (τs : List Ty) : Bool :=
+  match de.decl? C with
+  | none   => false
+  | some d =>
+      d.params.length == τs.length &&
+      (List.zip τs d.params).all (fun p => decide (Kind.le p.1.kindOf p.2) && p.1.wfB [] []) &&
+      d.ctors.all (fun c => Ty.instTysOK d.params 0 τs c.2)
+
+/-- The polarity of a position in a type. -/
+inductive Pol where
+  | pos  : Pol
+  | neg  : Pol
+  | both : Pol
+  deriving Repr, DecidableEq
+
+def Pol.flip : Pol → Pol
+  | .pos => .neg
+  | .neg => .pos
+  | .both => .both
+
+/-- The polarity of an argument position of a datatype with the given variance. -/
+def Pol.comp (p : Pol) : Variance → Pol
+  | .co     => p
+  | .contra => p.flip
+  | .inv    => .both
+
+/-- A parameter of this variance may occur at this polarity. -/
+def Variance.allows : Variance → Pol → Bool
+  | .inv,    _    => true
+  | .co,     .pos => true
+  | .contra, .neg => true
+  | _,       _    => false
+
+/-- The parameters (`tbvar d`, `tbvar (d+1)`, … — `d` counts enclosing `∀`s)
+    occur in `t` only at polarities their declared variances `vs` allow. A
+    datatype argument's polarity follows that datatype's declared variance. -/
+def Ty.varOK (de : DEnv) (vs : List Variance) : Nat → Pol → Ty → Bool
+  | d, p, .refine (.tbvar j) _ => if j < d then true else ((vs[j - d]?).getD .inv).allows p
+  | _, _, .refine _ _     => true
+  | d, p, .arrow s t      => Ty.varOK de vs d p.flip s && Ty.varOK de vs d p t
+  | d, p, .forall _ t     => Ty.varOK de vs (d+1) p t
+  | d, p, .prod s t       => Ty.varOK de vs d p s && Ty.varOK de vs d p t
+  | d, p, .data C n args  => (List.finRange n).all fun l => Ty.varOK de vs d (p.comp (de.var C l)) (args l)
+
+/-- Well-formed declarations: payloads have no free term or type variables, and
+    respect the declared variances. -/
+def DEnv.wfB (de : DEnv) : Bool :=
+  de.all fun d => d.2.ctors.all fun c =>
+    c.2.fv.isEmpty && c.2.ftv.isEmpty && Ty.varOK de d.2.variances 0 .pos c.2
+
+theorem DEnv.payload?_lt {de : DEnv} {C : String} {j m : Nat} {P : Ty}
+    (hm : de.nCtors C = some m) (hP : de.payload? C j = some P) : j < m := by
+  simp only [DEnv.nCtors, DEnv.payload?] at hm hP
+  cases hd : de.decl? C with
+  | none => simp [hd] at hm
+  | some d =>
+    simp only [hd, Option.map_some, Option.some.injEq, Option.bind_some] at hm hP
+    subst hm
+    cases h : d.ctors[j]? with
+    | none => simp [h] at hP
+    | some c => exact (List.getElem?_eq_some_iff.mp h).1
+
+theorem DEnv.payload?_of_lt {de : DEnv} {C : String} {j m : Nat}
+    (hm : de.nCtors C = some m) (hj : j < m) : ∃ P, de.payload? C j = some P := by
+  simp only [DEnv.nCtors, DEnv.payload?] at hm ⊢
+  cases hd : de.decl? C with
+  | none => simp [hd] at hm
+  | some d =>
+    simp only [hd, Option.map_some, Option.some.injEq, Option.bind_some] at hm ⊢
+    subst hm
+    exact ⟨d.ctors[j].2, by simp [List.getElem?_eq_getElem hj]⟩
+
+/-- What `instOK` guarantees. -/
+theorem DEnv.instOK_spec {de : DEnv} {C : String} {τs : List Ty} (h : de.instOK C τs = true) :
+    ∃ d, de.decl? C = some d ∧ d.params.length = τs.length ∧
+      (∀ i (hi : i < τs.length), ∃ k, d.params[i]? = some k ∧ Kind.le τs[i].kindOf k ∧
+        τs[i].wfB [] [] = true) ∧
+      ∀ c ∈ d.ctors, Ty.instTysOK d.params 0 τs c.2 = true := by
+  unfold DEnv.instOK at h
+  cases hd : de.decl? C with
+  | none => simp [hd] at h
+  | some d =>
+    simp only [hd, Bool.and_eq_true, beq_iff_eq, List.all_eq_true] at h
+    obtain ⟨⟨hlen, hargs⟩, hctors⟩ := h
+    refine ⟨d, rfl, hlen, fun i hi => ?_, hctors⟩
+    have hmem : (τs[i], d.params[i]'(by omega)) ∈ List.zip τs d.params := by
+      rw [List.mem_iff_getElem]
+      exact ⟨i, by simp [List.length_zip]; omega, by simp [List.getElem_zip]⟩
+    have := hargs _ hmem
+    simp only [decide_eq_true_eq] at this
+    exact ⟨_, List.getElem?_eq_getElem (by omega), this⟩
+
+/-- The type arguments of a legal instance are well-formed. -/
+theorem DEnv.instOK_WFBVars {de : DEnv} {C : String} {τs : List Ty} (h : de.instOK C τs = true) :
+    Ty.WFBVars (Ty.dataL C τs) := by
+  obtain ⟨d, _, _, hargs, _⟩ := DEnv.instOK_spec h
+  intro i
+  obtain ⟨_, _, _, hw⟩ := hargs i.val i.isLt
+  exact Ty.wfB_WFBVarCtx _ hw
+
+/-- The first stage checked by `instTysOK` is the full instantiation. -/
+theorem Ty.instTysOK_wfB {ks : List Kind} {i : Nat} {τs : List Ty} {P : Ty}
+    (h : Ty.instTysOK ks i τs P = true) : (Ty.instTysFrom i τs P).wfB (ks.take i) [] = true := by
+  cases τs with
+  | nil => simpa [Ty.instTysOK, Ty.instTysFrom] using h
+  | cons τ τs =>
+    simp only [Ty.instTysOK, Bool.and_eq_true] at h
+    exact h.1
+
+/-- A payload at a legal instance is a closed well-formed type. -/
+theorem DEnv.instOK_payload_wfB {de : DEnv} {C : String} {τs : List Ty} {j : Nat} {P : Ty}
+    (h : de.instOK C τs = true) (hP : de.payload? C j = some P) :
+    (Ty.instTys τs P).wfB [] [] = true := by
+  obtain ⟨d, hd, _, _, hctors⟩ := DEnv.instOK_spec h
+  simp only [DEnv.payload?, hd, Option.bind_some, Option.map_eq_some_iff] at hP
+  obtain ⟨c, hc, rfl⟩ := hP
+  have := Ty.instTysOK_wfB (hctors c (List.mem_of_getElem? hc))
+  simpa using this
+
+/-- Payloads of well-formed declarations have no free term or type variables. -/
+theorem DEnv.wfB_payload {de : DEnv} (h : de.wfB = true) {C : String} {j : Nat} {P : Ty}
+    (hP : de.payload? C j = some P) : P.fv = [] ∧ P.ftv = [] := by
+  simp only [DEnv.payload?, DEnv.decl?, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hP
+  obtain ⟨d, hd, c, hc, rfl⟩ := hP
+  simp only [DEnv.wfB, List.all_eq_true] at h
+  induction de with
+  | nil => simp at hd
+  | cons hd' tl ih =>
+    obtain ⟨C', d'⟩ := hd'
+    simp only [List.lookup] at hd
+    by_cases hC : C = C'
+    · subst hC
+      simp only [beq_self_eq_true, Option.some.injEq] at hd
+      subst hd
+      have := h (C, d') (by simp) c (List.mem_of_getElem? hc)
+      simp only [Bool.and_eq_true, List.isEmpty_iff] at this
+      exact this.1
+    · have hne : (C == C') = false := by simp [hC]
+      simp only [hne] at hd
+      exact ih hd (fun x hx => h x (by simp [hx]))
+
+/-- The facts a legal instance gives about one constructor's payload. -/
+theorem DEnv.instOK_payload_ok {de : DEnv} {C : String} {τs : List Ty} {j : Nat} {P : Ty}
+    (h : de.instOK C τs = true) (hP : de.payload? C j = some P) :
+    ∃ ks : List Kind, ks.length = τs.length ∧
+      (∀ l (hl : l < τs.length), ∃ kd, ks[l]? = some kd ∧ Kind.le τs[l].kindOf kd ∧
+        τs[l].wfB [] [] = true) ∧
+      Ty.instTysOK ks 0 τs P = true := by
+  obtain ⟨d, hd, hlen, hargs, hctors⟩ := DEnv.instOK_spec h
+  simp only [DEnv.payload?, hd, Option.bind_some, Option.map_eq_some_iff] at hP
+  obtain ⟨c, hc, rfl⟩ := hP
+  exact ⟨d.params, hlen, hargs, hctors c (List.mem_of_getElem? hc)⟩
+
+/-- The last stage checked by `instTysOK` is the payload itself. -/
+theorem Ty.instTysOK_last {ks : List Kind} {P : Ty} :
+    ∀ {i : Nat} {τs : List Ty}, Ty.instTysOK ks i τs P = true →
+      P.wfB (ks.take (i + τs.length)) [] = true
+  | i, [], h => by simpa [Ty.instTysOK] using h
+  | i, τ :: τs, h => by
+    simp only [Ty.instTysOK, Bool.and_eq_true] at h
+    have := Ty.instTysOK_last h.2
+    simpa [Nat.add_assoc, Nat.add_comm 1] using this
 
 end STLC

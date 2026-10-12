@@ -206,6 +206,11 @@ inductive Ty where
   | refine : (b : Base) → Refinement → Ty -- `{ν: b | r}`
   | arrow  : Ty → Ty → Ty                   -- `x:s -> t`
   | forall : Kind → Ty → Ty                 -- `∀α:k. t`; body has `tbvar 0` = α
+  | prod   : Ty → Ty → Ty                   -- dependent pair `Σ x:t₁. t₂`; `t₂` has `BVar 0` = x
+  /-- A datatype applied to type arguments, `C[τ₀ … τₙ₋₁]`. Datatypes carry no
+      refinement and have no sort in the refinement logic. The arguments are a
+      function out of `Fin n` (not a `List`) so `Ty` stays an ordinary inductive. -/
+  | data   : String → (n : Nat) → (Fin n → Ty) → Ty
 
 /-! ## Expressions — locally nameless
 
@@ -233,6 +238,14 @@ inductive Exp where
                                         -- body has BVar 1 = f (self), BVar 0 = x (param)
   | tabs   : Kind → Exp → Exp           -- type abstraction `Λα:k. e` (`tbvar 0` = α in types)
   | tapp   : Exp → Ty → Exp             -- type application `e[τ]`
+  | pair   : Exp → Exp → Exp            -- pair `(e₁, e₂)`
+  | split  : Exp → Exp → Exp            -- `let (x, y) = e₁ in e₂`; e₂ has BVar 1 = x, BVar 0 = y
+  /-- Constructor `j` of datatype `C`, at the type arguments `τs`, with a single
+      payload (multi-field constructors take a pair). -/
+  | ctor   : String → Nat → List Ty → Exp → Exp
+  /-- Pattern match: alternative `j` handles constructor `j`; it binds the
+      payload as BVar 0. -/
+  | case   : Exp → (n : Nat) → (Fin n → Exp) → Exp
 
 /-- Typing context: a list of free-name × type pairs. Names are unique by convention. -/
 @[simp]
@@ -256,6 +269,8 @@ inductive Val where
   | bconst : Bool → Val
   | clos   : Exp  → Val
   | fclos  : Exp  → Val                 -- recursive closure: body of `Exp.fix`
+  | pair   : Val → Val → Val
+  | ctor   : String → Nat → Val → Val   -- constructor `j` of datatype `C` with its payload
 
 /-- Inject a value into the syntax (used by big-step `lam` and `Exp.openVal`). -/
 @[simp] def Val.toExp : Val → Exp
@@ -263,6 +278,8 @@ inductive Val where
   | .bconst b   => .bconst b
   | .clos body  => .lam body
   | .fclos body => .fix body
+  | .pair v₁ v₂ => .pair v₁.toExp v₂.toExp
+  | .ctor C j w => .ctor C j [] w.toExp
 
 
 /-- Locally closed at level `k`: every `bvar j` satisfies `j < k`.
@@ -285,15 +302,14 @@ def Exp.lc_at : Nat → Exp → Prop
   | k, .fix body      => body.lc_at (k+2)
   | k, .tabs _ e      => e.lc_at k
   | k, .tapp e _      => e.lc_at k
+  | k, .pair e₁ e₂    => e₁.lc_at k ∧ e₂.lc_at k
+  | k, .split e₁ e₂   => e₁.lc_at k ∧ e₂.lc_at (k+2)
+  | k, .ctor _ _ _ e  => e.lc_at k
+  | k, .case e _ alts => e.lc_at k ∧ ∀ j, (alts j).lc_at (k+1)
 
 /-- A `Val` is closed when its `toExp` is locally closed (note: the closure
     body is required `lc_at 1` since `BVar 0` is the parameter). -/
-def Val.lc (v : Val) : Prop :=
-  match v with
-  | Val.iconst _   => True
-  | Val.bconst _   => True
-  | Val.clos body  => body.lc_at 1
-  | Val.fclos body => body.lc_at 2
+def Val.lc (v : Val) : Prop := v.toExp.lc_at 0
 
 
 /-! ## Substitution on expressions -/
@@ -318,6 +334,10 @@ def Exp.openExp (k : Nat) (u : Exp) (e : Exp) : Exp :=
   | .fix body      => .fix (Exp.openExp (k+2) u body)
   | .tabs κ e      => .tabs κ (Exp.openExp k u e)
   | .tapp e t      => .tapp (Exp.openExp k u e) t
+  | .pair e₁ e₂    => .pair (Exp.openExp k u e₁) (Exp.openExp k u e₂)
+  | .split e₁ e₂   => .split (Exp.openExp k u e₁) (Exp.openExp (k+2) u e₂)
+  | .ctor C j τs e => .ctor C j τs (Exp.openExp k u e)
+  | .case e n alts => .case (Exp.openExp k u e) n (fun j => Exp.openExp (k+1) u (alts j))
 
 /-- Open `bvar k` with a value (via `Val.toExp`). Handy for big-step. -/
 def Exp.openVal (k : Nat) (v : Val) : Exp → Exp := Exp.openExp k v.toExp
@@ -388,6 +408,8 @@ def Val.inj : (b : Base) → b.interp → Val
   | .bconst _ => some .bool
   | .clos _   => none
   | .fclos _  => none
+  | .pair _ _ => none
+  | .ctor _ _ _ => none
 
 /-- Val-level (lossless) lookup. -/
 @[simp, reducible]
@@ -471,13 +493,12 @@ def Exp.fv : Exp → List EVar
   | .fix body      => Exp.fv body
   | .tabs _ e      => Exp.fv e
   | .tapp e _      => Exp.fv e
+  | .pair e₁ e₂    => Exp.fv e₁ ++ Exp.fv e₂
+  | .split e₁ e₂   => Exp.fv e₁ ++ Exp.fv e₂
+  | .ctor _ _ _ e  => Exp.fv e
+  | .case e n alts => Exp.fv e ++ (List.finRange n).flatMap fun j => Exp.fv (alts j)
 
-def Val.fv (v : Val) : List EVar :=
-  match v with
-  | Val.iconst _   => []
-  | Val.bconst _   => []
-  | Val.clos body  => body.fv
-  | Val.fclos body => body.fv
+def Val.fv (v : Val) : List EVar := v.toExp.fv
 
 /-- A value is *closed* when it has no free names. For `iconst`/`bconst` this
     is automatic; for `clos body` it says the body's free names are all bound
@@ -490,8 +511,11 @@ def Val.closed (v : Val) : Prop := Val.fv v = []
 def Exp.TypeFree : Exp → Prop
   | .bvar _ | .fvar _ | .iconst _ | .bconst _ | .unreach => True
   | .lam b | .not b | .fix b => b.TypeFree
-  | .letin e₁ e₂ | .app e₁ e₂ | .and e₁ e₂ | .leq e₁ e₂ | .add e₁ e₂ => e₁.TypeFree ∧ e₂.TypeFree
+  | .letin e₁ e₂ | .app e₁ e₂ | .and e₁ e₂ | .leq e₁ e₂ | .add e₁ e₂
+  | .pair e₁ e₂ | .split e₁ e₂ => e₁.TypeFree ∧ e₂.TypeFree
   | .ite e₀ e₁ e₂ => e₀.TypeFree ∧ e₁.TypeFree ∧ e₂.TypeFree
+  | .ctor _ _ τs e => τs = [] ∧ e.TypeFree
+  | .case e _ alts => e.TypeFree ∧ ∀ j, (alts j).TypeFree
   | .ann _ _ | .tabs _ _ | .tapp _ _ => False
 
 /-- A value is erased when its syntax carries no types. -/
@@ -505,5 +529,58 @@ def Ty.skel : Ty → Nat
   | .refine _ _ => 0
   | .arrow s t  => 1 + s.skel + t.skel
   | .forall _ t => 1 + t.skel
+  | .prod s t   => 1 + s.skel + t.skel
+  | .data _ _ args => 1 + (List.ofFn fun i => (args i).skel).sum
+
+/-- `Ty.data` from a list of type arguments. -/
+@[simp, reducible] def Ty.dataL (C : String) (τs : List Ty) : Ty := .data C τs.length (fun i => τs[i])
+
+/-! ## Datatype declarations
+
+  A program is a list of datatype declarations (`DEnv`) followed by an
+  expression. A declaration lists the kinds of its type parameters and its
+  constructors, each with a single payload type. In a payload type, `tbvar i`
+  is parameter `i`; a payload has no free term or type variables. -/
+
+/-- The variance of a datatype parameter: how subtyping on the datatype
+    follows subtyping on the argument. -/
+inductive Variance where
+  | co     : Variance
+  | contra : Variance
+  | inv    : Variance
+  deriving Repr, DecidableEq
+
+structure DataDecl where
+  params : List Kind
+  ctors  : List (String × Ty)
+  /-- Declared variances of the parameters (checked against the payloads);
+      a parameter without one is invariant. -/
+  variances : List Variance := []
+
+abbrev DEnv := List (String × DataDecl)
+
+/-- The declaration of datatype `C`. -/
+def DEnv.decl? (de : DEnv) (C : String) : Option DataDecl := de.lookup C
+
+/-- The declared variance of parameter `i` of `C` (invariant by default). -/
+def DEnv.var (de : DEnv) (C : String) (i : Nat) : Variance :=
+  ((de.decl? C).bind fun d => d.variances[i]?).getD .inv
+
+/-- The payload type of constructor `j` of `C`. -/
+def DEnv.payload? (de : DEnv) (C : String) (j : Nat) : Option Ty :=
+  (de.decl? C).bind fun d => (d.ctors[j]?).map Prod.snd
+
+/-- Every element of a list of naturals is at most its sum. -/
+theorem List.le_sum_of_mem_nat : ∀ {l : List Nat} {x : Nat}, x ∈ l → x ≤ l.sum
+  | _ :: _, _, .head _ => by simp only [List.sum_cons]; omega
+  | y :: _, _, .tail _ h => by
+      have := List.le_sum_of_mem_nat h
+      simp only [List.sum_cons]; omega
+
+theorem Ty.skel_data_lt (C : String) (n : Nat) (args : Fin n → Ty) (i : Fin n) :
+    (args i).skel < (Ty.data C n args).skel := by
+  have := List.le_sum_of_mem_nat (List.mem_ofFn.mpr ⟨i, rfl⟩ :
+    (args i).skel ∈ List.ofFn fun i => (args i).skel)
+  simp only [Ty.skel]; omega
 
 end STLC

@@ -97,6 +97,32 @@ inductive Eval : Nat → Exp → Outcome → Prop
       Eval n e₀ (.val (.bconst false) n₁) → Eval n₁ e₂ o → Eval n (.ite e₀ e₁ e₂) o
   | ite_to {n e₀ e₁ e₂} :
       Eval n e₀ .timeout → Eval n (.ite e₀ e₁ e₂) .timeout
+  | pair {n e₁ e₂ v₁ n₁ v₂ n₂} :
+      Eval n e₁ (.val v₁ n₁) → Eval n₁ e₂ (.val v₂ n₂) →
+      Eval n (.pair e₁ e₂) (.val (.pair v₁ v₂) n₂)
+  | pair_to₁ {n e₁ e₂} :
+      Eval n e₁ .timeout → Eval n (.pair e₁ e₂) .timeout
+  | pair_to₂ {n e₁ e₂ v n₁} :
+      Eval n e₁ (.val v n₁) → Eval n₁ e₂ .timeout → Eval n (.pair e₁ e₂) .timeout
+  | split {n e₁ e₂ v₁ v₂ n₁ o} :
+      Eval n e₁ (.val (.pair v₁ v₂) n₁) →
+      Eval n₁ (Exp.openVal 0 v₂ (Exp.openVal 1 v₁ e₂)) o →
+      Eval n (.split e₁ e₂) o
+  | split_to {n e₁ e₂} :
+      Eval n e₁ .timeout → Eval n (.split e₁ e₂) .timeout
+  | ctor {n C j τs e w n₁} :
+      Eval n e (.val w n₁) → Eval n (.ctor C j τs e) (.val (.ctor C j w) n₁)
+  | ctor_to {n C j τs e} :
+      Eval n e .timeout → Eval n (.ctor C j τs e) .timeout
+  /-- Matching unfolds a datatype value: costs one unit of fuel. -/
+  | case {n e m alts C j w n₁ o} (hj : j < m) :
+      Eval n e (.val (.ctor C j w) (n₁ + 1)) →
+      Eval n₁ (Exp.openVal 0 w (alts ⟨j, hj⟩)) o →
+      Eval n (.case e m alts) o
+  | case_tick {n e m alts C j w} :
+      j < m → Eval n e (.val (.ctor C j w) 0) → Eval n (.case e m alts) .timeout
+  | case_to {n e m alts} :
+      Eval n e .timeout → Eval n (.case e m alts) .timeout
 
 /-- Evaluation never creates fuel. -/
 theorem Eval.fuel_le {n : Nat} {e : Exp} {v : Val} {m : Nat}
@@ -106,12 +132,25 @@ theorem Eval.fuel_le {n : Nat} {e : Exp} {v : Val} {m : Nat}
 
 /-- A value's syntax evaluates to itself, consuming no fuel. -/
 theorem Eval.toExp (n : Nat) (v : Val) : Eval n v.toExp (.val v n) := by
-  cases v <;> constructor
+  induction v with
+  | pair v₁ v₂ ih₁ ih₂ => exact .pair ih₁ ih₂
+  | ctor C j w ih => exact .ctor ih
+  | _ => constructor
 
 /-- ...and that is the only thing it evaluates to. -/
 theorem Eval.toExp_inv {n : Nat} {v : Val} {o : Outcome}
     (h : Eval n v.toExp o) : o = .val v n := by
-  cases v <;> cases h <;> rfl
+  induction v generalizing n o with
+  | pair v₁ v₂ ih₁ ih₂ =>
+    cases h with
+    | pair h₁ h₂ => cases ih₁ h₁; cases ih₂ h₂; rfl
+    | pair_to₁ h₁ => cases ih₁ h₁
+    | pair_to₂ h₁ h₂ => cases ih₁ h₁; cases ih₂ h₂
+  | ctor C j w ih =>
+    cases h with
+    | ctor h => cases ih h; rfl
+    | ctor_to h => cases ih h
+  | _ => cases h <;> rfl
 
 /-- Fuel-indexed evaluation is deterministic. -/
 theorem Eval.det {n : Nat} {e : Exp} {o₁ o₂ : Outcome}
@@ -184,6 +223,50 @@ theorem Eval.det {n : Nat} {e : Exp} {o₁ o₂ : Outcome}
     cases h₂ with
     | ite_t h _ | ite_f h _ => cases ih h
     | ite_to => rfl
+  | pair _ _ ih₁ ih₂ =>
+    cases h₂ with
+    | pair h₁' h₂' => cases ih₁ h₁'; cases ih₂ h₂'; rfl
+    | pair_to₁ h => cases ih₁ h
+    | pair_to₂ h₁' h₂' => cases ih₁ h₁'; cases ih₂ h₂'
+  | pair_to₁ _ ih =>
+    cases h₂ with
+    | pair h _ | pair_to₂ h _ => cases ih h
+    | pair_to₁ => rfl
+  | pair_to₂ _ _ ih₁ ih₂ =>
+    cases h₂ with
+    | pair h₁' h₂' => cases ih₁ h₁'; cases ih₂ h₂'
+    | pair_to₁ h => cases ih₁ h
+    | pair_to₂ => rfl
+  | split _ _ ih₁ ih₂ =>
+    cases h₂ with
+    | split h₁' h₂' => cases ih₁ h₁'; exact ih₂ h₂'
+    | split_to h => cases ih₁ h
+  | split_to _ ih =>
+    cases h₂ with
+    | split h _ => cases ih h
+    | split_to => rfl
+  | ctor _ ih =>
+    cases h₂ with
+    | ctor h => cases ih h; rfl
+    | ctor_to h => cases ih h
+  | ctor_to _ ih =>
+    cases h₂ with
+    | ctor h => cases ih h
+    | ctor_to => rfl
+  | case _ _ _ ih₁ ih₂ =>
+    cases h₂ with
+    | case _ h₁' h₂' => cases ih₁ h₁'; exact ih₂ h₂'
+    | case_tick _ h => cases ih₁ h
+    | case_to h => cases ih₁ h
+  | case_tick _ _ ih =>
+    cases h₂ with
+    | case _ h _ => cases ih h
+    | case_tick => rfl
+    | case_to h => cases ih h
+  | case_to _ ih =>
+    cases h₂ with
+    | case _ h _ | case_tick _ h => cases ih h
+    | case_to => rfl
   | iconst | bconst | lam | fix => cases h₂; rfl
 
 end STLC

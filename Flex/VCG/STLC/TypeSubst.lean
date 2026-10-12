@@ -116,6 +116,40 @@ theorem Refinement.interp_substB_ren {κ : KEnv} {σ : BSubst} (hσ : σ.IsRen) 
     exact Base.canonArg_recast (BSubst.compat_of_ren hσ a.1) _
   | conj _ _ ih₁ ih₂ => simp only [Refinement.substB, Refinement.interp, ih₁, ih₂]
 
+/-! ## Congruence for datatype denotations -/
+
+theorem SemTy.upto_congr {i : Nat} {R R' : Fin (i+1) → Val → Prop}
+    (h : ∀ j w, R j w ↔ R' j w) : SemTy.upto i R = SemTy.upto i R' := by
+  have : R = R' := funext fun j => funext fun w => propext (h j w)
+  subst this; rfl
+
+/-- A datatype's denotation at index `k` depends on its type arguments only
+    through their denotations below `k`. -/
+theorem TyDenote.data_congr {κ : KEnv} {δ δ' : TyEnvSem} {k : Nat} {C : String} {n : Nat}
+    {args args' : Fin n → Ty} {γ γ' : REnv} {v : Val}
+    (hden : δ.denv = δ'.denv)
+    (hargs : ∀ l, ∀ j < k, ∀ w, TyDenote κ δ j (args l) γ w ↔ TyDenote κ δ' j (args' l) γ' w) :
+    TyDenote κ δ k (.data C n args) γ v ↔ TyDenote κ δ' k (.data C n args') γ' v := by
+  simp only [TyDenote, hden]
+  refine and_congr_right fun _ => and_congr_right fun _ => and_congr_right fun _ =>
+    exists_congr fun j => exists_congr fun w => exists_congr fun P => and_congr_right fun _ =>
+      and_congr_right fun _ => forall_congr' fun i => forall_congr' fun hi => ?_
+  have : (List.ofFn fun l => SemTy.upto i fun j' w' => TyDenote κ δ j'.val (args l) γ w') =
+      List.ofFn fun l => SemTy.upto i fun j' w' => TyDenote κ δ' j'.val (args' l) γ' w' := by
+    congr 1; funext l
+    exact SemTy.upto_congr fun j' w' => hargs l j'.val (by have := j'.isLt; omega) w'
+  rw [this]
+
+/-- Pairs: componentwise congruence. -/
+theorem TyDenote.prod_congr {κ : KEnv} {δ δ' : TyEnvSem} {k : Nat} {s t s' t' : Ty}
+    {γ γ' : REnv} {v : Val}
+    (hs : ∀ w, TyDenote κ δ k s γ w ↔ TyDenote κ δ' k s' γ' w)
+    (ht : ∀ w₁ w, TyDenote κ δ k t (γ.push w₁) w ↔ TyDenote κ δ' k t' (γ'.push w₁) w) :
+    TyDenote κ δ k (.prod s t) γ v ↔ TyDenote κ δ' k (.prod s' t') γ' v := by
+  simp only [TyDenote]
+  exact exists_congr fun v₁ => exists_congr fun v₂ => and_congr_right fun _ =>
+    and_congr (hs v₁) (ht v₁ v₂)
+
 /-! ## Rebinding an absent type variable -/
 
 /-- Rebind the free type variable `a` to the semantic type `R`. -/
@@ -160,22 +194,30 @@ theorem TyDenote.set_fresh_iff {κ : KEnv} {a : TVar} {R : SemTy} (t : Ty) (ha :
     refine imp_congr_right (fun _ => exists_congr (fun body => exists_congr (fun o =>
       and_congr_right (fun _ => and_congr_right (fun _ => ?_)))))
     exact forall_congr' (fun vr => forall_congr' (fun m => imp_congr_right (fun _ =>
-      iht ha.2 δ m _ vr)))
+      imp_congr_right (fun _ => iht ha.2 δ m _ vr))))
   | «forall» kd t ih =>
     intro δ k γ v
     simp only [Ty.ftv] at ha
     simp only [TyDenote]
     exact forall_congr' (fun R' => forall_congr' (fun _ => by
       rw [TyEnvSem.set_push]; exact ih ha (δ.push R') k γ v))
+  | prod s t ihs iht =>
+    intro δ k γ v
+    simp only [Ty.ftv, List.mem_append, not_or] at ha
+    exact TyDenote.prod_congr (fun w => ihs ha.1 δ k γ w) (fun w₁ w => iht ha.2 δ k _ w)
+  | data C n args ih =>
+    intro δ k γ v
+    simp only [Ty.ftv, List.mem_flatMap, List.mem_finRange, true_and, not_exists] at ha
+    exact TyDenote.data_congr rfl (fun l j _ w => ih l (ha l) δ j γ w)
 
 /-! ## Opening a type binder -/
 
 /-- Base denotations under opening: the opened level reads `a`'s interpretation,
     deeper levels shift down. -/
-theorem BaseDen.openAt (ρ ρ₀ : List SemTy) (η : TVar → SemTy) (a : TVar) (R : SemTy)
+theorem BaseDen.openAt (ρ ρ₀ : List SemTy) (η : TVar → SemTy) (D : DEnv) (a : TVar) (R : SemTy)
     {k : Nat} {b : Base} {v : Val} (ha : a ∉ b.ftv) :
-    BaseDen ⟨ρ ++ R :: ρ₀, η⟩ k b v ↔
-    BaseDen ((⟨ρ ++ ρ₀, η⟩ : TyEnvSem).set a R) k (b.substB (BSubst.openAt ρ.length a)) v := by
+    BaseDen ⟨ρ ++ R :: ρ₀, η, D⟩ k b v ↔
+    BaseDen ((⟨ρ ++ ρ₀, η, D⟩ : TyEnvSem).set a R) k (b.substB (BSubst.openAt ρ.length a)) v := by
   cases b with
   | int | bool => rfl
   | tfvar a' =>
@@ -203,18 +245,18 @@ theorem BaseDen.openAt (ρ ρ₀ : List SemTy) (η : TVar → SemTy) (a : TVar) 
 /-- Opening a type binder with a fresh `a` is the same as interpreting the
     binder by `a`'s semantic type. -/
 theorem TyDenote.openTv_iff {κ : KEnv} (a : TVar) (R : SemTy) (t : Ty) (ha : a ∉ t.ftv) :
-    ∀ (ρ ρ₀ : List SemTy) (η : TVar → SemTy) (k : Nat) (γ : REnv) (v : Val),
-      TyDenote κ ⟨ρ ++ R :: ρ₀, η⟩ k t γ v ↔
-      TyDenote κ ((⟨ρ ++ ρ₀, η⟩ : TyEnvSem).set a R) k (t.openTv ρ.length a) γ v := by
+    ∀ (ρ ρ₀ : List SemTy) (η : TVar → SemTy) (D : DEnv) (k : Nat) (γ : REnv) (v : Val),
+      TyDenote κ ⟨ρ ++ R :: ρ₀, η, D⟩ k t γ v ↔
+      TyDenote κ ((⟨ρ ++ ρ₀, η, D⟩ : TyEnvSem).set a R) k (t.openTv ρ.length a) γ v := by
   induction t with
   | refine b r =>
-    intro ρ ρ₀ η k γ v
+    intro ρ ρ₀ η D k γ v
     simp only [Ty.ftv, List.mem_append, not_or] at ha
     simp only [Ty.openTv, TyDenote]
-    rw [BaseDen.openAt ρ ρ₀ η a R ha.1,
+    rw [BaseDen.openAt ρ ρ₀ η D a R ha.1,
         Refinement.interp_substB_ren (BSubst.openAt_ren _ _)]
   | arrow s t ihs iht =>
-    intro ρ ρ₀ η k γ v
+    intro ρ ρ₀ η D k γ v
     simp only [Ty.ftv, List.mem_append, not_or] at ha
     simp only [Ty.openTv, TyDenote]
     refine and_congr_right (fun _ => and_congr_right (fun _ => and_congr_right (fun _ =>
@@ -224,21 +266,32 @@ theorem TyDenote.openTv_iff {κ : KEnv} (a : TVar) (R : SemTy) (t : Ty) (ha : a 
     refine imp_congr_right (fun _ => exists_congr (fun body => exists_congr (fun o =>
       and_congr_right (fun _ => and_congr_right (fun _ => ?_)))))
     exact forall_congr' (fun vr => forall_congr' (fun m => imp_congr_right (fun _ =>
-      iht ha.2 ρ ρ₀ η m _ vr)))
+      imp_congr_right (fun _ => iht ha.2 ρ ρ₀ η D m _ vr))))
   | «forall» kd t ih =>
-    intro ρ ρ₀ η k γ v
+    intro ρ ρ₀ η D k γ v
     simp only [Ty.ftv] at ha
     simp only [Ty.openTv, TyDenote]
     refine forall_congr' (fun R' => forall_congr' (fun _ => ?_))
-    have := ih ha (R' :: ρ) ρ₀ η k γ v
+    have := ih ha (R' :: ρ) ρ₀ η D k γ v
     simpa [TyEnvSem.push, TyEnvSem.set] using this
+  | prod s t ihs iht =>
+    intro ρ ρ₀ η D k γ v
+    simp only [Ty.ftv, List.mem_append, not_or] at ha
+    simp only [Ty.openTv]
+    exact TyDenote.prod_congr (fun w => ihs ha.1 ρ ρ₀ η D k γ w)
+      (fun w₁ w => iht ha.2 ρ ρ₀ η D k _ w)
+  | data C n args ih =>
+    intro ρ ρ₀ η D k γ v
+    simp only [Ty.ftv, List.mem_flatMap, List.mem_finRange, true_and, not_exists] at ha
+    simp only [Ty.openTv]
+    exact TyDenote.data_congr rfl (fun l j _ w => ih l (ha l) ρ ρ₀ η D j γ w)
 
 /-- The `∀`-instance of `openTv_iff`: entering a type binder by `R` is opening it
     with a fresh `a` interpreted by `R`. -/
 theorem TyDenote.push_openTv_iff {κ : KEnv} (δ : TyEnvSem) (a : TVar) (R : SemTy) (t : Ty)
     (ha : a ∉ t.ftv) (k : Nat) (γ : REnv) (v : Val) :
     TyDenote κ (δ.push R) k t γ v ↔ TyDenote κ (δ.set a R) k (t.openTv 0 a) γ v := by
-  have := TyDenote.openTv_iff (κ := κ) a R t ha [] δ.bv δ.fv k γ v
+  have := TyDenote.openTv_iff (κ := κ) a R t ha [] δ.bv δ.fv δ.denv k γ v
   simpa [TyEnvSem.push] using this
 
 /-! ## Closing a type variable (generalization) -/
@@ -250,10 +303,10 @@ theorem BSubst.closeAt_ren (k : Nat) (a : TVar) : (BSubst.closeAt k a).IsRen := 
   | tfvar a' => simp only [Base.substB, BSubst.closeAt]; split <;> rfl
   | int | bool => simp [Base.isTv] at hb
 
-theorem BaseDen.closeAt (ρ ρ₀ : List SemTy) (η : TVar → SemTy) (a : TVar) (R : SemTy)
+theorem BaseDen.closeAt (ρ ρ₀ : List SemTy) (η : TVar → SemTy) (D : DEnv) (a : TVar) (R : SemTy)
     {k : Nat} {b : Base} {v : Val} :
-    BaseDen ⟨ρ ++ R :: ρ₀, η⟩ k (b.substB (BSubst.closeAt ρ.length a)) v ↔
-    BaseDen ((⟨ρ ++ ρ₀, η⟩ : TyEnvSem).set a R) k b v := by
+    BaseDen ⟨ρ ++ R :: ρ₀, η, D⟩ k (b.substB (BSubst.closeAt ρ.length a)) v ↔
+    BaseDen ((⟨ρ ++ ρ₀, η, D⟩ : TyEnvSem).set a R) k b v := by
   cases b with
   | int | bool => rfl
   | tfvar a' =>
@@ -277,32 +330,41 @@ theorem BaseDen.closeAt (ρ ρ₀ : List SemTy) (η : TVar → SemTy) (a : TVar)
 
 /-- Closing `a` as a type binder interpreted by `R` is interpreting `a` by `R`. -/
 theorem TyDenote.closeTv_iff {κ : KEnv} (a : TVar) (R : SemTy) (t : Ty) :
-    ∀ (ρ ρ₀ : List SemTy) (η : TVar → SemTy) (k : Nat) (γ : REnv) (v : Val),
-      TyDenote κ ⟨ρ ++ R :: ρ₀, η⟩ k (t.closeTv ρ.length a) γ v ↔
-      TyDenote κ ((⟨ρ ++ ρ₀, η⟩ : TyEnvSem).set a R) k t γ v := by
+    ∀ (ρ ρ₀ : List SemTy) (η : TVar → SemTy) (D : DEnv) (k : Nat) (γ : REnv) (v : Val),
+      TyDenote κ ⟨ρ ++ R :: ρ₀, η, D⟩ k (t.closeTv ρ.length a) γ v ↔
+      TyDenote κ ((⟨ρ ++ ρ₀, η, D⟩ : TyEnvSem).set a R) k t γ v := by
   induction t with
   | refine b r =>
-    intro ρ ρ₀ η k γ v
+    intro ρ ρ₀ η D k γ v
     simp only [Ty.closeTv, TyDenote]
-    rw [BaseDen.closeAt ρ ρ₀ η a R,
+    rw [BaseDen.closeAt ρ ρ₀ η D a R,
         Refinement.interp_substB_ren (BSubst.closeAt_ren _ _)]
   | arrow s t ihs iht =>
-    intro ρ ρ₀ η k γ v
+    intro ρ ρ₀ η D k γ v
     simp only [Ty.closeTv, TyDenote]
     refine and_congr_right (fun _ => and_congr_right (fun _ => and_congr_right (fun _ =>
       and_congr_right (fun _ => ?_))))
     refine forall_congr' (fun j => forall_congr' (fun _ => forall_congr' (fun va => ?_)))
-    rw [ihs ρ ρ₀ η]
+    rw [ihs ρ ρ₀ η D]
     refine imp_congr_right (fun _ => exists_congr (fun body => exists_congr (fun o =>
       and_congr_right (fun _ => and_congr_right (fun _ => ?_)))))
     exact forall_congr' (fun vr => forall_congr' (fun m => imp_congr_right (fun _ =>
-      iht ρ ρ₀ η m _ vr)))
+      imp_congr_right (fun _ => iht ρ ρ₀ η D m _ vr))))
   | «forall» kd t ih =>
-    intro ρ ρ₀ η k γ v
+    intro ρ ρ₀ η D k γ v
     simp only [Ty.closeTv, TyDenote]
     refine forall_congr' (fun R' => forall_congr' (fun _ => ?_))
-    have := ih (R' :: ρ) ρ₀ η k γ v
+    have := ih (R' :: ρ) ρ₀ η D k γ v
     simpa [TyEnvSem.push, TyEnvSem.set] using this
+  | prod s t ihs iht =>
+    intro ρ ρ₀ η D k γ v
+    simp only [Ty.closeTv]
+    exact TyDenote.prod_congr (fun w => ihs ρ ρ₀ η D k γ w)
+      (fun w₁ w => iht ρ ρ₀ η D k _ w)
+  | data C n args ih =>
+    intro ρ ρ₀ η D k γ v
+    simp only [Ty.closeTv]
+    exact TyDenote.data_congr rfl (fun l j _ w => ih l ρ ρ₀ η D j γ w)
 
 /-- `δ'` re-interprets (some of) the type variables `as` of `δ`, legally. -/
 inductive TyEnvSem.Reinterp (as : List TVar) : TyEnvSem → TyEnvSem → Prop
@@ -323,6 +385,12 @@ theorem TyEnvSem.Reinterp.WK {as : List TVar} {δ δ' : TyEnvSem}
   | refl => exact hδ
   | set a R _ hR _ ih => exact TyEnvSem.set_WK ih a R hR
 
+theorem TyEnvSem.Reinterp.denv {as : List TVar} {δ δ' : TyEnvSem}
+    (h : TyEnvSem.Reinterp as δ δ') : δ'.denv = δ.denv := by
+  induction h with
+  | refl => rfl
+  | set _ _ _ _ _ ih => exact ih
+
 theorem TyEnvSem.Reinterp.cons {a : TVar} {as : List TVar} {δ δ' : TyEnvSem} {R : SemTy}
     (hR : R.Fits a.2) (h : TyEnvSem.Reinterp as (δ.set a R) δ') :
     TyEnvSem.Reinterp (a :: as) δ δ' := by
@@ -340,9 +408,9 @@ theorem TyDenote.gen_intro {κ : KEnv} {k : Nat} {t : Ty} {γ : REnv} {v : Val} 
   | a :: as, δ, h => by
     simp only [Ty.gen, TyDenote]
     intro R hR
-    have := TyDenote.closeTv_iff (κ := κ) a R (Ty.gen as t) [] δ.bv δ.fv k γ v
+    have := TyDenote.closeTv_iff (κ := κ) a R (Ty.gen as t) [] δ.bv δ.fv δ.denv k γ v
     simp only [List.nil_append, List.length_nil] at this
-    exact this.mpr (TyDenote.gen_intro as _ (fun δ' h' => h δ' (TyEnvSem.Reinterp.cons hR h')))
+    refine this.mpr (TyDenote.gen_intro as _ (fun δ' h' => h δ' (TyEnvSem.Reinterp.cons hR h')))
 
 /-! ## Congruence: a refinement reads only the slots it mentions -/
 
@@ -409,13 +477,13 @@ theorem Refinement.interp_congr {κ : KEnv} (r : Refinement) {γ γ' : REnv} (hm
     interpretations and term-stack slots in scope. -/
 theorem TyDenote.congr_wf {κ : KEnv} (t : Ty) :
     ∀ (kctx : List Kind) (ctx : List (Option Base)) (ρ₁ ρ ρ' : List SemTy) (η : TVar → SemTy)
-      (k : Nat) (γ γ' : REnv) (v : Val),
+      (D : DEnv) (k : Nat) (γ γ' : REnv) (v : Val),
       t.wfB kctx ctx = true → kctx.length = ρ₁.length → γ.map = γ'.map →
       (∀ i < ctx.length, γ.bv[i]? = γ'.bv[i]?) →
-      (TyDenote κ ⟨ρ₁ ++ ρ, η⟩ k t γ v ↔ TyDenote κ ⟨ρ₁ ++ ρ', η⟩ k t γ' v) := by
+      (TyDenote κ ⟨ρ₁ ++ ρ, η, D⟩ k t γ v ↔ TyDenote κ ⟨ρ₁ ++ ρ', η, D⟩ k t γ' v) := by
   induction t with
   | refine b r =>
-    intro kctx ctx ρ₁ ρ ρ' η k γ γ' v hw hlen hmap hbv
+    intro kctx ctx ρ₁ ρ ρ' η D k γ γ' v hw hlen hmap hbv
     simp only [Ty.wfB, Bool.and_eq_true] at hw
     obtain ⟨⟨hty, _⟩, hr⟩ := hw
     simp only [TyDenote]
@@ -437,28 +505,43 @@ theorem TyDenote.congr_wf {κ : KEnv} (t : Ty) :
         · rw [List.getElem?_cons_succ, List.getElem?_eq_none_iff.mpr hi'] at this
           cases this
   | arrow s t ihs iht =>
-    intro kctx ctx ρ₁ ρ ρ' η k γ γ' v hw hlen hmap hbv
+    intro kctx ctx ρ₁ ρ ρ' η D k γ γ' v hw hlen hmap hbv
     simp only [Ty.wfB, Bool.and_eq_true] at hw
     simp only [TyDenote]
     refine and_congr_right (fun _ => and_congr_right (fun _ => and_congr_right (fun _ =>
       and_congr_right (fun _ => ?_))))
     refine forall_congr' (fun j => forall_congr' (fun _ => forall_congr' (fun va => ?_)))
-    rw [ihs kctx ctx ρ₁ ρ ρ' η j γ γ' va hw.1 hlen hmap hbv]
+    rw [ihs kctx ctx ρ₁ ρ ρ' η D j γ γ' va hw.1 hlen hmap hbv]
     refine imp_congr_right (fun _ => exists_congr (fun body => exists_congr (fun o =>
       and_congr_right (fun _ => and_congr_right (fun _ => ?_)))))
-    refine forall_congr' (fun vr => forall_congr' (fun m => imp_congr_right (fun _ => ?_)))
-    refine iht kctx (s.optBase :: ctx) ρ₁ ρ ρ' η m (γ.push va) (γ'.push va) vr hw.2 hlen
+    refine forall_congr' (fun vr => forall_congr' (fun m => imp_congr_right (fun _ =>
+      imp_congr_right (fun _ => ?_))))
+    refine iht kctx (s.optBase :: ctx) ρ₁ ρ ρ' η D m (γ.push va) (γ'.push va) vr hw.2 hlen
       (by simpa using hmap) (fun i hi => ?_)
     cases i with
     | zero => rfl
     | succ i => exact hbv i (by simpa using hi)
   | «forall» kd t ih =>
-    intro kctx ctx ρ₁ ρ ρ' η k γ γ' v hw hlen hmap hbv
+    intro kctx ctx ρ₁ ρ ρ' η D k γ γ' v hw hlen hmap hbv
     simp only [Ty.wfB] at hw
     simp only [TyDenote]
     refine forall_congr' (fun R => forall_congr' (fun _ => ?_))
-    exact ih (kd :: kctx) _ (R :: ρ₁) ρ ρ' η k γ γ' v hw (by simp [hlen]) hmap
+    exact ih (kd :: kctx) _ (R :: ρ₁) ρ ρ' η D k γ γ' v hw (by simp [hlen]) hmap
       (fun i hi => hbv i (by simpa using hi))
+  | prod s t ihs iht =>
+    intro kctx ctx ρ₁ ρ ρ' η D k γ γ' v hw hlen hmap hbv
+    simp only [Ty.wfB, Bool.and_eq_true] at hw
+    refine TyDenote.prod_congr (fun w => ihs kctx ctx ρ₁ ρ ρ' η D k γ γ' w hw.1 hlen hmap hbv)
+      (fun w₁ w => iht kctx (s.optBase :: ctx) ρ₁ ρ ρ' η D k (γ.push w₁) (γ'.push w₁) w hw.2 hlen
+        (by simpa using hmap) (fun i hi => ?_))
+    cases i with
+    | zero => rfl
+    | succ i => exact hbv i (by simpa using hi)
+  | data C n args ih =>
+    intro kctx ctx ρ₁ ρ ρ' η D k γ γ' v hw hlen hmap hbv
+    simp only [Ty.wfB, List.all_eq_true, List.mem_finRange, true_implies] at hw
+    exact TyDenote.data_congr rfl
+      (fun l j _ w => ih l kctx ctx ρ₁ ρ ρ' η D j γ γ' w (hw l) hlen hmap hbv)
 
 /-! ## Instantiating a type variable at a base sort
 
@@ -592,10 +675,14 @@ theorem Refinement.interp_substB_inst {κ : KEnv} {n : Nat} {b' : Base} (hb' : b
 
 /-! ## The substitution lemma for type application -/
 
-theorem Refinement.eq_tt_of_isTT {r : Refinement} (h : r.isTT = true) : r = .fmla .tt := by
-  cases r with
-  | fmla φ => cases φ <;> simp_all [Refinement.isTT]
-  | _ => simp [Refinement.isTT] at h
+theorem Refinement.interp_of_isTT {κ : KEnv} {r : Refinement} (h : r.isTT = true) (γ : REnv) :
+    Refinement.interp κ r γ := by
+  induction r with
+  | fmla φ => cases φ <;> simp_all [Refinement.isTT, Refinement.interp, Formula.interp]
+  | conj r₁ r₂ ih₁ ih₂ =>
+    simp only [Refinement.isTT, Bool.and_eq_true] at h
+    exact ⟨ih₁ h.1, ih₂ h.2⟩
+  | kapp => simp [Refinement.isTT] at h
 
 /-- The shape of a `B`-kinded instance: a refined base type or `B`-kinded type
     variable. -/
@@ -625,11 +712,12 @@ theorem BSubst.instAt_ren_of_tv {n : Nat} {b' : Base} (hb' : b'.isTv = true) :
 
 /-- Base denotations are unaffected by the bound-variable stack beyond the
     instantiated level, for sorts other than that level. -/
-theorem BaseDen.instAt_ne (ρ ρ₀ : List SemTy) (η : TVar → SemTy) (R : SemTy) {kctx : List Kind}
+theorem BaseDen.instAt_ne (ρ ρ₀ : List SemTy) (η : TVar → SemTy) (D : DEnv) (R : SemTy)
+    {kctx : List Kind}
     {k : Nat} {b : Base} {v : Val} (hb : b ≠ .tbvar ρ.length) (hty : b.tyOK kctx = true)
     (hlen : kctx.length = ρ.length + 1) (b' : Base) :
-    BaseDen ⟨ρ ++ R :: ρ₀, η⟩ k b v ↔
-    BaseDen ⟨ρ ++ ρ₀, η⟩ k (b.substB (BSubst.instAt ρ.length b')) v := by
+    BaseDen ⟨ρ ++ R :: ρ₀, η, D⟩ k b v ↔
+    BaseDen ⟨ρ ++ ρ₀, η, D⟩ k (b.substB (BSubst.instAt ρ.length b')) v := by
   cases b with
   | int | bool => rfl
   | tfvar a => rfl
@@ -646,28 +734,29 @@ theorem BaseDen.instAt_ne (ρ ρ₀ : List SemTy) (η : TVar → SemTy) (R : Sem
 /-- **Substitution lemma.** Interpreting the type variable by the semantic type
     `R = ⟦s⟧` is the same as substituting `s` for it (with λ_RF's refinement
     strengthening). `kctx`/`ctx` track the enclosing binders; `SlotsOK` records
-    that `α`-sorted stack slots hold values of `s`'s sort. -/
+    that `α`-sorted stack slots hold values of `s`'s sort. `R` need only agree
+    with `⟦s⟧` up to the index at which the types are compared. -/
 theorem TyDenote.instTy_iff {κ : KEnv} (s : Ty) (kd : Kind) (hs : s.wfB [] [] = true)
-    (hk : Kind.le s.kindOf kd) (δ₀ : TyEnvSem) (γ₀ : REnv) (R : SemTy)
-    (hR : ∀ k w, R.rel k w ↔ TyDenote κ δ₀ k s γ₀ w) :
+    (hk : Kind.le s.kindOf kd) (δ₀ : TyEnvSem) (γ₀ : REnv) (R : SemTy) :
     ∀ (t : Ty) (ρ ρ₀ : List SemTy) (kctx : List Kind) (ctx : List (Option Base))
       (k : Nat) (γ : REnv) (v : Val),
+      (∀ k' ≤ k, ∀ w, R.rel k' w ↔ TyDenote κ δ₀ k' s γ₀ w) →
       t.wfB kctx ctx = true → kctx.length = ρ.length + 1 → kctx[ρ.length]? = some kd →
       γ.map = γ₀.map →
       ((s.sortOf = .int ∨ s.sortOf = .bool) → SlotsOK kctx ctx ρ.length s.sortOf γ) →
-      (TyDenote κ ⟨ρ ++ R :: ρ₀, δ₀.fv⟩ k t γ v ↔
-       TyDenote κ ⟨ρ ++ ρ₀, δ₀.fv⟩ k (Ty.instTy ρ.length s t) γ v) := by
+      (TyDenote κ ⟨ρ ++ R :: ρ₀, δ₀.fv, δ₀.denv⟩ k t γ v ↔
+       TyDenote κ ⟨ρ ++ ρ₀, δ₀.fv, δ₀.denv⟩ k (Ty.instTy ρ.length s t) γ v) := by
   -- Values of `R` at a `B`-kinded variable have `s`'s sort.
   have hRval : kd = .B → (s.sortOf = .int ∨ s.sortOf = .bool) →
-      ∀ k w, R.rel k w → w.optBase = some s.sortOf := by
-    intro hkd hb' k w hw
+      ∀ k w, (R.rel k w ↔ TyDenote κ δ₀ k s γ₀ w) → R.rel k w → w.optBase = some s.sortOf := by
+    intro hkd hb' k w hRk hw
     subst hkd
     have hsB : s.kindOf = .B := by
       rcases hk with h | h
       · exact h
       · cases h
     obtain ⟨b', r', rfl, hb'₂⟩ := Ty.kindOf_B hsB
-    have := (hR k w).mp hw
+    have := hRk.mp hw
     simp only [TyDenote] at this
     simp only [Ty.sortOf] at hb'
     rcases hb' with rfl | rfl
@@ -693,7 +782,7 @@ theorem TyDenote.instTy_iff {κ : KEnv} (s : Ty) (kd : Kind) (hs : s.wfB [] [] =
   intro t
   induction t with
   | refine b r =>
-    intro ρ ρ₀ kctx ctx k γ v hw hlen hkd hmap hslots
+    intro ρ ρ₀ kctx ctx k γ v hR hw hlen hkd hmap hslots
     simp only [Ty.wfB, Bool.and_eq_true] at hw
     obtain ⟨⟨hty, hstar⟩, hr⟩ := hw
     by_cases hbk : b = .tbvar ρ.length
@@ -701,7 +790,7 @@ theorem TyDenote.instTy_iff {κ : KEnv} (s : Ty) (kd : Kind) (hs : s.wfB [] [] =
       simp only [Ty.instTy, if_true]
       simp only [TyDenote, BaseDen, List.getElem?_append_right (Nat.le_refl _), Nat.sub_self,
         List.getElem?_cons_zero, Option.getD_some]
-      rw [hR k v]
+      rw [hR k (Nat.le_refl _) v]
       -- the binder's own refinement, retyped
       have hr' := hrefn r kctx ctx _ ρ.length γ v hr hslots
       match s, hs, hk, hr' with
@@ -709,7 +798,7 @@ theorem TyDenote.instTy_iff {κ : KEnv} (s : Ty) (kd : Kind) (hs : s.wfB [] [] =
         simp only [Ty.wfB, Bool.and_eq_true] at hs
         obtain ⟨⟨hty', _⟩, hr's⟩ := hs
         simp only [Ty.strengthen, TyDenote, Refinement.interp]
-        have hbase : BaseDen δ₀ k b' v ↔ BaseDen ⟨ρ ++ ρ₀, δ₀.fv⟩ k b' v := by
+        have hbase : BaseDen δ₀ k b' v ↔ BaseDen ⟨ρ ++ ρ₀, δ₀.fv, δ₀.denv⟩ k b' v := by
           cases b' with
           | tbvar j => simp [Base.tyOK] at hty'
           | _ => rfl
@@ -736,39 +825,31 @@ theorem TyDenote.instTy_iff {κ : KEnv} (s : Ty) (kd : Kind) (hs : s.wfB [] [] =
           rcases hsort with rfl | rfl
           · obtain ⟨n, rfl⟩ := hb; rfl
           · obtain ⟨c, rfl⟩ := hb; rfl
-      | .arrow s₁ s₂, hs, hk, _ =>
+      | .arrow _ _, hs, hk, _ | .forall _ _, hs, hk, _ | .prod _ _, hs, hk, _
+      | .data _ _ _, hs, hk, _ =>
         have hkd' : kd = .star := by rcases hk with h | h <;> simp_all [Ty.kindOf]
         subst hkd'
         have hstar' : (Base.tbvar ρ.length).isStarB kctx = true := by
           simp [Base.isStarB, hkd]
         simp only [hstar', Bool.not_true, Bool.false_or] at hstar
-        rw [Refinement.eq_tt_of_isTT hstar]
-        simp only [Ty.strengthen, Refinement.interp, Formula.interp, and_true]
-        exact TyDenote.congr_wf _ [] [] [] δ₀.bv (ρ ++ ρ₀) δ₀.fv k γ₀ γ v hs rfl hmap.symm
-          (fun i hi => by simp at hi)
-      | .forall kd₂ s₂, hs, hk, _ =>
-        have hkd' : kd = .star := by rcases hk with h | h <;> simp_all [Ty.kindOf]
-        subst hkd'
-        have hstar' : (Base.tbvar ρ.length).isStarB kctx = true := by
-          simp [Base.isStarB, hkd]
-        simp only [hstar', Bool.not_true, Bool.false_or] at hstar
-        rw [Refinement.eq_tt_of_isTT hstar]
-        simp only [Ty.strengthen, Refinement.interp, Formula.interp, and_true]
-        exact TyDenote.congr_wf _ [] [] [] δ₀.bv (ρ ++ ρ₀) δ₀.fv k γ₀ γ v hs rfl hmap.symm
+        simp only [Ty.strengthen, Refinement.interp_of_isTT hstar, and_true]
+        exact TyDenote.congr_wf _ [] [] [] δ₀.bv (ρ ++ ρ₀) δ₀.fv δ₀.denv k γ₀ γ v hs rfl hmap.symm
           (fun i hi => by simp at hi)
     · simp only [Ty.instTy, hbk, if_false, TyDenote]
-      rw [BaseDen.instAt_ne ρ ρ₀ δ₀.fv R hbk hty hlen s.sortOf,
+      rw [BaseDen.instAt_ne ρ ρ₀ δ₀.fv δ₀.denv R hbk hty hlen s.sortOf,
           hrefn r kctx ctx b ρ.length γ v hr hslots (fun _ h => absurd h hbk)]
   | arrow s₁ t₂ ihs iht =>
-    intro ρ ρ₀ kctx ctx k γ v hw hlen hkd hmap hslots
+    intro ρ ρ₀ kctx ctx k γ v hR hw hlen hkd hmap hslots
     simp only [Ty.wfB, Bool.and_eq_true] at hw
     simp only [Ty.instTy, TyDenote]
     refine and_congr_right (fun _ => and_congr_right (fun _ => and_congr_right (fun _ =>
       and_congr_right (fun _ => ?_))))
-    refine forall_congr' (fun j => forall_congr' (fun _ => forall_congr' (fun va => ?_)))
-    have hdom := ihs ρ ρ₀ kctx ctx j γ va hw.1 hlen hkd hmap hslots
+    refine forall_congr' (fun j => forall_congr' (fun hj => forall_congr' (fun va => ?_)))
+    have hRj : ∀ k' ≤ j, ∀ w, R.rel k' w ↔ TyDenote κ δ₀ k' s γ₀ w :=
+      fun k' hk' => hR k' (by omega)
+    have hdom := ihs ρ ρ₀ kctx ctx j γ va hRj hw.1 hlen hkd hmap hslots
     -- the slot for the new binder holds an `s`-sorted value when it is `α`-sorted
-    have hslot (hva : TyDenote κ ⟨ρ ++ R :: ρ₀, δ₀.fv⟩ j s₁ γ va) :
+    have hslot (hva : TyDenote κ ⟨ρ ++ R :: ρ₀, δ₀.fv, δ₀.denv⟩ j s₁ γ va) :
         (s.sortOf = .int ∨ s.sortOf = .bool) → SlotsOK kctx (s₁.optBase :: ctx) ρ.length s.sortOf
           (γ.push va) := by
       intro hb'
@@ -781,26 +862,26 @@ theorem TyDenote.instTy_iff {κ : KEnv} (s : Ty) (kd : Kind) (hs : s.wfB [] [] =
         subst hopt
         simp only [TyDenote, BaseDen, List.getElem?_append_right (Nat.le_refl _), Nat.sub_self,
           List.getElem?_cons_zero, Option.getD_some] at hva
-        exact hRval hkdB hb' j va hva.1
-      | arrow _ _ | «forall» _ _ => simp [Ty.optBase] at hopt
+        exact hRval hkdB hb' j va (hRj j (Nat.le_refl _) va) hva.1
+      | arrow _ _ | «forall» _ _ | prod _ _ | data _ _ _ => simp [Ty.optBase] at hopt
     constructor
     · intro h hva'
       have hva := hdom.mpr hva'
       obtain ⟨body, o, hap, hev, hres⟩ := h hva
-      refine ⟨body, o, hap, hev, fun vr m ho => ?_⟩
-      exact (iht ρ ρ₀ kctx (s₁.optBase :: ctx) m (γ.push va) vr hw.2 hlen hkd
-        (by simpa using hmap) (hslot hva)).mp (hres vr m ho)
+      refine ⟨body, o, hap, hev, fun vr m ho hm => ?_⟩
+      exact (iht ρ ρ₀ kctx (s₁.optBase :: ctx) m (γ.push va) vr (fun k' hk' => hR k' (by omega))
+        hw.2 hlen hkd (by simpa using hmap) (hslot hva)).mp (hres vr m ho hm)
     · intro h hva
       obtain ⟨body, o, hap, hev, hres⟩ := h (hdom.mp hva)
-      refine ⟨body, o, hap, hev, fun vr m ho => ?_⟩
-      exact (iht ρ ρ₀ kctx (s₁.optBase :: ctx) m (γ.push va) vr hw.2 hlen hkd
-        (by simpa using hmap) (hslot hva)).mpr (hres vr m ho)
+      refine ⟨body, o, hap, hev, fun vr m ho hm => ?_⟩
+      exact (iht ρ ρ₀ kctx (s₁.optBase :: ctx) m (γ.push va) vr (fun k' hk' => hR k' (by omega))
+        hw.2 hlen hkd (by simpa using hmap) (hslot hva)).mpr (hres vr m ho hm)
   | «forall» kd' t' ih =>
-    intro ρ ρ₀ kctx ctx k γ v hw hlen hkd hmap hslots
+    intro ρ ρ₀ kctx ctx k γ v hR hw hlen hkd hmap hslots
     simp only [Ty.wfB] at hw
     simp only [Ty.instTy, TyDenote]
     refine forall_congr' (fun R' => forall_congr' (fun _ => ?_))
-    have := ih (R' :: ρ) ρ₀ (kd' :: kctx) (ctx.map (Option.map Base.shiftT)) k γ v hw
+    have := ih (R' :: ρ) ρ₀ (kd' :: kctx) (ctx.map (Option.map Base.shiftT)) k γ v hR hw
       (by simp [hlen]) (by simpa using hkd) hmap ?_
     · simpa [TyEnvSem.push] using this
     · intro hb' i hi hB
@@ -822,5 +903,40 @@ theorem TyDenote.instTy_iff {κ : KEnv} (s : Ty) (kd : Kind) (hs : s.wfB [] [] =
             subst hj
             exact hslots hb' i hc hB
           | _ => simp [Base.shiftT] at hi
+  | prod s₁ t₂ ihs iht =>
+    intro ρ ρ₀ kctx ctx k γ v hR hw hlen hkd hmap hslots
+    simp only [Ty.wfB, Bool.and_eq_true] at hw
+    simp only [Ty.instTy, TyDenote]
+    have hslot (va : Val) (hva : TyDenote κ ⟨ρ ++ R :: ρ₀, δ₀.fv, δ₀.denv⟩ k s₁ γ va) :
+        (s.sortOf = .int ∨ s.sortOf = .bool) → SlotsOK kctx (s₁.optBase :: ctx) ρ.length s.sortOf
+          (γ.push va) := by
+      intro hb'
+      refine (hslots hb').push _ va ?_
+      intro hopt hB
+      have hkdB : kd = .B := by rw [hkd] at hB; exact Option.some.inj hB
+      cases s₁ with
+      | refine b₁ r₁ =>
+        simp only [Ty.optBase, Option.some.injEq] at hopt
+        subst hopt
+        simp only [TyDenote, BaseDen, List.getElem?_append_right (Nat.le_refl _), Nat.sub_self,
+          List.getElem?_cons_zero, Option.getD_some] at hva
+        exact hRval hkdB hb' k va (hR k (Nat.le_refl _) va) hva.1
+      | arrow _ _ | «forall» _ _ | prod _ _ | data _ _ _ => simp [Ty.optBase] at hopt
+    refine exists_congr fun v₁ => exists_congr fun v₂ => and_congr_right fun _ => ?_
+    have h₁ := ihs ρ ρ₀ kctx ctx k γ v₁ hR hw.1 hlen hkd hmap hslots
+    constructor
+    · rintro ⟨hv₁, hv₂⟩
+      exact ⟨h₁.mp hv₁, (iht ρ ρ₀ kctx (s₁.optBase :: ctx) k (γ.push v₁) v₂ hR hw.2 hlen hkd
+        (by simpa using hmap) (hslot v₁ hv₁)).mp hv₂⟩
+    · rintro ⟨hv₁, hv₂⟩
+      have hv₁' := h₁.mpr hv₁
+      exact ⟨hv₁', (iht ρ ρ₀ kctx (s₁.optBase :: ctx) k (γ.push v₁) v₂ hR hw.2 hlen hkd
+        (by simpa using hmap) (hslot v₁ hv₁')).mpr hv₂⟩
+  | data C n args ih =>
+    intro ρ ρ₀ kctx ctx k γ v hR hw hlen hkd hmap hslots
+    simp only [Ty.wfB, List.all_eq_true, List.mem_finRange, true_implies] at hw
+    simp only [Ty.instTy]
+    exact TyDenote.data_congr rfl (fun l j hj w =>
+      ih l ρ ρ₀ kctx ctx j γ w (fun k' hk' => hR k' (by omega)) (hw l) hlen hkd hmap hslots)
 
 end STLC

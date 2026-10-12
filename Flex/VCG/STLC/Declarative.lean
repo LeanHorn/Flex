@@ -43,11 +43,11 @@ inductive Hastype : DEnv → KEnv → TEnv → Exp → Ty → Prop where
       Γ.lookup x = some (.refine .int r₁) →
       Γ.lookup y = some (.refine .int r₂) →
       Hastype de κ Γ (.add (.fvar x) (.fvar y)) <ty| Int{ν : ν = x + y}|>
-  | leq_var {de κ Γ x y r₁ r₂} :
-      Γ.lookup x = some (.refine .int r₁) →
-      Γ.lookup y = some (.refine .int r₂) →
-      Hastype de κ Γ (.leq (.fvar x) (.fvar y))
-        <ty|Bool{ν : (ν = true → x ≤ y) ∧ (x ≤ y → ν = true)} |>
+  | leq_var {de κ Γ x y b r₁ r₂} :
+      Γ.lookup x = some (.refine b r₁) →
+      Γ.lookup y = some (.refine b r₂) →
+      b.fvOK = true →
+      Hastype de κ Γ (.leq (.fvar x) (.fvar y)) (leqTy b x y)
   | not_var {de κ Γ x r} :
       Γ.lookup x = some (.refine .bool r) →
       Hastype de κ Γ (.not (.fvar x)) <ty|Bool{ν : ν = ¬x}|>
@@ -318,10 +318,7 @@ theorem Ty.WFBVars_add_result (x y : EVar) : Ty.WFBVars
   simp [Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar, Term.hasBVar]
 
 /-- WFBVars of the leq_var result type. -/
-theorem Ty.WFBVars_leq_result (x y : EVar) : Ty.WFBVars
-    (.refine .bool (.fmla (.and
-      (.imp (.eq .bool (.bvar .bool 0) (.const .bool true)) (.leqI (.fvar .int x) (.fvar .int y)))
-      (.imp (.leqI (.fvar .int x) (.fvar .int y)) (.eq .bool (.bvar .bool 0) (.const .bool true)))))) := by
+theorem Ty.WFBVars_leq_result (b : Base) (x y : EVar) : Ty.WFBVars (leqTy b x y) := by
   simp [Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar, Term.hasBVar]
 
 /-- WFBVars of the not_var result type. -/
@@ -349,7 +346,7 @@ theorem Hastype.wf_bvars {de κ Γ e t} (h : Hastype de κ Γ e t) : Ty.WFBVars 
   | ann _ hwf _ => exact hwf
   | sub _ _ hwf _ => exact hwf
   | add_var => exact Ty.WFBVars_add_result _ _
-  | leq_var => exact Ty.WFBVars_leq_result _ _
+  | leq_var => exact Ty.WFBVars_leq_result _ _ _
   | not_var => exact Ty.WFBVars_not_result _
   | and_var => exact Ty.WFBVars_and_result _ _
   | ite _ _ hwf _ _ _ _ => exact hwf

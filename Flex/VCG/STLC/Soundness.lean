@@ -333,7 +333,19 @@ mutual
       obtain ⟨c', hc⟩ : ∃ c, check de Γ e1 t' = some c := by grind
       simp_all
       exact Synth.ann (check_sound κ Γ e1 t c hc hent)
-    | .leq (.fvar x) (.fvar y) | .add (.fvar x) (.fvar y) =>
+    | .leq (.fvar x) (.fvar y) =>
+      simp only [synth] at hsynth
+      split at hsynth
+      · rename_i b r₁ b' r₂ hx hy
+        split at hsynth
+        · rename_i h
+          obtain ⟨rfl, hb⟩ := h
+          simp only [Option.some.injEq, Prod.mk.injEq] at hsynth
+          rw [←hsynth.2]
+          exact Synth.leq_var hx hy hb
+        · cases hsynth
+      · cases hsynth
+    | .add (.fvar x) (.fvar y) =>
       simp_all [synth]
       obtain ⟨a, b, ha, hb⟩ : ∃ a b, List.lookup x Γ = some (.refine .int a) ∧
           List.lookup y Γ = some (.refine .int b) := by grind
@@ -789,8 +801,8 @@ mutual
       exact Ty.WFBVarCtx_openVar_last _ [] _ _ htw_s_t.2
     | .add_var hxlk hylk =>
       exact ⟨.add_var hxlk hylk, Ty.WFBVars_add_result _ _⟩
-    | .leq_var hxlk hylk =>
-      exact ⟨.leq_var hxlk hylk, Ty.WFBVars_leq_result _ _⟩
+    | .leq_var hxlk hylk hb =>
+      exact ⟨.leq_var hxlk hylk hb, Ty.WFBVars_leq_result _ _ _⟩
     | .not_var hxlk =>
       exact ⟨.not_var hxlk, Ty.WFBVars_not_result _⟩
     | .and_var hxlk hylk =>

@@ -121,8 +121,8 @@ mutual
         | _ => none
     | .leq (.fvar x) (.fvar y) =>
         match Γ.lookup x, Γ.lookup y with
-        | some (.refine .int _), some (.refine .int _) =>
-            some (Cstr.triv, <ty| Bool{ν : (ν = true → x ≤ y) ∧ (x ≤ y → ν = true)} |>)
+        | some (.refine b _), some (.refine b' _) =>
+            if b = b' ∧ b.fvOK = true then some (Cstr.triv, leqTy b x y) else none
         | _, _ => none
     | .add (.fvar x) (.fvar y) =>
         match Γ.lookup x, Γ.lookup y with

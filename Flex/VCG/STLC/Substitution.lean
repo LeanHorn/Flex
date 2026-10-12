@@ -34,7 +34,7 @@ def Formula.fv : Formula → List EVar
   | .tt           => []
   | .ff           => []
   | .eq _ t₁ t₂   => t₁.fv ++ t₂.fv
-  | .leqI t₁ t₂   => t₁.fv ++ t₂.fv
+  | .leq _ t₁ t₂   => t₁.fv ++ t₂.fv
   | .and φ₁ φ₂    => Formula.fv φ₁ ++ Formula.fv φ₂
   | .or φ₁ φ₂     => Formula.fv φ₁ ++ Formula.fv φ₂
   | .not φ        => Formula.fv φ
@@ -49,7 +49,7 @@ def Formula.openBVar (k : Nat) (x : EVar) : Formula → Formula
   | .tt           => .tt
   | .ff           => .ff
   | .eq b t₁ t₂   => .eq b (t₁.openBVar k x) (t₂.openBVar k x)
-  | .leqI t₁ t₂   => .leqI (t₁.openBVar k x) (t₂.openBVar k x)
+  | .leq b t₁ t₂   => .leq b (t₁.openBVar k x) (t₂.openBVar k x)
   | .and φ₁ φ₂    => .and (φ₁.openBVar k x) (φ₂.openBVar k x)
   | .or φ₁ φ₂     => .or (φ₁.openBVar k x) (φ₂.openBVar k x)
   | .not φ        => .not (φ.openBVar k x)
@@ -156,7 +156,7 @@ theorem Formula.fv_openBVar {x z : EVar} (φ : Formula) : ∀ {k : Nat},
     z ∈ (φ.openBVar k x).fv → z ∈ φ.fv ∨ z = x := by
   induction φ with
   | tt | ff => simp [Formula.openBVar, Formula.fv]
-  | eq _ t₁ t₂ | leqI t₁ t₂ =>
+  | eq _ t₁ t₂ | leq _ t₁ t₂ =>
     intro k
     simp only [Formula.openBVar, Formula.fv, List.mem_append]
     rintro (h | h)
@@ -226,7 +226,7 @@ def Term.hasBVar (b : Base) (k : Nat) : {b' : Base} → Term b' → Prop
 /-- `Formula.hasBVar b k φ`: φ contains at least one `Term.bvar b k`. -/
 def Formula.hasBVar (b : Base) (k : Nat) : Formula → Prop
   | .tt | .ff => False
-  | .eq _ t₁ t₂ | .leqI t₁ t₂ =>
+  | .eq _ t₁ t₂ | .leq _ t₁ t₂ =>
       Term.hasBVar b k t₁ ∨ Term.hasBVar b k t₂
   | .and φ₁ φ₂ | .or φ₁ φ₂ | .imp φ₁ φ₂ =>
       Formula.hasBVar b k φ₁ ∨ Formula.hasBVar b k φ₂
@@ -370,7 +370,7 @@ theorem Formula.hasBVar_openBVar (φ : Formula) (b : Base) (i k : Nat) (x : EVar
       (i < k ∧ Formula.hasBVar b i φ) ∨ (k ≤ i ∧ Formula.hasBVar b (i+1) φ) := by
   induction φ generalizing i k with
   | tt | ff => simp [Formula.hasBVar, Formula.openBVar]
-  | eq _ t₁ t₂ | leqI t₁ t₂ =>
+  | eq _ t₁ t₂ | leq _ t₁ t₂ =>
     simp only [Formula.hasBVar, Formula.openBVar, Term.hasBVar_openBVar]; grind
   | and φ₁ φ₂ ih1 ih2 | or φ₁ φ₂ ih1 ih2 | imp φ₁ φ₂ ih1 ih2 =>
     simp only [Formula.hasBVar, Formula.openBVar, ih1, ih2]; grind
@@ -505,7 +505,7 @@ def Formula.substB (σ : BSubst) : Formula → Formula
   | .tt           => .tt
   | .ff           => .ff
   | .eq b t₁ t₂   => .eq (b.substB σ) (t₁.substB σ) (t₂.substB σ)
-  | .leqI t₁ t₂   => .leqI (t₁.substB σ) (t₂.substB σ)
+  | .leq b t₁ t₂   => .leq (b.substB σ) (t₁.substB σ) (t₂.substB σ)
   | .and φ₁ φ₂    => .and (φ₁.substB σ) (φ₂.substB σ)
   | .or φ₁ φ₂     => .or (φ₁.substB σ) (φ₂.substB σ)
   | .not φ        => .not (φ.substB σ)
@@ -574,7 +574,7 @@ theorem Term.interp_substB (σ : BSubst) (γ : REnv) :
 @[simp] theorem Formula.fv_substB (σ : BSubst) (φ : Formula) : (φ.substB σ).fv = φ.fv := by
   induction φ with
   | tt | ff => rfl
-  | eq _ t₁ t₂ | leqI t₁ t₂ =>
+  | eq _ t₁ t₂ | leq _ t₁ t₂ =>
     simp only [Formula.substB, Formula.fv]
     exact congr (congrArg (· ++ ·) (Term.fv_substB σ t₁)) (Term.fv_substB σ t₂)
   | and _ _ ih₁ ih₂ | or _ _ ih₁ ih₂ | imp _ _ ih₁ ih₂ =>
@@ -678,7 +678,7 @@ def Base.sortOK (kctx : List Kind) : Base → Bool
   | .tfvar (_, κ)   => κ == .B
 
 /-- A sort at which free variables may occur. -/
-def Base.fvOK : Base → Bool
+@[simp] def Base.fvOK : Base → Bool
   | .int | .bool    => true
   | .tbvar _        => false
   | .tfvar (_, κ)   => κ == .B
@@ -704,7 +704,7 @@ def Term.wfB (kctx : List Kind) (ctx : List (Option Base)) : {b : Base} → Term
 def Formula.wfB (kctx : List Kind) (ctx : List (Option Base)) : Formula → Bool
   | .tt | .ff       => true
   | .eq _ t₁ t₂     => t₁.wfB kctx ctx && t₂.wfB kctx ctx
-  | .leqI t₁ t₂     => t₁.wfB kctx ctx && t₂.wfB kctx ctx
+  | .leq _ t₁ t₂     => t₁.wfB kctx ctx && t₂.wfB kctx ctx
   | .and φ₁ φ₂      => φ₁.wfB kctx ctx && φ₂.wfB kctx ctx
   | .or φ₁ φ₂       => φ₁.wfB kctx ctx && φ₂.wfB kctx ctx
   | .imp φ₁ φ₂      => φ₁.wfB kctx ctx && φ₂.wfB kctx ctx
@@ -759,7 +759,7 @@ theorem Formula.wfB_hasBVar (φ : Formula) : ∀ {kctx : List Kind} {ctx : List 
     φ.wfB kctx ctx = true → ∀ b k, Formula.hasBVar b k φ → ctx[k]? = some (some b) := by
   induction φ with
   | tt | ff => intro _ _ _ b k h; simp [Formula.hasBVar] at h
-  | eq _ t₁ t₂ | leqI t₁ t₂ =>
+  | eq _ t₁ t₂ | leq _ t₁ t₂ =>
     intro kctx ctx hw b k h
     simp only [Formula.wfB, Bool.and_eq_true] at hw
     simp only [Formula.hasBVar] at h
@@ -854,7 +854,7 @@ theorem Formula.hasBVar_substB (σ : BSubst) (b : Base) (φ : Formula) :
     ∀ k, Formula.hasBVar b k (φ.substB σ) → ∃ b₀, b = b₀.substB σ ∧ Formula.hasBVar b₀ k φ := by
   induction φ with
   | tt | ff => intro k h; simp [Formula.substB, Formula.hasBVar] at h
-  | eq _ t₁ t₂ | leqI t₁ t₂ =>
+  | eq _ t₁ t₂ | leq _ t₁ t₂ =>
     intro k h
     simp only [Formula.substB, Formula.hasBVar] at h
     rcases h with h | h
@@ -1063,7 +1063,7 @@ def Term.ftv : {b : Base} → Term b → List TVar
 def Formula.ftv : Formula → List TVar
   | .tt | .ff     => []
   | .eq b t₁ t₂   => b.ftv ++ t₁.ftv ++ t₂.ftv
-  | .leqI t₁ t₂   => t₁.ftv ++ t₂.ftv
+  | .leq b t₁ t₂   => b.ftv ++ t₁.ftv ++ t₂.ftv
   | .and φ₁ φ₂ | .or φ₁ φ₂ | .imp φ₁ φ₂ => φ₁.ftv ++ φ₂.ftv
   | .not φ        => φ.ftv
   | .ex b φ | .all b φ => b.ftv ++ φ.ftv
@@ -1248,7 +1248,6 @@ def Exp.substEnv (γ : REnv) : Exp → Exp
   | .tapp e _     => .tapp (Exp.substEnv γ e) (.refine .int (.fmla .tt))
   | .pair e₁ e₂   => .pair (Exp.substEnv γ e₁) (Exp.substEnv γ e₂)
   | .split e₁ e₂  => .split (Exp.substEnv γ e₁) (Exp.substEnv γ e₂)
-  -- types are erased before running, so the closing substitution drops instances
   | .ctor C j _ e  => .ctor C j [] (Exp.substEnv γ e)
   | .case e n alts => .case (Exp.substEnv γ e) n (fun j => Exp.substEnv γ (alts j))
 
@@ -1996,7 +1995,7 @@ theorem Formula.interp_write_fresh (φ : Formula)
   induction φ generalizing γ with
   | tt => simp [Formula.interp]
   | ff => simp [Formula.interp]
-  | eq _ t₁ t₂ | leqI t₁ t₂ =>
+  | eq _ t₁ t₂ | leq _ t₁ t₂ =>
     simp only [Formula.fv] at hfv
     simp only [Formula.interp,
       Term.interp_write_fresh t₁ x v γ (not_mem_l _ _ _ hfv),
@@ -2089,7 +2088,7 @@ theorem Formula.interp_openBVar (x : EVar) (w : Val) :
       simp only [Formula.openBVar, Formula.interp,
         Term.interp_openBVar x w t₁ γ k hk hx.1,
         Term.interp_openBVar x w t₂ γ k hk hx.2]
-  | leqI t₁ t₂ =>
+  | leq _ t₁ t₂ =>
       intro γ k hk hx
       simp only [Formula.fv, List.mem_append, not_or] at hx
       simp only [Formula.openBVar, Formula.interp,

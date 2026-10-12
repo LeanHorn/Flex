@@ -63,6 +63,61 @@ def Base.interp : Base → Type
   | .tbvar _ => BVal
   | .tfvar _ => BVal
 
+/-! ## Ordered sorts
+
+  Every base sort is ordered, and comparison is polymorphic, like equality. The
+  order on the type-variable domain `BVal` is one fixed total order that
+  restricts to `≤` on integers and to `false < true` on booleans (the cross-tag
+  cases only make it total; a `B`-kinded variable holds values of one base sort,
+  so they are never observed). Because the per-sort orders are restrictions of
+  this one order, instantiating a type variable never changes the meaning of a
+  comparison — and since base values carry their tag at runtime, the operational
+  comparison needs no type information (`Val.leb?`). -/
+
+def BVal.le : BVal → BVal → Prop
+  | .int a,  .int b  => a ≤ b
+  | .bool a, .bool b => a ≤ b
+  | .int _,  _       => True
+  | .bool _, .int _  => False
+  | .bool _, .other  => True
+  | .other,  .other  => True
+  | .other,  _       => False
+
+instance : DecidableRel BVal.le := fun a b => by
+  cases a <;> cases b <;> simp only [BVal.le] <;> infer_instance
+
+/-! `BVal.le` is a total order — the laws the solver uses for comparisons at a
+    type-variable sort. -/
+
+@[simp] theorem BVal.le_refl (a : BVal) : a.le a := by
+  cases a <;> simp [BVal.le]
+
+theorem BVal.le_trans {a b c : BVal} (h₁ : a.le b) (h₂ : b.le c) : a.le c := by
+  cases a <;> cases b <;> cases c <;> simp_all [BVal.le]
+  · omega
+  · rename_i x y z; cases x <;> cases y <;> cases z <;> simp_all
+
+theorem BVal.le_total (a b : BVal) : a.le b ∨ b.le a := by
+  cases a <;> cases b <;> simp [BVal.le]
+  · omega
+  · rename_i x y; cases x <;> cases y <;> simp
+
+theorem BVal.le_antisymm {a b : BVal} (h₁ : a.le b) (h₂ : b.le a) : a = b := by
+  cases a <;> cases b <;> simp_all [BVal.le]
+  · omega
+  · rename_i x y; cases x <;> cases y <;> simp_all <;> contradiction
+
+theorem BVal.le_of_not_le {a b : BVal} (h : ¬ a.le b) : b.le a :=
+  (BVal.le_total a b).resolve_left h
+
+/-- The order at each sort. -/
+@[simp, reducible]
+def Base.le : (b : Base) → b.interp → b.interp → Prop
+  | .int,     x, y => x ≤ y
+  | .bool,    x, y => x ≤ y
+  | .tbvar _, x, y => BVal.le x y
+  | .tfvar _, x, y => BVal.le x y
+
 -- `REnv` (the runtime environment) is a single `EVar → Val` map; it is defined
 -- *after* `Val` below, since its operations mention `Val`.
 
@@ -95,7 +150,7 @@ inductive Term : Base → Type where
 -- NOTE: no cross-base constructors (e.g. `leq : Term .int → Term .int → Term .bool`).
 -- Keeping each `Term` homogeneous in its base means an `REnv` update at one base
 -- can never affect a term of another base. Cross-base relations go in
--- `Formula` (e.g. `Formula.leqI`).
+-- `Formula` (e.g. `Formula.leq`).
 
 /-- First-order formulas over `Term`s.
 
@@ -108,13 +163,16 @@ inductive Formula where
   | tt   : Formula
   | ff   : Formula
   | eq   : (b: Base) -> Term b  → Term b → Formula
-  | leqI : Term .int  → Term .int  → Formula
+  | leq  : (b : Base) → Term b → Term b → Formula   -- polymorphic comparison
   | and  : Formula → Formula → Formula
   | or   : Formula → Formula → Formula
   | not  : Formula → Formula
   | imp  : Formula → Formula → Formula
   | ex   : Base -> Formula → Formula   -- ∃b. φ
   | all  : Base -> Formula → Formula   -- ∀b. φ
+
+/-- Integer comparison, the common case. -/
+@[match_pattern, reducible] def Formula.leqI (t₁ t₂ : Term .int) : Formula := .leq .int t₁ t₂
 
 /-- A refinement, one stratification level *above* `Formula`: either a
     kvar-FREE `Formula` (whose `BVar 0`, i.e. ν, denotes the refined value), or a
@@ -410,6 +468,14 @@ def Val.inj : (b : Base) → b.interp → Val
   | .fclos _  => none
   | .pair _ _ => none
   | .ctor _ _ _ => none
+
+/-- The runtime comparison: defined on two base values of the same sort (it
+    reads only their runtime tags, so it needs no type information), stuck on
+    anything else. -/
+def Val.leb? : Val → Val → Option Bool
+  | .iconst a, .iconst b => some (decide (a ≤ b))
+  | .bconst a, .bconst b => some (decide (a ≤ b))
+  | _, _ => none
 
 /-- Val-level (lossless) lookup. -/
 @[simp, reducible]

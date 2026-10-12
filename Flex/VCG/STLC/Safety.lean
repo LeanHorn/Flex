@@ -139,7 +139,7 @@ theorem Formula.interp_nofv (φ : Formula) : ∀ {γ γ' : REnv}, γ.bv = γ'.bv
     (Formula.interp γ φ ↔ Formula.interp γ' φ) := by
   induction φ with
   | tt | ff => intros; rfl
-  | eq _ t₁ t₂ | leqI t₁ t₂ =>
+  | eq _ t₁ t₂ | leq _ t₁ t₂ =>
     intro γ γ' hbv h
     simp only [Formula.fv, List.append_eq_nil_iff] at h
     simp only [Formula.interp, Term.interp_nofv hbv t₁ h.1, Term.interp_nofv hbv t₂ h.2]
@@ -971,6 +971,30 @@ private theorem TyDenote.self {κ : KEnv} {δ : TyEnvSem} {k : Nat} {γ : REnv} 
       simp only [TyDenote]; exact ⟨hv.1, hsing _⟩
   | arrow _ _ | «forall» _ _ | prod _ _ | data _ _ _ => simpa only [self] using hv
 
+/-- Two values of one comparable sort are compared by the runtime comparison,
+    which agrees with the logic's order at that sort. For a `B`-kinded type
+    variable this is where well-kindedness is used: its values all carry the same
+    runtime tag. -/
+theorem BaseDen.leb {δ : TyEnvSem} (hδ : δ.WK) {k : Nat} {b : Base} (hb : b.fvOK = true)
+    {v₁ v₂ : Val} (h₁ : BaseDen δ k b v₁) (h₂ : BaseDen δ k b v₂) :
+    ∃ c, Val.leb? v₁ v₂ = some c ∧ (c = true ↔ Base.le b (Val.proj b v₁) (Val.proj b v₂)) := by
+  cases b with
+  | int =>
+    obtain ⟨n₁, rfl⟩ := h₁; obtain ⟨n₂, rfl⟩ := h₂
+    exact ⟨_, rfl, by simp⟩
+  | bool =>
+    obtain ⟨c₁, rfl⟩ := h₁; obtain ⟨c₂, rfl⟩ := h₂
+    exact ⟨_, rfl, by simp⟩
+  | tbvar _ => simp [Base.fvOK] at hb
+  | tfvar a =>
+    obtain ⟨n, kd⟩ := a
+    simp only [Base.fvOK, beq_iff_eq] at hb; subst hb
+    obtain ⟨b₀, hb₀, hR⟩ := hδ (n, .B)
+    have o₁ := hR k v₁ h₁
+    have o₂ := hR k v₂ h₂
+    rcases hb₀ with rfl | rfl <;> cases v₁ <;> simp [Val.optBase] at o₁ <;>
+      cases v₂ <;> simp [Val.optBase] at o₂ <;> simp [Val.leb?, BVal.le]
+
 theorem hastype_fundamental {de κ Γ e t} (hde : de.wfB = true) (h : Hastype de κ Γ e t) :
     ∀ {δ}, δ.WK → δ.denv = de → ∀ {k γ}, EnvCloses κ δ k Γ γ →
       ExpDenote κ δ k t γ (Exp.substEnv γ e).erase := by
@@ -1023,26 +1047,30 @@ theorem hastype_fundamental {de κ Γ e t} (hde : de.wfB = true) (h : Hastype de
         refine ⟨⟨n₁ + n₂, rfl⟩, ?_⟩
         simp [Refinement.interp, Formula.interp, Term.interp,
               REnv.getBV, REnv.get, REnv.lookup, hγx, hγy]
-  | leq_var hlk₁ hlk₂ =>
-      rename_i x y r₁ r₂
+  | leq_var hlk₁ hlk₂ hb =>
+      rename_i x y b r₁ r₂
       intro δ hδ hD k γ hE
       have hv₁ := EnvCloses.lookup hE hlk₁
-      simp only [TyDenote, BaseDen] at hv₁; obtain ⟨⟨n₁, hγx⟩, _⟩ := hv₁
       have hv₂ := EnvCloses.lookup hE hlk₂
-      simp only [TyDenote, BaseDen] at hv₂; obtain ⟨⟨n₂, hγy⟩, _⟩ := hv₂
-      have hx : Exp.substEnv γ (.fvar x) = .iconst n₁ := by simp [Exp.substEnv_fvar, hγx]
-      have hy : Exp.substEnv γ (.fvar y) = .iconst n₂ := by simp [Exp.substEnv_fvar, hγy]
-      refine ⟨.val (.bconst (decide (n₁ ≤ n₂))) k, ?_, fun v m ho => ?_⟩
-      · rw [Exp.substEnv_leq, hx, hy]; simp only [Exp.erase]; exact Eval.leq Eval.iconst Eval.iconst
+      have hb₁ : BaseDen δ k b (γ.map x) := by simp only [TyDenote] at hv₁; exact hv₁.1
+      have hb₂ : BaseDen δ k b (γ.map y) := by simp only [TyDenote] at hv₂; exact hv₂.1
+      obtain ⟨c, hc, hcle⟩ := BaseDen.leb hδ hb hb₁ hb₂
+      have hx : Exp.substEnv γ (.fvar x) = (γ.map x).toExp := by simp [Exp.substEnv_fvar]
+      have hy : Exp.substEnv γ (.fvar y) = (γ.map y).toExp := by simp [Exp.substEnv_fvar]
+      refine ⟨.val (.bconst c) k, ?_, fun v m ho => ?_⟩
+      · rw [Exp.substEnv_leq, hx, hy]; simp only [Exp.erase]
+        rw [Exp.erase_of_typeFree _ (TyDenote.erased hv₁),
+            Exp.erase_of_typeFree _ (TyDenote.erased hv₂)]
+        exact Eval.leq (Eval.toExp _ _) (Eval.toExp _ _) hc
       · injection ho with h₁ h₂; subst h₁ h₂
         simp only [TyDenote, BaseDen]
         refine ⟨⟨_, rfl⟩, ?_⟩
         simp only [Refinement.interp, Formula.interp, Term.interp,
                    REnv.getBV, REnv.get, REnv.lookup, REnv.push, Val.proj,
-                   hγx, hγy, List.getElem?_cons_zero, Option.getD_some]
+                   List.getElem?_cons_zero, Option.getD_some]
         constructor
-        · intro h; exact decide_eq_true_iff.mp h
-        · intro h; exact decide_eq_true_iff.mpr h
+        · intro h; exact hcle.mp h
+        · intro h; exact hcle.mpr h
   | not_var hlk =>
       rename_i x r
       intro δ hδ hD k γ hE

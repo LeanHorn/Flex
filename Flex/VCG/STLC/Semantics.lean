@@ -73,9 +73,10 @@ inductive Eval : Nat → Exp → Outcome → Prop
       Eval n e₁ .timeout → Eval n (.add e₁ e₂) .timeout
   | add_to₂ {n e₁ e₂ v n₁} :
       Eval n e₁ (.val v n₁) → Eval n₁ e₂ .timeout → Eval n (.add e₁ e₂) .timeout
-  | leq {n e₁ e₂ a n₁ b n₂} :
-      Eval n e₁ (.val (.iconst a) n₁) → Eval n₁ e₂ (.val (.iconst b) n₂) →
-      Eval n (.leq e₁ e₂) (.val (.bconst (decide (a ≤ b))) n₂)
+  /-- Comparison is polymorphic: any two base values of the same sort. -/
+  | leq {n e₁ e₂ v₁ n₁ v₂ n₂ c} :
+      Eval n e₁ (.val v₁ n₁) → Eval n₁ e₂ (.val v₂ n₂) → Val.leb? v₁ v₂ = some c →
+      Eval n (.leq e₁ e₂) (.val (.bconst c) n₂)
   | leq_to₁ {n e₁ e₂} :
       Eval n e₁ .timeout → Eval n (.leq e₁ e₂) .timeout
   | leq_to₂ {n e₁ e₂ v n₁} :
@@ -189,7 +190,12 @@ theorem Eval.det {n : Nat} {e : Exp} {o₁ o₂ : Outcome}
     | app h₁' h₂' _ _ | app_tick h₁' h₂' _ => cases ih₁ h₁'; cases ih₂ h₂'
     | app_to₁ h => cases ih₁ h
     | app_to₂ => rfl
-  | add _ _ ih₁ ih₂ | leq _ _ ih₁ ih₂ | and_ _ _ ih₁ ih₂ =>
+  | leq _ _ hc ih₁ ih₂ =>
+    cases h₂ with
+    | leq h₁' h₂' hc' => cases ih₁ h₁'; cases ih₂ h₂'; rw [hc] at hc'; cases hc'; rfl
+    | leq_to₁ h => cases ih₁ h
+    | leq_to₂ h₁' h₂' => cases ih₁ h₁'; cases ih₂ h₂'
+  | add _ _ ih₁ ih₂ | and_ _ _ ih₁ ih₂ =>
     cases h₂ <;> rename_i h₁' h₂' <;> first
       | (cases ih₁ h₁'; cases ih₂ h₂'; rfl)
       | (cases ih₁ h₁'; cases ih₂ h₂')

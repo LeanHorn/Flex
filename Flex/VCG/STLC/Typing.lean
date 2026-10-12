@@ -57,6 +57,12 @@ inductive Subtyp : DEnv → KEnv → TEnv → Ty → Ty → Prop where
       (∀ i : Fin n, de.var C i.val ≠ .co → Subtyp de κ Γ (args₂ i) (args₁ i)) →
       Subtyp de κ Γ (.data C n args₁) (.data C n args₂)
 
+/-- The result type of a comparison at sort `b`: `Bool{ν ⇔ x ≤ y}`. -/
+abbrev leqTy (b : Base) (x y : EVar) : Ty :=
+  .refine .bool (.fmla (.and
+    (.imp (.eq .bool (.bvar .bool 0) (.const .bool true)) (.leq b (.fvar b x) (.fvar b y)))
+    (.imp (.leq b (.fvar b x) (.fvar b y)) (.eq .bool (.bvar .bool 0) (.const .bool true)))))
+
 /-! ## Bidirectional typing -/
 
 mutual
@@ -82,11 +88,13 @@ mutual
         y ∉ t.fv →
         Synth de κ Γ (.app e₁ (.fvar y)) (t.openVar 0 y)
 
-    | leq_var {de κ Γ x y r₁ r₂} :
-        Γ.lookup x = some (.refine .int r₁) →
-        Γ.lookup y = some (.refine .int r₂) →
-        Synth de κ Γ (.leq (.fvar x) (.fvar y))
-           <ty|Bool{ν : (ν = true → x ≤ y) ∧ (x ≤ y → ν = true)}|>
+    /-- Comparison is polymorphic over the comparable sorts: `Int`, `Bool`
+        and `B`-kinded type variables (`Base.fvOK`). -/
+    | leq_var {de κ Γ x y b r₁ r₂} :
+        Γ.lookup x = some (.refine b r₁) →
+        Γ.lookup y = some (.refine b r₂) →
+        b.fvOK = true →
+        Synth de κ Γ (.leq (.fvar x) (.fvar y)) (leqTy b x y)
 
     | add_var {de κ Γ x y r₁ r₂} :
         Γ.lookup x = some (.refine .int r₁) →

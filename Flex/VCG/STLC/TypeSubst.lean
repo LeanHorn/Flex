@@ -35,6 +35,15 @@ theorem Base.recast_inj {b b' : Base} (h : Base.Compat b b') {c₁ c₂ : b.inte
   · cases b <;> simp [Base.isTv] at h₁ <;> cases b' <;> simp [Base.isTv] at h₂ <;>
       simp [Base.recast, Val.proj, Val.inj]
 
+/-- Comparison commutes with lossless recasting. -/
+theorem Base.le_recast {b b' : Base} (h : Base.Compat b b') {c₁ c₂ : b.interp} :
+    Base.le b' (Base.recast b b' c₁) (Base.recast b b' c₂) ↔ Base.le b c₁ c₂ := by
+  rcases h with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨h₁, h₂⟩
+  · rfl
+  · rfl
+  · cases b <;> simp [Base.isTv] at h₁ <;> cases b' <;> simp [Base.isTv] at h₂ <;>
+      simp [Base.recast, Val.proj, Val.inj]
+
 theorem Base.canonArg_recast {b b' : Base} (h : Base.Compat b b') (c : b.interp) :
     Base.canonArg b' (Base.recast b b' c) = Base.canonArg b c := by
   rcases h with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨h₁, h₂⟩
@@ -75,13 +84,10 @@ theorem Formula.interp_substB_ren {σ : BSubst} (hσ : σ.IsRen) (φ : Formula) 
     intro γ
     simp only [Formula.substB, Formula.interp, Term.interp_substB]
     exact Base.recast_inj (BSubst.compat_of_ren hσ b)
-  | leqI t₁ t₂ =>
+  | leq b t₁ t₂ =>
     intro γ
-    simp only [Formula.substB, Formula.interp]
-    have h₁ := Term.interp_substB σ γ t₁
-    have h₂ := Term.interp_substB σ γ t₂
-    simp only [Base.substB] at h₁ h₂
-    rw [h₁, h₂]
+    simp only [Formula.substB, Formula.interp, Term.interp_substB]
+    exact Base.le_recast (BSubst.compat_of_ren hσ b)
   | and _ _ ih₁ ih₂ | or _ _ ih₁ ih₂ | imp _ _ ih₁ ih₂ =>
     intro γ; simp only [Formula.substB, Formula.interp, ih₁, ih₂]
   | not _ ih => intro γ; simp only [Formula.substB, Formula.interp, ih]
@@ -435,7 +441,7 @@ theorem Formula.interp_congr (φ : Formula) : ∀ {γ γ' : REnv}, γ.map = γ'.
     (Formula.interp γ φ ↔ Formula.interp γ' φ) := by
   induction φ with
   | tt | ff => intros; rfl
-  | eq _ t₁ t₂ | leqI t₁ t₂ =>
+  | eq _ t₁ t₂ | leq _ t₁ t₂ =>
     intro γ γ' hmap h
     simp only [Formula.interp,
       Term.interp_congr hmap t₁ (fun c k hk => h c k (Or.inl hk)),
@@ -576,6 +582,14 @@ theorem Base.proj_inj_of_optBase {b' : Base} (hb' : b' = .int ∨ b' = .bool) {w
   rcases hb' with rfl | rfl <;> cases w₁ <;> simp [Val.optBase] at h₁ <;>
     cases w₂ <;> simp [Val.optBase] at h₂ <;> simp
 
+/-- On values of one base sort, the order at that sort is the order on codes:
+    the per-sort orders are restrictions of `BVal.le`. -/
+theorem Base.le_proj_of_optBase {b' : Base} (hb' : b' = .int ∨ b' = .bool) {w₁ w₂ : Val}
+    (h₁ : w₁.optBase = some b') (h₂ : w₂.optBase = some b') :
+    Base.le b' (Val.proj b' w₁) (Val.proj b' w₂) ↔ BVal.le (Val.toBVal w₁) (Val.toBVal w₂) := by
+  rcases hb' with rfl | rfl <;> cases w₁ <;> simp [Val.optBase] at h₁ <;>
+    cases w₂ <;> simp [Val.optBase] at h₂ <;> simp [BVal.le]
+
 theorem Base.recast_tbvar_proj (j : Nat) (b' : Base) (w : Val) :
     Base.recast (.tbvar j) b' (Val.proj (.tbvar j) w) = Val.proj b' w :=
   Val.proj_toVal_toBVal b' w
@@ -624,13 +638,32 @@ theorem Formula.interp_substB_inst {n : Nat} {b' : Base} (hb' : b' = .int ∨ b'
       exact Base.proj_inj_of_optBase hb' ho₁ ho₂
     · simp only [Formula.substB, Formula.interp, Term.interp_substB]
       exact Base.recast_inj (BSubst.instAt_compat c hc)
-  | leqI t₁ t₂ =>
-    intro kctx ctx γ _ _
-    simp only [Formula.substB, Formula.interp]
-    have h₁ := Term.interp_substB (BSubst.instAt n b') γ t₁
-    have h₂ := Term.interp_substB (BSubst.instAt n b') γ t₂
-    simp only [Base.substB] at h₁ h₂
-    rw [h₁, h₂]
+  | leq c t₁ t₂ =>
+    intro kctx ctx γ hw hs
+    simp only [Formula.wfB, Bool.and_eq_true] at hw
+    by_cases hc : c = .tbvar n
+    · subst hc
+      cases t₁ with
+      | const _ _ => simp [Term.wfB, Base.isTv] at hw
+      | fvar _ _ => simp [Term.wfB, Base.fvOK] at hw
+      | bvar _ i₁ =>
+      cases t₂ with
+      | const _ _ => simp [Term.wfB, Base.isTv] at hw
+      | fvar _ _ => simp [Term.wfB, Base.fvOK] at hw
+      | bvar _ i₂ =>
+      simp only [Term.wfB, Bool.and_eq_true, beq_iff_eq, Base.sortOK] at hw
+      obtain ⟨⟨hi₁, hB⟩, hi₂, -⟩ := hw
+      unfold SlotsOK at hs
+      obtain ⟨w₁, hw₁, ho₁⟩ := hs i₁ hi₁ hB
+      obtain ⟨w₂, hw₂, ho₂⟩ := hs i₂ hi₂ hB
+      have hsub : (Base.tbvar n).substB (BSubst.instAt n b') = b' := by
+        simp [Base.substB, BSubst.instAt]
+      simp only [Formula.substB, Formula.interp, Term.interp_substB, Term.interp,
+        REnv.getBV, hw₁, hw₂, Option.getD_some]
+      rw [hsub, Base.recast_tbvar_proj, Base.recast_tbvar_proj]
+      exact Base.le_proj_of_optBase hb' ho₁ ho₂
+    · simp only [Formula.substB, Formula.interp, Term.interp_substB]
+      exact Base.le_recast (BSubst.instAt_compat c hc)
   | and _ _ ih₁ ih₂ | or _ _ ih₁ ih₂ | imp _ _ ih₁ ih₂ =>
     intro kctx ctx γ hw hs
     simp only [Formula.wfB, Bool.and_eq_true] at hw

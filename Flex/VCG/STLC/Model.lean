@@ -22,7 +22,7 @@ def Formula.interp (γ : REnv) : Formula → Prop
   | .tt           => True
   | .ff           => False
   | .eq _ t₁ t₂   => Term.interp γ t₁ = Term.interp γ t₂
-  | .leqI t₁ t₂   => Term.interp γ t₁ ≤ Term.interp γ t₂
+  | .leq b t₁ t₂   => Base.le b (Term.interp γ t₁) (Term.interp γ t₂)
   | .and φ₁ φ₂    => Formula.interp γ φ₁ ∧ Formula.interp γ φ₂
   | .or φ₁ φ₂     => Formula.interp γ φ₁ ∨ Formula.interp γ φ₂
   | .not φ        => ¬ Formula.interp γ φ

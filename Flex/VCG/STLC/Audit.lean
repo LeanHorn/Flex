@@ -1,6 +1,7 @@
 import Flex.VCG.STLC.Safety
 import Flex.VCG.STLC.Examples
 import Flex.VCG.STLC.DataExamples
+import Flex.VCG.STLC.OrdExamples
 
 open STLC
 
@@ -82,3 +83,27 @@ open STLC
 
 /-- info: 'data_pred_contra_bad' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms data_pred_contra_bad
+
+/-- info: 'ord_max' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms ord_max
+
+/-- info: 'ord_okList' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms ord_okList
+
+/-- info: 'ord_badList' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms ord_badList
+
+/-- info: 'ord_insert' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms ord_insert
+
+/-- info: 'ord_insert_mono_bad' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms ord_insert_mono_bad
+
+/-- info: 'ord_isort' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms ord_isort
+
+/-- info: 'ord_headsOrdered' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms ord_headsOrdered
+
+/-- info: 'ord_sortClient_safe' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms ord_sortClient_safe

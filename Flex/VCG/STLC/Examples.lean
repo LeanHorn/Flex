@@ -95,6 +95,9 @@ example (κ : KEnv) : topVC κ [] ex3Exp ex3Ty := by
   Here the κ surfaces from `Refinement.interp`'s `.kapp` case (post-stratification)
   and is discharged via the now fully-proven `check_sound` + `solve_fixpoint`. -/
 
+-- Lean 4.33 leaves the antiquotation conversion opaque to these simp proofs.
+attribute [local simp] ToTerm.toTerm
+
 attribute [simp] check synth sub EVar.fresh implyBindCstr prim self Refinement.interp Formula.interp TEnv.dom
 attribute [simp] Cstr.interp Cstr.triv Refinement.openBVar Formula.openBVar Term.openBVar REnv.update REnv.write
 attribute [simp] Term.interp REnv.get Exp.openVar Ty.openVar Exp.fv Refinement.fv Formula.fv Term.fv Ty.fv

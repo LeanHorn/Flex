@@ -14,7 +14,7 @@ theorem HasType.observation_scoped
   induction typed using HasType.rec
     (motive_2 := fun _ _ _ _ _ => True)
     (motive_3 := fun _ _ _ _ _ _ _ _ => True) with
-  | var lookup =>
+  | var _ lookup =>
     intro observed observation name member
     simp only [observe, Except.ok.injEq] at observation
     subst observed
@@ -27,8 +27,8 @@ theorem HasType.observation_scoped
     simp only [observe, Except.ok.injEq] at observation
     subst observed
     simp [LTerm.freeVars] at member
-  | subsumption _ _ ih => exact ih
-  | ctor | matchE | structRec | recur | measure | lam | app | tyLam | tyApp | letE | ann =>
+  | subsumption _ _ _ ih => exact ih
+  | ctor | matchE | structRec | recur | measure | lam | lamCheck | app | tyLam | tyApp | letE | ann =>
     intro observed observation
     simp [observe] at observation
   | _ => intros; trivial

@@ -83,6 +83,11 @@ def Cstr.Valid (signature : Signature) (assignment : KAssignment) (constraint : 
 structure DataModel where
   datatype : String → List Candidate → Candidate
 
+/-- Function shape is required even when the argument type is empty. -/
+def Value.IsFunction : Value → Prop
+  | .closure .. | .recursiveClosure .. => True
+  | _ => False
+
 /-- Total correctness: function and polymorphic values must evaluate when eliminated. -/
 def Ty.denote (signature : Signature) (model : DataModel) (assignment : KAssignment)
     (types : TypeEnvironment) (environment : Environment) : Ty → Candidate
@@ -91,7 +96,7 @@ def Ty.denote (signature : Signature) (model : DataModel) (assignment : KAssignm
   | .bool => LSort.bool.contains
   | .data name arguments => model.datatype name
       (arguments.map (fun argument => argument.denote signature model assignment types environment))
-  | .arrow binder domain codomain => fun function => ∀ argument,
+  | .arrow binder domain codomain => fun function => function.IsFunction ∧ ∀ argument,
       domain.denote signature model assignment types environment argument →
       ∃ result, Apply signature function argument result ∧
         codomain.denote signature model assignment types (environment.bind binder argument) result

@@ -7,23 +7,28 @@ namespace SystemFRK
 theorem HasType.outerBase
     (typed : HasType signature model assignment context assumptions expression type) :
     HasType signature model assignment context assumptions expression type.outerBase := by
-  apply typed.subsumption
+  apply typed.subsumption (wfTy_outerBase _ _ _ _ typed.wellFormed)
   intro types environment depth variables facts value valueTyped
   exact type.denote_outer.mp valueTyped |>.1
 
 theorem HasType.of_outerBase
+    (formed : wfTy signature context 512 type = .ok ())
     (typed : HasType signature model assignment context assumptions expression type.outerBase)
     (unrefined : type.outerPredicates.isEmpty = true) :
     HasType signature model assignment context assumptions expression type := by
-  apply typed.subsumption
+  apply typed.subsumption formed
   intro types environment depth variables facts value valueTyped
   apply type.denote_outer.mpr
   exact ⟨valueTyped, by simp [List.isEmpty_iff.mp unrefined]⟩
 
 /-- Function checking combines domain contravariance with capture-avoiding binder renaming. -/
 theorem HasType.checked_lam
+    (expectedFormed : wfTy signature context 512 expected = .ok ())
+    (sourceFormed : wfTy signature context 512
+      (.arrow name targetDomain (Ty.substTerm binder (.var name) result)) = .ok ())
     (domainFormed : wfTy signature context 512 domain = .ok ())
-    (added : context.add name domain = .ok next)
+    (targetFormed : wfTy signature context 512 targetDomain = .ok ())
+    (added : context.add name targetDomain = .ok next)
     (expectedScope : expected.InScope context)
     (expectedArrow : expected.outerBase = .arrow binder targetDomain result)
     (unrefined : expected.outerPredicates.isEmpty = true)
@@ -31,10 +36,11 @@ theorem HasType.checked_lam
     (bodyTyped : HasType signature model assignment next assumptions body
       (Ty.substTerm binder (.var name) result)) :
     HasType signature model assignment context assumptions (.lam name domain body) expected := by
-  apply HasType.of_outerBase (type := expected) _ unrefined
+  apply HasType.of_outerBase expectedFormed (type := expected) _ unrefined
   rw [expectedArrow]
-  apply (HasType.lam domainFormed added bodyTyped).subsumption
-  obtain ⟨_, reserved, fresh, _⟩ := (context.add_eq_ok next name domain).mp added
+  apply (HasType.lamCheck sourceFormed domainFormed targetFormed domainSubtype added bodyTyped).subsumption
+    (by simpa only [expectedArrow] using wfTy_outerBase _ _ _ _ expectedFormed)
+  obtain ⟨_, reserved, fresh, _⟩ := (context.add_eq_ok next name targetDomain).mp added
   have nameFresh : valueName ∉ (LTerm.var name).freeVars := by
     simp only [LTerm.freeVars, List.mem_singleton]
     intro equal
@@ -45,9 +51,9 @@ theorem HasType.checked_lam
   rw [expectedArrow] at arrowScope
   intro types environment depth variables facts function functionTyped
   simp only [Ty.denote] at functionTyped ⊢
+  refine ⟨functionTyped.1, ?_⟩
   intro argument argumentTyped
-  obtain ⟨value, application, valueTyped⟩ := functionTyped argument
-    (domainSubtype types environment depth variables facts argument argumentTyped)
+  obtain ⟨value, application, valueTyped⟩ := functionTyped.2 argument argumentTyped
   refine ⟨value, application, ?_⟩
   rw [result.substTerm_denote signature model assignment types (environment.bind name argument)
     binder (.var name) argument nameFresh (.var (by simp [Environment.bind]))] at valueTyped
@@ -67,12 +73,13 @@ theorem HasType.checked_lam
 
 /-- A checked polymorphic introduction has no outer refinement to establish. -/
 theorem HasType.checked_tyLam
+    (expectedFormed : wfTy signature context 512 expected = .ok ())
     (expectedAll : expected.outerBase = .all result)
     (unrefined : expected.outerPredicates.isEmpty = true)
     (bodyTyped : HasType signature model assignment context.underType assumptions body result) :
     HasType signature model assignment context assumptions (.tyLam body) expected := by
-  apply HasType.of_outerBase (type := expected) _ unrefined
+  apply HasType.of_outerBase expectedFormed (type := expected) _ unrefined
   rw [expectedAll]
-  exact .tyLam bodyTyped
+  exact .tyLam (by simpa only [expectedAll] using wfTy_outerBase _ _ _ _ expectedFormed) bodyTyped
 
 end SystemFRK

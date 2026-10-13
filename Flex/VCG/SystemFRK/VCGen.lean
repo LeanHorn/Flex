@@ -1,4 +1,5 @@
 import Flex.VCG.SystemFRK.Judgments
+import Flex.VCG.SystemFRK.Binding.AlphaEquivalence
 
 /-! Bidirectional checking and Horn constraint generation. Dependent arguments
 are ANF observations; datatype parameters are invariant. Predicate signatures are explicit. -/
@@ -12,12 +13,25 @@ def Cstr.andThen (left right : Cstr) : Cstr :=
 def guardPredicates (predicates : List Atom) (body : Cstr) : Cstr :=
   predicates.foldr Cstr.guard body
 
-def bindConstraint (name : String) (ty : Ty) (body : Cstr) : Cstr :=
-  .all name ty.sort (guardPredicates
-    (ty.outerPredicates.map (Atom.substTerm valueName (.var name))) body)
+/-- A declared measure is defined on values of its datatype. These positive
+self-equalities carry evaluation witnesses through the first-order VC. -/
+def typeFacts (signature : Signature) (ty : Ty) (term : LTerm) : List Atom :=
+  match ty.outerBase with
+  | .data family _ => signature.measures.flatMap fun measure =>
+      match signature.findMeasure measure.name with
+      | some declaration =>
+        if declaration.datatype == family then
+          [.theory (.eq (.measure measure.name term) (.measure measure.name term))]
+        else []
+      | none => []
+  | _ => []
 
-def bindFields (fields : List (String × Ty)) (body : Cstr) : Cstr :=
-  fields.foldr (fun (name, ty) c => bindConstraint name ty c) body
+def bindConstraint (signature : Signature) (name : String) (ty : Ty) (body : Cstr) : Cstr :=
+  .all name ty.sort (guardPredicates (typeFacts signature ty (.var name))
+    (guardPredicates (ty.outerPredicates.map (Atom.substTerm valueName (.var name))) body))
+
+def bindFields (signature : Signature) (fields : List (String × Ty)) (body : Cstr) : Cstr :=
+  fields.foldr (fun (name, ty) c => bindConstraint signature name ty c) body
 
 def failUnless (condition : Bool) (message : String) : Except String Unit :=
   if condition then .ok () else .error message
@@ -69,14 +83,14 @@ def finishSubtype (source target : Ty) (structural : Cstr) : GenM Cstr := do
   return structural.andThen (.all witness source.sort
     (guardPredicates assumptions (goals.foldr Cstr.andThen .truth)))
 
-/-- Finish a synthesis branch with checked structural scope. Kept as a
+/-- Finish a synthesis branch with complete result formation. Kept as a
 separate computation so an early `return` cannot bypass the certificate. -/
-def finishSynth (context : Context) (output : Cstr × Ty) : GenM (Cstr × Ty) := do
-  checkScope context output.2
+def finishSynth (signature : Signature) (context : Context) (output : Cstr × Ty) : GenM (Cstr × Ty) := do
+  wfTy signature context 512 output.2
   return output
 
 /-- Structural subtyping plus Horn obligations for the outer refinements.
-Datatype parameters are invariant: their argument syntax must match exactly. -/
+Datatype parameters are invariant modulo alpha-equivalence. -/
 def subtype (sig : Signature) (ctx : Context) : Nat → Ty → Ty → GenM Cstr
   | 0, _, _ => throw "subtyping exceeds the checker depth limit"
   | fuel + 1, source, target => do
@@ -88,7 +102,7 @@ def subtype (sig : Signature) (ctx : Context) : Nat → Ty → Ty → GenM Cstr
         failUnless (i == j) "different type variables"
         pure Cstr.truth
       | .data a args, .data b args' =>
-        failUnless (a == b && args == args') "datatype type arguments do not match"
+        failUnless ((Ty.data a args).alphaEq 512 (.data b args')) "datatype type arguments do not match"
         pure Cstr.truth
       | .arrow x a b, .arrow y a' b' =>
         let pre ← subtype sig ctx fuel a' a
@@ -96,14 +110,14 @@ def subtype (sig : Signature) (ctx : Context) : Nat → Ty → Ty → GenM Cstr
         let next := { ctx with vars := (name, a') :: ctx.vars }
         let post ← subtype sig next fuel
           (Ty.substTerm x (.var name) b) (Ty.substTerm y (.var name) b')
-        pure (pre.andThen (bindConstraint name a' post))
+        pure (pre.andThen (bindConstraint sig name a' post))
       | .all body, .all body' => subtype sig ctx.underType fuel body body'
       | _, _ => throw "source and expected type have different shapes"
     finishSubtype source target structural
 
 /-- Check each pattern branch with a supplied recursive body checker. The
 shared context operations are also used by the independent typing rules. -/
-def checkBranchesWith (checkBody : Context → Expr → Ty → GenM Cstr)
+def checkBranchesWith (signature : Signature) (checkBody : Context → Expr → Ty → GenM Cstr)
     (context : Context) (scrutinee : String) (data : DataDecl) (arguments : List Ty)
     (expected : Ty) : List (String × List String × Expr) → GenM Cstr
   | [] => pure .truth
@@ -114,9 +128,9 @@ def checkBranchesWith (checkBody : Context → Expr → Ty → GenM Cstr)
     let fields := names.zip (ctor.fields.map (Ty.instantiateParams arguments))
     let next ← extendFields context fields
     let bodyC ← checkBody (markSmaller next scrutinee fields) body expected
-    let restC ← checkBranchesWith checkBody context scrutinee data arguments expected rest
+    let restC ← checkBranchesWith signature checkBody context scrutinee data arguments expected rest
     let equation := Atom.theory (.eq (.var scrutinee) (.ctor name (names.map LTerm.var)))
-    return (bindFields fields (.guard equation bodyC)).andThen restC
+    return (bindFields signature fields (.guard equation bodyC)).andThen restC
 
 mutual
   /-- Fuel-indexed synthesis. The public equations support executable-generator
@@ -127,32 +141,32 @@ mutual
       match expression with
       | .var name =>
         let some ty := ctx.vars.lookup name | throw s!"unbound term variable '{name}'"
-        finishSynth ctx (.truth, selfType name ty)
-      | .int n => finishSynth ctx (.truth, .refine .int (.theory (.eq (.var valueName) (.int n))))
-      | .bool b => finishSynth ctx (.truth, .refine .bool (.theory (.eq (.var valueName) (.bool b))))
+        finishSynth sig ctx (.truth, selfType name ty)
+      | .int n => finishSynth sig ctx (.truth, .refine .int (.theory (.eq (.var valueName) (.int n))))
+      | .bool b => finishSynth sig ctx (.truth, .refine .bool (.theory (.eq (.var valueName) (.bool b))))
       | .ann e ty =>
         wfTy sig ctx 512 ty
         let c ← checkFuel sig ctx fuel e ty
-        finishSynth ctx (c, ty)
+        finishSynth sig ctx (c, ty)
       | .lam name domain body =>
         wfTy sig ctx 512 domain
         let next ← ctx.add name domain
         let (c, result) ← synthFuel sig next fuel body
-        finishSynth ctx (bindConstraint name domain c, .arrow name domain result)
+        finishSynth sig ctx (bindConstraint sig name domain c, .arrow name domain result)
       | .tyLam body =>
         let (c, ty) ← synthFuel sig ctx.underType fuel body
-        finishSynth ctx (c, .all ty)
+        finishSynth sig ctx (c, .all ty)
       | .tyApp function argument =>
         wfTy sig ctx 512 argument
         let (c, ty) ← synthFuel sig ctx fuel function
         let .all body := ty.outerBase | throw "type application expects a polymorphic function"
-        finishSynth ctx (c, Ty.substType argument 0 body)
+        finishSynth sig ctx (c, Ty.substType argument 0 body)
       | .app function argument =>
         let observation ← observeFresh argument
         let (c, ty) ← synthFuel sig ctx fuel function
         let .arrow name domain result := ty.outerBase | throw "application expects a function"
         let pre ← checkFuel sig ctx fuel argument domain
-        finishSynth ctx (c.andThen pre, Ty.substTerm name observation result)
+        finishSynth sig ctx (c.andThen pre, Ty.substTerm name observation result)
       | .letE name value body =>
         let (c, ty) ← synthFuel sig ctx fuel value
         let next ← ctx.add name ty
@@ -161,7 +175,7 @@ mutual
         -- of scope. Annotate the let expression when it needs such elimination.
         failUnless (!(result.freeVars.contains name))
           "inferred let result escapes its local binder; add an outer type annotation"
-        finishSynth ctx (c.andThen (bindConstraint name ty d), result)
+        finishSynth sig ctx (c.andThen (bindConstraint sig name ty d), result)
       | .ctor name arguments fields =>
         let some (data, ctor) := sig.findCtor name | throw s!"unknown constructor '{name}'"
         failUnless (arguments.length == data.params) s!"constructor '{name}' has wrong type arity"
@@ -172,7 +186,7 @@ mutual
         let c ← checkFieldsWith (checkFuel sig ctx fuel) fields
           (ctor.fields.map (Ty.instantiateParams arguments))
         let observed ← (fields.mapM observe : Except String (List LTerm))
-        finishSynth ctx (c, .refine (.data data.name arguments)
+        finishSynth sig ctx (c, .refine (.data data.name arguments)
           (.theory (.eq (.var valueName) (.ctor name observed))))
       | .structRec name domain result body =>
         wfTy sig ctx 512 domain
@@ -182,37 +196,38 @@ mutual
         let next := { next with recursion := some { binder := name, domain, codomain := result }
                                 smaller := [] }
         let c ← checkFuel sig next fuel body result
-        finishSynth ctx (bindConstraint name domain c, .arrow name domain result)
+        finishSynth sig ctx (bindConstraint sig name domain c, .arrow name domain result)
       | .recur argument =>
         let some recursion := ctx.recursion | throw "recursive call outside structural recursion"
         let .var name := argument | throw "recursive argument must be a smaller pattern variable"
         failUnless (ctx.smaller.contains name) "recursive call is not on a structurally smaller field"
         let c ← checkFuel sig ctx fuel argument recursion.domain
-        finishSynth ctx (c, Ty.substTerm recursion.binder (.var name) recursion.codomain)
+        finishSynth sig ctx (c, Ty.substTerm recursion.binder (.var name) recursion.codomain)
       | .measure name argument =>
         let observed ← observe argument
         let (c, ty) ← synthFuel sig ctx fuel argument
         let some measure := sig.findMeasure name | throw s!"unknown measure '{name}'"
         let .data data _ := ty.outerBase | throw "measure argument must have a datatype type"
         failUnless (data == measure.datatype) s!"measure '{name}' has the wrong argument datatype"
-        finishSynth ctx (c, .refine .int (.theory (.eq (.var valueName) (.measure name observed))))
+        finishSynth sig ctx (c, .refine .int (.theory (.eq (.var valueName) (.measure name observed))))
       | .matchE _ _ => throw "pattern matching needs an expected result type or annotation"
 
   /-- Fuel-indexed checking, exposed alongside `synthFuel` for equation proofs. -/
   def checkFuel (sig : Signature) (ctx : Context) : Nat → Expr → Ty → GenM Cstr
     | 0, _, _ => throw "expression exceeds the checker depth limit"
     | fuel + 1, expression, expected => do
-      checkScope ctx expected
+      wfTy sig ctx 512 expected
       match expression, expected.outerBase with
       | .lam name domain body, .arrow binder targetDomain result =>
         wfTy sig ctx 512 domain
-        -- The explicit parameter annotation must agree with the expected one;
-        -- refinement implication remains a generated verification condition.
+        -- Check annotation compatibility while retaining the expected refinement.
         let pre ← subtype sig ctx fuel targetDomain domain
-        let next ← ctx.add name domain
+        wfTy sig ctx 512 targetDomain
+        let next ← ctx.add name targetDomain
         let c ← checkFuel sig next fuel body (Ty.substTerm binder (.var name) result)
+        wfTy sig ctx 512 (.arrow name targetDomain (Ty.substTerm binder (.var name) result))
         failUnless expected.outerPredicates.isEmpty "annotate a function value before refining it"
-        return pre.andThen (bindConstraint name domain c)
+        return pre.andThen (bindConstraint sig name targetDomain c)
       | .tyLam body, .all result =>
         failUnless expected.outerPredicates.isEmpty "refined polymorphic introductions need an annotation"
         checkFuel sig ctx.underType fuel body result
@@ -220,7 +235,7 @@ mutual
         let (c, ty) ← synthFuel sig ctx fuel value
         let next ← ctx.add name ty
         let d ← checkFuel sig next fuel body expected
-        return c.andThen (bindConstraint name ty d)
+        return c.andThen (bindConstraint sig name ty d)
       | .matchE scrutinee branches, _ =>
         let .var scrutineeName := scrutinee | throw "match scrutinee must be a let-bound variable"
         let (scrutineeC, scrutineeTy) ← synthFuel sig ctx fuel scrutinee
@@ -230,7 +245,7 @@ mutual
         failUnless (names.length == data.ctors.length && names.eraseDups.length == names.length &&
           data.ctors.all (fun ctor => names.contains ctor.name))
           "match must cover every constructor exactly once"
-        let branchesC ← checkBranchesWith (checkFuel sig · fuel) ctx scrutineeName
+        let branchesC ← checkBranchesWith sig (checkFuel sig · fuel) ctx scrutineeName
           data arguments expected branches
         return scrutineeC.andThen branchesC
       | _, _ =>

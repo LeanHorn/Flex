@@ -14,7 +14,7 @@ theorem vcgen_total_correctness
       type.denote signature model assignment [] [] value := by
   exact fundamental_closed signature model assignment (generate_checked generated).1 adequate
     expression type (checker_soundness signature model assignment expression type constraint
-      generated satisfied)
+      adequate generated satisfied)
 
 /-- The canonical datatype interpretation discharges the model premise, leaving
 only generator success and validity of its returned constraints. -/

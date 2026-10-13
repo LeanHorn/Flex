@@ -289,10 +289,11 @@ theorem Ty.freshenBindersAux_denote (type : Ty)
             show (n == x) = false from by simpa using h]
           exact agree n (by simp [Ty.freeVars, hn, h]))
     simp only [Ty.freshenBindersAux, Ty.denote]
-    change (fun fn => ∀ arg, _ → ∃ result, Apply signature fn arg result ∧ _) = _
+    change (fun fn => fn.IsFunction ∧ ∀ arg, _ → ∃ result, Apply signature fn arg result ∧ _) = _
     rw [dom]
     funext fn
     apply propext
+    apply and_congr Iff.rfl
     constructor
     · intro h arg ha
       obtain ⟨result, eval, ty⟩ := h arg ha

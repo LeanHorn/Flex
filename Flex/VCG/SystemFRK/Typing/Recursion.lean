@@ -81,6 +81,7 @@ theorem semTyped_structRec_of_scope
   intro hasScope facts types environment outerFrame realizes
   refine ⟨.recursiveClosure name body environment, .structRec, ?_⟩
   simp only [Ty.denote]
+  refine ⟨True.intro, ?_⟩
   apply Apply.recursiveClosure_total signature environment name body
     (domain.denote signature model assignment types environment)
     (fun argument result =>

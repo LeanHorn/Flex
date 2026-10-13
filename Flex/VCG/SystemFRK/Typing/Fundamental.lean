@@ -45,23 +45,24 @@ theorem fundamental_open
       SemTypes signature model assignment context assumptions expressions types)
     (motive_3 := fun context assumptions scrutinee data arguments branches result _ =>
       SemBranches signature model assignment context assumptions scrutinee data arguments branches result) with
-  | var lookup => exact semTyped_var lookup
+  | var _ lookup => exact semTyped_var lookup
   | int => exact semTyped_int _
   | bool => exact semTyped_bool _
-  | lam formed added _ ih => exact semTyped_lam formed added ih
-  | app _ _ observation fresh ihFn ihArg => exact semTyped_app ihFn ihArg observation fresh
-  | tyLam _ ih => exact semTyped_tyLam ih
-  | tyApp _ _ ih => exact semTyped_tyApp ih
-  | letE _ typeScope added fresh _ ihRhs ihBody => exact semTyped_let ihRhs typeScope added fresh ihBody
-  | ctor found arity _ typed observations ih => exact semTyped_ctor valid adequate found arity typed ih observations
-  | matchE resultScope argumentsScope typed declared _ _ coverage _ ihScrutinee ihBranches =>
+  | lam _ formed added _ ih => exact semTyped_lam formed added ih
+  | lamCheck _ _ formed _ added _ ih => exact semTyped_lam formed added ih
+  | app _ _ _ observation fresh ihFn ihArg => exact semTyped_app ihFn ihArg observation fresh
+  | tyLam _ _ ih => exact semTyped_tyLam ih
+  | tyApp _ _ _ ih => exact semTyped_tyApp ih
+  | letE _ _ typeScope added fresh _ ihRhs ihBody => exact semTyped_let ihRhs typeScope added fresh ihBody
+  | ctor _ found arity _ typed observations ih => exact semTyped_ctor valid adequate found arity typed ih observations
+  | matchE _ resultScope argumentsScope typed declared _ _ coverage _ ihScrutinee ihBranches =>
     exact semTyped_match valid adequate resultScope argumentsScope typed ihScrutinee declared coverage ihBranches
-  | structRec domainFormed _ added codomainFormed _ ih =>
+  | structRec _ domainFormed _ added codomainFormed _ ih =>
     exact semTyped_structRec domainFormed added codomainFormed ih
-  | recur recursion smaller _ ih => exact semTyped_recur recursion smaller ih
-  | measure declared family typed observation ih => exact semTyped_measure valid adequate declared family typed ih observation
+  | recur _ recursion smaller _ ih => exact semTyped_recur recursion smaller ih
+  | measure _ declared family typed observation ih => exact semTyped_measure valid adequate declared family typed ih observation
   | ann _ _ ih => exact semTyped_ann ih
-  | subsumption _ subtyping ih => exact semTyped_subsumption ih subtyping
+  | subsumption _ _ subtyping ih => exact semTyped_subsumption ih subtyping
   | nil => exact semTypes_nil
   | cons _ _ ihHead ihTail => exact semTypes_cons ihHead ihTail
   | _ =>

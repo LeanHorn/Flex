@@ -16,9 +16,11 @@ def checkedProof (oracle : Flex.CHC.ProofOracle) (target : Lean.Expr) :
 def proveBridge (target : Lean.Expr) : TermElabM (Option Lean.Expr) := do
   let tactic ← `(tactic| (
     intro scalarClause
+    -- Definedness guards can add scalar witnesses used only in reflexive
+    -- equalities. Remove those vacuous scalar binders before instantiation.
     simp (config := { contextual := true })
       [Cstr.Valid, system_frk_bridge, Environment.bind, List.lookup_cons,
-        measure_ctor, Signature.findMeasure]
+        measure_ctor, Signature.findMeasure] at scalarClause ⊢
       <;> grind [MeasureEval.deterministic]))
   checkedProof (proveLeafWith tactic) target
 

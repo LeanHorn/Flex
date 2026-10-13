@@ -5,6 +5,8 @@ import Flex.VCG.SystemFRK.Generator.Constraints
 namespace SystemFRK
 
 theorem checkBranchesWith_sound
+    (validSignature : signature.validate = .ok ())
+    (adequate : DatatypeAdequate signature model assignment)
     (checkBody : Context → Expr → Ty → GenM Cstr)
     (bodySound : ∀ context assumptions body type start finish constraint,
       checkBody context body type start = .ok (constraint, finish) →
@@ -14,7 +16,7 @@ theorem checkBranchesWith_sound
     (data : DataDecl) (arguments : List Ty) (expected : Ty)
     (branches : List (String × List String × Expr))
     (constraint : Cstr) (start finish : Nat)
-    (generated : checkBranchesWith checkBody context scrutinee data arguments expected branches start =
+    (generated : checkBranchesWith signature checkBody context scrutinee data arguments expected branches start =
       .ok (constraint, finish))
     (satisfied : Entails signature model assignment context assumptions constraint) :
     BranchesTyped signature model assignment context assumptions scrutinee data arguments branches expected := by
@@ -47,7 +49,7 @@ theorem checkBranchesWith_sound
         simpa using List.find?_some found
       exact .cons ctorMember ctorName length addedPure
         (bodySound _ _ body expected start middle bodyC bodyGenerated
-          (Entails.guard (Entails.markSmaller (Entails.bindFields addedPure branchValid))))
+          (Entails.guard (Entails.markSmaller (Entails.bindFields validSignature adequate addedPure branchValid))))
         (ih restC middle final restGenerated restValid)
 
 end SystemFRK

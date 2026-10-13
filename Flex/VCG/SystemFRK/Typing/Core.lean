@@ -78,7 +78,7 @@ theorem semTyped_app
   obtain ⟨argumentValue, argumentEval, argumentTyped⟩ :=
     argument hasScope facts types environment frame realizes
   simp only [Ty.denote] at functionTyped
-  obtain ⟨result, applies, resultTyped⟩ := functionTyped argumentValue argumentTyped
+  obtain ⟨result, applies, resultTyped⟩ := functionTyped.2 argumentValue argumentTyped
   refine ⟨result, .app functionEval argumentEval applies, ?_⟩
   rwa [codomain.substTerm_denote signature model assignment types environment name observed
     argumentValue witnessFresh (observed_evaluation observation argumentEval)]
@@ -121,16 +121,17 @@ theorem semTyped_subsumption
 theorem semTyped_lam
     {signature : Signature} {model : DataModel} {assignment : KAssignment}
     {context next : Context} {assumptions : List Atom}
-    {name : String} {domain codomain : Ty} {body : Expr}
+    {name : String} {domain codomain annotation : Ty} {body : Expr}
     (formed : wfTy signature context 512 domain = .ok ())
     (added : context.add name domain = .ok next)
     (bodyTyped : SemTyped signature model assignment next assumptions body codomain) :
-    SemTyped signature model assignment context assumptions (.lam name domain body)
+    SemTyped signature model assignment context assumptions (.lam name annotation body)
       (.arrow name domain codomain) := by
   intro hasScope facts types environment frame realizes
   have domainScope := wfTy_inScope signature context domain 512 formed
   refine ⟨.closure name body environment frame, .lam, ?_⟩
   simp only [Ty.denote]
+  refine ⟨True.intro, ?_⟩
   intro argument argumentTyped
   obtain ⟨result, evaluates, typed⟩ := bodyTyped (Context.scoped_add _ _ _ _ hasScope domainScope added)
     (assumptionsScoped_add _ _ _ _ _ facts added) types (environment.bind name argument) frame

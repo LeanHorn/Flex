@@ -48,18 +48,18 @@ theorem except_bind_ok {action : Except String α} {next : α → Except String 
     checkScope context type = .ok () ↔ type.InScope context := by
   simp [checkScope, failUnless, Ty.scopeCheck_eq_true]
 
-theorem finishSynth_ok {context : Context} {output result : Cstr × Ty} {state final : Nat} :
-    finishSynth context output state = .ok (result, final) ↔
-      output = result ∧ state = final ∧ output.2.InScope context := by
+theorem finishSynth_ok {signature : Signature} {context : Context} {output result : Cstr × Ty} {state final : Nat} :
+    finishSynth signature context output state = .ok (result, final) ↔
+      output = result ∧ state = final ∧ wfTy signature context 512 output.2 = .ok () := by
   unfold finishSynth
   rw [GenM.bind_ok]
   simp only [GenM.lift_ok, GenM.pure_ok]
   constructor
   · rintro ⟨u, middle, ⟨hasScope, rfl⟩, same, rfl⟩
     cases u
-    exact ⟨same, rfl, checkScope_ok.mp hasScope⟩
+    exact ⟨same, rfl, hasScope⟩
   · rintro ⟨rfl, rfl, hasScope⟩
-    exact ⟨(), state, ⟨checkScope_ok.mpr hasScope, rfl⟩, rfl, rfl⟩
+    exact ⟨(), state, ⟨hasScope, rfl⟩, rfl, rfl⟩
 
 theorem observeFresh_ok {expression : Expr} {observed : LTerm} :
     observeFresh expression = .ok observed ↔

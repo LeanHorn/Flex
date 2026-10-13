@@ -1,8 +1,9 @@
 import Flex.VCG.SystemFRK.Model
 import Flex.VCG.SystemFRK.Context
 
-/-! Declarative typing, independent of constraint generation. Let and match
-results require scope evidence; dependent observations exclude `$value`. -/
+/-! Declarative typing, independent of constraint generation. Every rule carries
+complete result formation; substitutions and semantic subsumption cannot bypass
+scope, declaration, or logical-sort checks. Dependent observations exclude `$value`. -/
 
 namespace SystemFRK
 
@@ -51,6 +52,7 @@ mutual
   inductive HasType (signature : Signature) (model : DataModel) (assignment : KAssignment) :
       Context → List Atom → Expr → Ty → Prop where
     | var {context assumptions name type} :
+        wfTy signature context 512 (selfType name type) = .ok () →
         context.vars.lookup name = some type →
         HasType signature model assignment context assumptions (.var name) (selfType name type)
     | int {context assumptions n} :
@@ -60,27 +62,42 @@ mutual
         HasType signature model assignment context assumptions (.bool b)
           (.refine .bool (.theory (.eq (.var valueName) (.bool b))))
     | lam {context assumptions name domain body codomain next} :
+        wfTy signature context 512 (.arrow name domain codomain) = .ok () →
         wfTy signature context 512 domain = .ok () →
         context.add name domain = .ok next →
         HasType signature model assignment next assumptions body codomain →
         HasType signature model assignment context assumptions (.lam name domain body)
           (.arrow name domain codomain)
     | app {context assumptions fn arg name domain codomain observed} :
+        wfTy signature context 512 (Ty.substTerm name observed codomain) = .ok () →
         HasType signature model assignment context assumptions fn (.arrow name domain codomain) →
         HasType signature model assignment context assumptions arg domain →
         observe arg = .ok observed →
         valueName ∉ observed.freeVars →
         HasType signature model assignment context assumptions (.app fn arg)
           (Ty.substTerm name observed codomain)
+    /-- Checking retains the expected domain; the annotation is an upper bound. -/
+    | lamCheck {context assumptions name annotation domain body codomain next} :
+        wfTy signature context 512 (.arrow name domain codomain) = .ok () →
+        wfTy signature context 512 annotation = .ok () →
+        wfTy signature context 512 domain = .ok () →
+        Subtype signature model assignment context assumptions domain annotation →
+        context.add name domain = .ok next →
+        HasType signature model assignment next assumptions body codomain →
+        HasType signature model assignment context assumptions (.lam name annotation body)
+          (.arrow name domain codomain)
     | tyLam {context assumptions body type} :
+        wfTy signature context 512 (.all type) = .ok () →
         HasType signature model assignment context.underType assumptions body type →
         HasType signature model assignment context assumptions (.tyLam body) (.all type)
     | tyApp {context assumptions fn argument body} :
+        wfTy signature context 512 (Ty.substType argument 0 body) = .ok () →
         HasType signature model assignment context assumptions fn (.all body) →
         wfTy signature context 512 argument = .ok () →
         HasType signature model assignment context assumptions (.tyApp fn argument)
           (Ty.substType argument 0 body)
     | letE {context assumptions name rhs body type result next} :
+        wfTy signature context 512 result = .ok () →
         HasType signature model assignment context assumptions rhs type →
         type.InScope context →
         context.add name type = .ok next →
@@ -88,6 +105,8 @@ mutual
         HasType signature model assignment next assumptions body result →
         HasType signature model assignment context assumptions (.letE name rhs body) result
     | ctor {context assumptions name arguments fields data constructor observed} :
+        wfTy signature context 512 (.refine (.data data.name arguments)
+          (.theory (.eq (.var valueName) (.ctor name observed)))) = .ok () →
         signature.findCtor name = some (data, constructor) →
         arguments.length = data.params →
         (∀ type, type ∈ arguments → wfTy signature context 512 type = .ok ()) →
@@ -98,6 +117,7 @@ mutual
           (.refine (.data data.name arguments)
             (.theory (.eq (.var valueName) (.ctor name observed))))
     | matchE {context assumptions scrutinee name arguments data branches result} :
+        wfTy signature context 512 result = .ok () →
         result.InScope context →
         (∀ argument ∈ arguments, argument.InScope context) →
         HasType signature model assignment context assumptions (.var scrutinee) (.data name arguments) →
@@ -109,6 +129,7 @@ mutual
           branches result →
         HasType signature model assignment context assumptions (.matchE (.var scrutinee) branches) result
     | structRec {context assumptions name domain codomain body next data arguments} :
+        wfTy signature context 512 (.arrow name domain codomain) = .ok () →
         wfTy signature context 512 domain = .ok () →
         domain.outerBase = .data data arguments →
         context.add name domain = .ok next →
@@ -119,11 +140,14 @@ mutual
         HasType signature model assignment context assumptions (.structRec name domain codomain body)
           (.arrow name domain codomain)
     | recur {context assumptions recursion name} :
+        wfTy signature context 512 (Ty.substTerm recursion.binder (.var name) recursion.codomain) = .ok () →
         context.recursion = some recursion → name ∈ context.smaller →
         HasType signature model assignment context assumptions (.var name) recursion.domain →
         HasType signature model assignment context assumptions (.recur (.var name))
           (Ty.substTerm recursion.binder (.var name) recursion.codomain)
     | measure {context assumptions name argument data arguments declaration observed} :
+        wfTy signature context 512
+          (.refine .int (.theory (.eq (.var valueName) (.measure name observed)))) = .ok () →
         signature.findMeasure name = some declaration → declaration.datatype = data →
         HasType signature model assignment context assumptions argument (.data data arguments) →
         observe argument = .ok observed →
@@ -135,6 +159,7 @@ mutual
         HasType signature model assignment context assumptions (.ann expression type) type
     | subsumption {context assumptions expression source target} :
         HasType signature model assignment context assumptions expression source →
+        wfTy signature context 512 target = .ok () →
         Subtype signature model assignment context assumptions source target →
         HasType signature model assignment context assumptions expression target
 
@@ -163,5 +188,16 @@ mutual
         BranchesTyped signature model assignment context assumptions scrutinee data arguments
           ((name, names, body) :: branches) result
 end
+
+/-- Every declarative derivation has a fully checked result type. -/
+theorem HasType.wellFormed
+    (typed : HasType signature model assignment context assumptions expression type) :
+    wfTy signature context 512 type = .ok () := by
+  cases typed <;> first | assumption | cbv
+
+theorem HasType.inScope
+    (typed : HasType signature model assignment context assumptions expression type) :
+    type.InScope context :=
+  wfTy_inScope signature context type 512 typed.wellFormed
 
 end SystemFRK

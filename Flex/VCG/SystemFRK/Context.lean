@@ -58,6 +58,13 @@ theorem Context.add_eq_ok (ctx next : Context) (name : String) (ty : Ty) :
   split <;> simp_all
   all_goals grind
 
+/-- Abstract type variables retain their identity in logical equality. Treating
+all of them as the same erased Value sort is not stable under instantiation. -/
+private def abstractKind (ty : Ty) : Option Nat :=
+  match ty.outerBase with
+  | .var index => some index
+  | _ => none
+
 private def logicKind (ty : Ty) : LSort × Option String :=
   match ty.outerBase with
   | .data name _ => (.value, some name)
@@ -95,6 +102,10 @@ private def inferLogic (sig : Signature) (ctx : Context) :
         s!"measure '{name}' expects '{measure.datatype}'"
       return (.int, none)
 
+private def abstractTermKind (ctx : Context) : LTerm → Option Nat
+  | .var name => (ctx.vars.lookup name).bind abstractKind
+  | _ => none
+
 private def wfFormula (sig : Signature) (ctx : Context) : Nat → Formula → Except String Unit
   | 0, _ => .error "formula exceeds the checker depth limit"
   | fuel + 1, formula => do
@@ -103,6 +114,8 @@ private def wfFormula (sig : Signature) (ctx : Context) : Nat → Formula → Ex
     | .eq a b =>
       let ka ← inferLogic sig ctx fuel a
       let kb ← inferLogic sig ctx fuel b
+      failUnless (abstractTermKind ctx a == abstractTermKind ctx b)
+        "equality compares incompatible abstract types"
       failUnless (ka.1 == kb.1) "equality compares different logical sorts"
       if let some da := ka.2 then
         if let some db := kb.2 then
@@ -124,6 +137,10 @@ def wfAtom (sig : Signature) (ctx : Context) (atom : Atom) : Except String Unit 
       failUnless (expected == .value || actual.1 == expected)
         s!"predicate '{name}' has an argument of the wrong sort"
 
+private def checkAllTypes (check : Ty → Except String Unit) : List Ty → Except String Unit
+  | [] => .ok ()
+  | type :: types => do check type; checkAllTypes check types
+
 /-- Fuel-bounded formation checker; the public entry point also certifies scope. -/
 private def wfTyCore (sig : Signature) (ctx : Context) : Nat → Ty → Except String Unit
   | 0, _ => .error "type exceeds the checker depth limit"
@@ -134,11 +151,14 @@ private def wfTyCore (sig : Signature) (ctx : Context) : Nat → Ty → Except S
     | .data name arguments =>
       let some decl := sig.findData name | throw s!"unknown datatype '{name}'"
       failUnless (arguments.length == decl.params) s!"datatype '{name}' has wrong arity"
-      for arg in arguments do wfTyCore sig ctx fuel arg
+      checkAllTypes (wfTyCore sig ctx fuel) arguments
     | .arrow name domain codomain =>
       wfTyCore sig ctx fuel domain
-      let extended ← ctx.add name domain
-      wfTyCore sig extended fuel codomain
+      -- Type binders have lexical scope. They may reuse an outer term name;
+      -- only expression binders use Context.add's no-shadowing restriction.
+      failUnless (!name.isEmpty && !name.startsWith "$")
+        s!"invalid or reserved type binder '{name}'"
+      wfTyCore sig { ctx with vars := (name, domain) :: ctx.vars } fuel codomain
     | .all body => wfTyCore sig ctx.underType fuel body
     | .refine base predicate =>
       wfTyCore sig ctx fuel base
@@ -168,6 +188,81 @@ theorem wfTy_inScope (signature : Signature) (context : Context) (type : Ty)
     split at formed
     · assumption
     · contradiction
+
+private theorem unit_bind_ok (action : Except String Unit)
+    (next : Unit → Except String Unit) :
+    action >>= next = .ok () ↔ action = .ok () ∧ next () = .ok () := by
+  cases action with
+  | error message => simp [bind, Except.bind]
+  | ok result => cases result; simp [bind, Except.bind]
+
+private theorem checkAllTypes_mono (left right : Ty → Except String Unit)
+    (includes : ∀ type, left type = .ok () → right type = .ok ())
+    (types : List Ty) (formed : checkAllTypes left types = .ok ()) :
+    checkAllTypes right types = .ok () := by
+  induction types with
+  | nil => rfl
+  | cons type types ih =>
+    simp only [checkAllTypes, unit_bind_ok] at formed ⊢
+    exact ⟨includes type formed.1, ih formed.2⟩
+
+private theorem wfTyCore_mono (sig : Signature) (ctx : Context) (type : Ty)
+    (fuel more : Nat) (bound : fuel ≤ more)
+    (formed : wfTyCore sig ctx fuel type = .ok ()) :
+    wfTyCore sig ctx more type = .ok () := by
+  induction fuel generalizing ctx type more with
+  | zero => simp [wfTyCore] at formed
+  | succ fuel ih =>
+    cases more with
+    | zero => omega
+    | succ more =>
+      have bound : fuel ≤ more := by omega
+      cases type with
+      | var | int | bool => exact formed
+      | all body => exact ih ctx.underType body more bound formed
+      | refine base predicate =>
+        simp only [wfTyCore, unit_bind_ok] at formed ⊢
+        exact ⟨ih ctx base more bound formed.1, formed.2⟩
+      | data name arguments =>
+        cases found : sig.findData name with
+        | none => simp [wfTyCore, found] at formed
+        | some decl =>
+          simp only [wfTyCore, found, unit_bind_ok] at formed ⊢
+          exact ⟨formed.1, checkAllTypes_mono _ _ (fun t => ih ctx t more bound) _ formed.2⟩
+      | arrow name domain codomain =>
+        simp only [wfTyCore, unit_bind_ok] at formed ⊢
+        exact ⟨ih ctx domain more bound formed.1, formed.2.1,
+          ih _ codomain more bound formed.2.2⟩
+
+private theorem wfTyCore_outerBase (sig : Signature) (ctx : Context) (type : Ty)
+    (fuel : Nat) (formed : wfTyCore sig ctx fuel type = .ok ()) :
+    wfTyCore sig ctx fuel type.outerBase = .ok () := by
+  induction fuel generalizing type with
+  | zero => simp [wfTyCore] at formed
+  | succ fuel ih =>
+    cases type with
+    | refine base predicate =>
+      simp only [wfTyCore, unit_bind_ok] at formed
+      exact wfTyCore_mono sig ctx base.outerBase fuel (fuel + 1) (by omega) (ih base formed.1)
+    | _ => exact formed
+
+/-- Removing outer refinements preserves the complete formation check. -/
+theorem wfTy_outerBase (sig : Signature) (ctx : Context) (type : Ty) (fuel : Nat)
+    (formed : wfTy sig ctx fuel type = .ok ()) :
+    wfTy sig ctx fuel type.outerBase = .ok () := by
+  have hasScope := wfTy_inScope sig ctx type fuel formed
+  have baseScoped : type.outerBase.InScope ctx := by
+    clear formed
+    induction type using Ty.rec (motive_2 := fun _ => True) with
+    | refine base predicate ih =>
+      apply ih
+      exact ⟨by simpa only [Ty.TypeScoped] using hasScope.1,
+        fun n hn => hasScope.2 n (by simp [Ty.freeVars, hn])⟩
+    | nil | cons => trivial
+    | _ => exact hasScope
+  simp only [wfTy, unit_bind_ok] at formed ⊢
+  refine ⟨wfTyCore_outerBase sig ctx type fuel formed.1, ?_⟩
+  simp [failUnless, (type.outerBase.scopeCheck_eq_true ctx).mpr baseScoped]
 
 def selfType (name : String) (ty : Ty) : Ty :=
   .refine ty (.theory (.eq (.var valueName) (.var name)))

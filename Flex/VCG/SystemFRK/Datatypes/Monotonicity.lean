@@ -83,9 +83,11 @@ theorem Ty.denote_mono (signature : Signature) (assignment : KAssignment)
       exact fresh hn
     have pos : b.positiveIn name = true := positive.2
     simp only [Ty.denote]
-    intro h arg ha
+    intro h
+    refine ⟨h.1, ?_⟩
+    intro arg ha
     rw [← domain] at ha
-    obtain ⟨result, app, ht⟩ := h arg ha
+    obtain ⟨result, app, ht⟩ := h.2 arg ha
     exact ⟨result, app, ib types (env.bind binder arg) pos result ht⟩
   | all body ih =>
     simp only [Ty.denote]

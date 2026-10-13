@@ -141,7 +141,10 @@ theorem subtype_sound
     (signature : Signature) (context : Context) (fuel : Nat)
     (source target : Ty) (state finalState : Nat) (constraint : Cstr)
     (generated : (subtype signature context fuel source target).run state = .ok (constraint, finalState))
-    (model : DataModel) (assignment : KAssignment) (types : TypeEnvironment)
+    (model : DataModel) (assignment : KAssignment)
+    (validSignature : signature.validate = .ok ())
+    (adequate : DatatypeAdequate signature model assignment)
+    (types : TypeEnvironment)
     (environment : Environment) (value : Value)
     (satisfied : constraint.denote signature assignment environment)
     (typed : source.denote signature model assignment types environment value) :
@@ -167,11 +170,13 @@ theorem subtype_sound
           Except.bind, pure, StateT.pure, Except.pure] at generated
         contradiction
     · rename_i bs bt a args b args' sourceEq targetEq
-      by_cases equal : a = b ∧ args = args'
-      · obtain ⟨rfl,rfl⟩ := equal
-        simp only [beq_self_eq_true, Bool.and_self, failUnless, ↓reduceIte] at generated
-        exact finishSubtype_sound source target .truth constraint state finalState generated satisfied
-          (fun _ h => by simpa only [sourceEq, targetEq] using h) typed
+      by_cases equal : (Ty.data a args).alphaEq 512 (.data b args') = true
+      · simp only [equal, failUnless, ↓reduceIte] at generated
+        apply finishSubtype_sound source target .truth constraint state finalState generated satisfied ?_ typed
+        intro _ h
+        rw [sourceEq] at h
+        rw [targetEq, ← Ty.alphaEq_denote 512 _ _ equal signature model assignment types environment]
+        exact h
       · simp [failUnless, equal, StateT.run, bind, StateT.bind, liftM, monadLift,
           Except.bind, pure, StateT.pure, Except.pure] at generated
         contradiction
@@ -186,10 +191,11 @@ theorem subtype_sound
       rw [sourceEq] at base
       rw [targetEq]
       simp only [Ty.denote] at base ⊢
+      refine ⟨base.1, ?_⟩
       intro argument argTyped
       obtain ⟨preH, postH⟩ := (Cstr.andThen_denote _ _).mp structuralH
       have sourceArgument := ih context a' a state middle pre preGenerated types environment argument preH argTyped
-      obtain ⟨result, application, resultTyped⟩ := base argument sourceArgument
+      obtain ⟨result, application, resultTyped⟩ := base.2 argument sourceArgument
       refine ⟨result, application, ?_⟩
       let name := chosenName (source.allTermNames ++ target.allTermNames) middle
       have freshAll := chosenName_fresh (source.allTermNames ++ target.allTermNames) middle
@@ -206,7 +212,9 @@ theorem subtype_sound
         targetFresh (by simp only [List.mem_cons, List.mem_append]; exact Or.inr (Or.inr (b'.freeVars_mem_allTermNames name h)))
       have freshDomain : name ∉ a'.allTermNames := fun h =>
         targetFresh (by simp only [List.mem_cons, List.mem_append]; exact Or.inr (Or.inl h))
-      have postClauses := postH argument (a'.denote_sort argTyped)
+      have withFacts := postH argument (a'.denote_sort argTyped)
+      have postClauses := (guardPredicates_denote _ _).mp withFacts
+        (typeFacts_hold validSignature adequate argTyped (.var (by simp [Environment.bind])))
       have postSatisfied := (guardPredicates_denote _ _).mp postClauses (by
         intro p hp
         obtain ⟨original, originalMember, rfl⟩ := List.mem_map.mp hp
@@ -233,12 +241,14 @@ theorem subtype_sound
     · contradiction
 
 theorem subtype_entails
+    (validSignature : signature.validate = .ok ())
+    (adequate : DatatypeAdequate signature model assignment)
     (generated : (subtype signature context fuel source target).run state = .ok (constraint, finalState))
     (satisfied : Entails signature model assignment context assumptions constraint) :
     Subtype signature model assignment context assumptions source target := by
   intro types environment depth variables facts value typed
   exact subtype_sound signature context fuel source target state finalState constraint generated
-    model assignment types environment value (satisfied types environment depth variables facts) typed
+    model assignment validSignature adequate types environment value (satisfied types environment depth variables facts) typed
 
 theorem Subtype.outerBase (source : Ty) :
     Subtype signature model assignment context assumptions source source.outerBase := by

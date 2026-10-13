@@ -1,5 +1,6 @@
 import Flex.VCG.SystemFRK.VCGen
 import Flex.VCG.SystemFRK.Binding.Substitution
+import Flex.VCG.SystemFRK.Semantics.Measures
 
 /-! Logical interfaces for the constraint generator. -/
 namespace SystemFRK
@@ -93,17 +94,50 @@ theorem Entails.of_valid (valid : constraint.Valid signature assignment) :
   intro _ environment _ _ _
   exact valid environment
 
+/-- Only actual datatype inhabitants supply the measure-definedness guards. -/
+theorem typeFacts_hold
+    (validSignature : signature.validate = .ok ())
+    (adequate : DatatypeAdequate signature model assignment)
+    (typed : type.denote signature model assignment types environment value)
+    (observed : LogicalEval signature observationEnvironment term value) :
+    ∀ atom ∈ typeFacts signature type term,
+      atom.denote signature assignment observationEnvironment := by
+  unfold typeFacts
+  cases base : type.outerBase <;> simp only [List.not_mem_nil, false_implies, forall_const]
+  case data family arguments =>
+    intro atom member
+    obtain ⟨measure, _, member⟩ := List.mem_flatMap.mp member
+    cases declared : signature.findMeasure measure.name with
+    | none => simp [declared] at member
+    | some declaration =>
+      simp only [declared] at member
+      split at member
+      · rename_i familyEq
+        have familyEq : declaration.datatype = family := by simpa using familyEq
+        have dataTyped := (type.denote_outer.mp typed).1
+        rw [base] at dataTyped
+        obtain ⟨n, evaluated⟩ := measure_total signature model assignment validSignature adequate
+          types environment measure.name declaration arguments value declared
+          (by simpa only [familyEq] using dataTyped)
+        obtain rfl := List.mem_singleton.mp member
+        exact ⟨.int n, .measure observed evaluated, .measure observed evaluated⟩
+      · simp at member
+
 /-- Use the existing runtime slot to interpret a bound constraint in the extended context. -/
 theorem Entails.bind
+    (validSignature : signature.validate = .ok ())
+    (adequate : DatatypeAdequate signature model assignment)
     (added : context.add name type = .ok next)
-    (valid : Entails signature model assignment context assumptions (bindConstraint name type body)) :
+    (valid : Entails signature model assignment context assumptions (bindConstraint signature name type body)) :
     Entails signature model assignment next assumptions body := by
   obtain ⟨_, _, _, rfl⟩ := (context.add_eq_ok next name type).mp added
   intro types environment depth variables assumptionsHold
   obtain ⟨value, lookup, typed⟩ := variables name type (by simp)
   have outer := valid types environment depth
     (fun n t ht => variables n t (List.mem_cons_of_mem _ ht)) assumptionsHold
-  have witnessed := outer value (type.denote_sort typed)
+  have withFacts := outer value (type.denote_sort typed)
+  have witnessed := (guardPredicates_denote _ _).mp withFacts
+    (typeFacts_hold validSignature adequate typed (.var (by simp [Environment.bind])))
   apply (body.environment_congr signature assignment (environment.bind name value) environment ?_).mp
   · apply (guardPredicates_denote _ _).mp witnessed
     intro p hp
@@ -156,8 +190,10 @@ theorem Entails.guard
 /-- Pattern-field quantifiers expose the constraint in the context obtained by
 performing the same sequence of checked context extensions. -/
 theorem Entails.bindFields
+    (validSignature : signature.validate = .ok ())
+    (adequate : DatatypeAdequate signature model assignment)
     (added : extendFields context fields = .ok next)
-    (valid : Entails signature model assignment context assumptions (bindFields fields body)) :
+    (valid : Entails signature model assignment context assumptions (bindFields signature fields body)) :
     Entails signature model assignment next assumptions body := by
   induction fields generalizing context with
   | nil =>
@@ -173,7 +209,7 @@ theorem Entails.bindFields
     | ok middle =>
       apply ih (context := middle)
       · simpa only [addResult, Except.bind] using added
-      · exact Entails.bind addResult valid
+      · exact Entails.bind validSignature adequate addResult valid
 
 /-- Recursion annotations do not change what a Horn constraint means. -/
 theorem Entails.context_congr

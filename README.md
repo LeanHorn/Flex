@@ -113,6 +113,7 @@ leaves their unknown predicates for a solver. There is no unrestricted fixpoint.
 | `ConstraintLemmas`, `SubtypingSoundness`, `Generator*`, `CheckerSoundness` | Logical constraint interfaces and executable checker soundness |
 | `Fundamental`, `Correctness` | Full declarative fundamental theorem and generator total correctness |
 | `DraftTheorems` | Proved compatibility wrappers for the original staged theorem names |
+| `Bridge/` (optional import) | Checked scalar lowering, heterogeneous predicate reconstruction, solver orchestration, and residual source goals |
 
 **The retained λRK language now has a proved total-correctness theorem.**
 `generated_total_correctness` states that successful generation and validity of
@@ -122,12 +123,14 @@ checker-soundness, or termination premise is left unproved. All former admission
 in `DraftTheorems` are closed; the transitive axiom audit permits only Lean's
 standard `propext`, `Classical.choice`, and `Quot.sound`.
 
-The general solver bridge remains work for PR13. The existing `map` bridge is
-proved and both external solvers' witnesses are checked by Lean.
+The reusable solver bridge is available through the optional
+`Flex.VCG.LambdaRK.Bridge` import. It derives scalar clauses from a closed source
+VC and checks their connection to its original semantics before invoking
+Spacer/Eldarica. The core language metatheory remains independent of this import.
 
 ### Revised 15-PR roadmap
 
-These are implementation phases. PR1–12 are implemented locally; the original
+These are implementation phases. PR1–13 are implemented locally; the original
 partial binding interfaces have now been proved as part of PR7.
 
 | PR | Concrete result | Status |
@@ -144,7 +147,7 @@ partial binding interfaces have now been proved as part of PR7.
 | 10 | Complete constructor/match and general measure semantic cases, including measure totality and equations. | Proved and audited |
 | 11 | Prove subtyping-constraint soundness and checker-to-declarative soundness. | Proved and audited |
 | 12 | Assemble the full fundamental theorem and generator total correctness. | Proved and audited |
-| 13 | Generalize the map-specific lowering/reconstruction bridge; preserve unsupported constraints as residual VCs. | Planned |
+| 13 | Generalize the map-specific lowering/reconstruction bridge; preserve unsupported constraints as residual VCs. | Implemented; both real backends pass |
 | 14 | Consolidate compatibility modules, close any proof debt introduced by PR13, and audit the full dependency chain. | Planned |
 | 15 | Deliver verified versions of the same two examples, final checks, and documentation. | Planned |
 
@@ -171,9 +174,10 @@ under both kinds of closure and invokes them from a caller with no recursion
 frame. These results now participate in the full-language fundamental theorem.
 
 PR9 connects the restored Spacer/Eldarica backend to the existing `map` example.
-[`MapVC.lean`](./Demo/LambdaRK/MapVC.lean) proves the constructor length equations,
-a sound scalar lowering, and exact equality between its raw VC and the actual
-`generate signature map mapTy` output. Kernel-reducible syntax comparisons make
+[`MapVC.lean`](./Demo/LambdaRK/MapVC.lean) records a readable raw VC and proves
+its exact equality with the actual `generate signature map mapTy` output. The
+reusable bridge now derives measure equations and scalar clauses from that VC.
+Kernel-reducible syntax comparisons make
 that last equality provable; `SyntaxEqualityLemmas` proves the comparisons correct.
 [`SolvedMap.lean`](./Demo/LambdaRK/SolvedMap.lean) imports the solver's predicate,
 certifies all scalar clauses with Lean, and proves the original generated VC.
@@ -183,9 +187,10 @@ Both real backends pass: Spacer finds a predicate equivalent to `input = output`
 Eldarica finds `input = output ∧ input ≥ 0`. PR9's individual local pipeline samples
 were 97 ms for Spacer (20 ms solver) and 106 ms for Eldarica (37 ms solver).
 These are individual measurements, not benchmark averages, and exclude Lean
-startup and the separate lowering proof. The lowering is specific to `map`;
-PR13 generalizes it. `SolvedMap.map_total_correct` now also derives the source
-program's full semantic specification from the solver certificate via PR11–12.
+startup and the separate lowering proof. They describe the original PR9 path,
+not timings of the generalized bridge. `SolvedMap.map_total_correct` now derives
+the source program's full semantic specification from the generic solver bridge
+and PR11–12's correctness theorem.
 
 PR10 proves constructor and branch evaluation, field-environment transport,
 constructor equations, and strict decrease through nested patterns. Measures
@@ -209,6 +214,43 @@ constructs the datatype model and requires only successful generation and valid
 returned constraints. The solver-backed `map_total_correct` theorem and its
 axiom audit exercise this full dependency chain with both backends.
 
+PR13 replaces the hand-built scalar problem in `SolvedMap` with the reusable
+[`Bridge.solveGoal`](./Flex/VCG/LambdaRK/Bridge/Goal.lean) API. For a goal of the
+form `∃ κ, vc.Valid signature κ`, `lambdark_chc` uses Spacer; use
+`lambdark_chc eldarica` or `lambdark_chc eldarica "/path/to/eld"` for Eldarica.
+The signature and VC must be closed Lean terms. Their executable reflection is
+checked by kernel conversion against those original terms.
+
+The supported solver fragment has these boundaries:
+
+- Multiple predicates may have different mixtures of `Int` and `Bool` arguments.
+  Scalar clauses support literals, addition, equality, inequalities, and Boolean
+  combinations. Scalar quantifiers retain their declared sorts.
+- Constructor equalities in guards supply aliases. Declared measure equations
+  expand known constructors using literals, integer fields, addition, and direct
+  recursive-field observations. A measure of an arbitrary runtime value needs
+  evaluation evidence from a positive guard; it is never assumed total merely
+  because a scalar variable could represent its result.
+- Each proposed scalar clause must imply its exact source clause, proved in Lean
+  with abstract predicates. Some unsupported guards can be dropped to obtain a
+  stronger scalar obligation, but the same implication check still applies.
+  Failed lowering or proof reconstruction retains the original clause.
+- Solver predicates are instantiated even when certification leaves work. The
+  remaining scalar or source obligations are ordinary Lean goals. Source
+  residuals retain their original clause indices; scalar certificate indices
+  live separately in `report.solver`, since normalization may split clauses.
+  Runtime-`Value` predicate
+  arguments and unused predicate declarations remain explicit witness goals;
+  they are not encoded as SMT datatypes or higher-order solver arguments.
+
+The flattening theorem, per-clause implications, and solver certificates compose
+into a proof of the original VC. Completed and partial scaffolds are checked for
+admitted proofs and trusted SMT dependencies. Backend failure restores the entry
+state. [`BridgeChecks.lean`](./Demo/LambdaRK/BridgeChecks.lean) exercises mixed
+sorts, multiple predicates, partial results, and failure rollback independently
+of `map`; [`BridgeReconstruction.lean`](./Demo/LambdaRK/BridgeReconstruction.lean)
+checks that undefined measures remain explicit residual obligations.
+
 There are two program examples in [`Demo/LambdaRK.lean`](./Demo/LambdaRK.lean):
 polymorphic identity (also instantiated at a polymorphic type), and polymorphic
 `map` with a length-preservation specification. `map` generates three nontrivial
@@ -220,9 +262,13 @@ Focused acceptance/rejection checks live in
 lake build Flex.VCG.LambdaRK Flex.VCG.LambdaRK.DraftTheorems \
   Demo.LambdaRKChecks Demo.LambdaRKRecursionChecks \
   Demo.LambdaRK.Foundation Demo.LambdaRK.SoundnessChecks \
-  Demo.LambdaRK.ProofAudit Demo.LambdaRK.MapVC
+  Demo.LambdaRK.ProofAudit Demo.LambdaRK.MapVC \
+  Flex.VCG.LambdaRK.Bridge Demo.LambdaRK.BridgeLowering \
+  Demo.LambdaRK.BridgeQuote Demo.LambdaRK.BridgeReconstruction
 lake lean Demo/LambdaRK/SolvedMap.lean
 CHC_ELDARICA=/path/to/eld lake lean Demo/LambdaRK/SolvedMap.lean
+lake lean Demo/LambdaRK/BridgeChecks.lean
+CHC_ELDARICA=/path/to/eld lake lean Demo/LambdaRK/BridgeChecks.lean
 ```
 
 The initial fragment uses ordered, nonmutual regular datatypes; recursive
@@ -232,4 +278,5 @@ language with recursion only on direct recursive fields, whose totality is prove
 variables. Source binders cannot shadow existing variables, and dependent
 arguments and matches use named values (literal arguments are also supported).
 Names starting with `$` are reserved. Solver support remains narrower than the
-verified source language: generic datatype/measure lowering is still PR13.
+verified source language: the bridge projects supported scalar observations;
+arbitrary datatype, function, and polymorphic values remain in source obligations.

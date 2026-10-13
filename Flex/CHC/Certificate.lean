@@ -45,12 +45,13 @@ private def restoreExactly (saved : Term.SavedState) : TermElabM Unit := do
   modifyThe Meta.State fun _ => saved.meta.meta
   modifyThe Core.State fun _ => saved.meta.core.toState
 
-private def checkEvidence (target proof : Expr) : TermElabM Unit := do
-  if proof.hasMVar || proof.hasLevelMVar || proof.hasLooseBVars || proof.hasSorry then
-    throwError "CHC certification: oracle returned unresolved or admitted evidence"
-  checkWithKernel proof
-  unless ← isDefEq (← inferType proof) target do
-    throwError "CHC certification: oracle returned evidence for a different proposition"
+/-- Reject direct or transitive admission dependencies, including in a partial
+proof scaffold whose remaining metavariables will be filled by the caller.
+Ordinary user axioms are not prohibited; this check enforces the same boundary
+as the proof-producing oracle API rather than changing Lean's ambient logic. -/
+def rejectAdmissions (proof : Expr) : TermElabM Unit := do
+  if proof.hasSorry then
+    throwError "CHC certification: evidence contains an admission"
   -- `hasSorry` alone misses a theorem that transitively uses a trusted SMT axiom.
   for name in proof.getUsedConstants do
     for axiomName in (← collectAxioms name) do
@@ -58,9 +59,20 @@ private def checkEvidence (target proof : Expr) : TermElabM Unit := do
           axiomName == `Auto.autoSMTSorry then
         throwError "CHC certification: oracle evidence depends on {axiomName}"
 
-/-- Revalidate after restoring the caller's state: an oracle cannot justify a
-proof by assigning other goals or adding an unchecked temporary declaration. -/
-private def tryOracle (oracle : ProofOracle) (target : Expr) : TermElabM (Option Expr) := do
+private def checkEvidence (target proof : Expr) : TermElabM Unit := do
+  if proof.hasMVar || proof.hasLevelMVar || proof.hasLooseBVars then
+    throwError "CHC certification: oracle returned unresolved evidence"
+  checkWithKernel proof
+  unless ← isDefEq (← inferType proof) target do
+    throwError "CHC certification: oracle returned evidence for a different proposition"
+  rejectAdmissions proof
+
+/-- Run a proof oracle in isolation, inline its fresh helper declarations, and
+validate its evidence in the caller's original state. Unresolved evidence and
+transitive dependencies on admissions or trusted SMT axioms are rejected.
+The callback cannot justify a proof by assigning other goals or adding an
+unchecked temporary declaration; interrupts still propagate to the caller. -/
+def checkOracleProof (oracle : ProofOracle) (target : Expr) : TermElabM (Option Expr) := do
   let saved ← Term.saveState
   try
     let result ← withNewMCtxDepth <| oracle target
@@ -116,7 +128,7 @@ private partial def residual (oracle : ProofOracle) (tag : Name)
     (tryWhole : Bool := true) : CertM Expr := do
   if target.isConstOf ``True then return mkConst ``True.intro
   if tryWhole then
-    if let some proof ← tryOracle oracle target then return proof
+    if let some proof ← checkOracleProof oracle target then return proof
   if let .forallE name domain body bi := target then
     return ← withLocalDecl name bi domain fun parameter => do
       -- The failed whole-clause oracle already had access to these binders.

@@ -1,11 +1,15 @@
 import Flex.VCG.SystemFRK
 import Flex.VCG.SystemFRK.Bridge
+import Flex.VCG.SystemFRK.Notation
 
 /-!
 Ten mechanized SystemFRK examples. Successful examples prove that the actual
 executable generator returns their VC, prove its validity, and use the public
 total-correctness theorem. Operational witnesses and the final negative example
 check that the claims have content. Only example 6 uses an external solver (Z3).
+
+Programs use `[frk| ...]`; types use `[frkTy| ...]`. Type binders are named,
+and `⌜...⌝` embeds an existing definition. Both expand to the original core syntax.
 
 Run: `lake lean Demo/SystemFRK.lean`.
 -/
@@ -65,8 +69,8 @@ def signature : Signature := {
 
 /-! ## 1. Polymorphic identity, applied to every integer -/
 
-def identityTy : Ty := .all (.arrow "x" (.var 0) (.var 0))
-def identity : Expr := .tyLam (.lam "x" (.var 0) (.var "x"))
+def identityTy : Ty := [frkTy| ∀ α, (x : α) → α]
+def identity : Expr := [frk| Λ α => fun (x : α) => x]
 
 namespace Identity
 
@@ -99,8 +103,10 @@ end Identity
 /-! ## 2. Impredicative identity: id [∀α. α → α] id -/
 namespace Impredicative
 
-def program : Expr :=
-  .letE "id" identity (.app (.tyApp (.var "id") identityTy) (.var "id"))
+def program : Expr := [frk|
+  let id := ⌜identity⌝;
+  id[⌜identityTy⌝] id
+]
 def vc : Cstr := computedVC {} program identityTy
 
 theorem generated : generate {} program identityTy = .ok vc := by frk_compute
@@ -119,16 +125,16 @@ end Impredicative
 /-! ## 3. Higher-order polymorphic composition -/
 namespace Composition
 
-def type : Ty := .all (.all (.all (
-  .arrow "f" (.arrow "b" (.var 1) (.var 0)) (
-    .arrow "g" (.arrow "a" (.var 2) (.var 1)) (
-      .arrow "x" (.var 2) (.var 0))))))
+def type : Ty := [frkTy| ∀ α β γ,
+  (f : (b : β) → γ) → (g : (a : α) → β) → (x : α) → γ
+]
 
-def program : Expr := .tyLam (.tyLam (.tyLam (
-  .lam "f" (.arrow "b" (.var 1) (.var 0)) (
-    .lam "g" (.arrow "a" (.var 2) (.var 1)) (
-      .lam "x" (.var 2) (
-        .letE "y" (.app (.var "g") (.var "x")) (.app (.var "f") (.var "y"))))))))
+def program : Expr := [frk|
+  Λ α β γ =>
+  fun (f : (b : β) → γ) (g : (a : α) → β) (x : α) =>
+    let y := g x;
+    f y
+]
 def vc : Cstr := computedVC {} program type
 
 theorem generated : generate {} program type = .ok vc := by frk_compute
@@ -147,12 +153,14 @@ end Composition
 /-! ## 4. Dependent application without capturing a caller's free name -/
 namespace Capture
 
-def program : Expr :=
-  .letE "f" (.lam "x" .int (.lam "y" .int (.var "x"))) (
-    .letE "y" (.int 0) (
-      .letE "g" (.app (.var "f") (.var "y")) (
-        .letE "z" (.int 1) (.app (.var "g") (.var "z")))))
-def type : Ty := .refine .int (.theory (.eq (.var valueName) (.int 0)))
+def program : Expr := [frk|
+  let f := fun (x : Int) (y : Int) => x;
+  let y := 0;
+  let g := f y;
+  let z := 1;
+  g z
+]
+def type : Ty := [frkTy| {v : Int | v = 0}]
 def vc : Cstr := computedVC {} program type
 
 theorem generated : generate {} program type = .ok vc := by frk_compute
@@ -182,10 +190,11 @@ end Capture
 namespace Singleton
 
 def sig : Signature := { signature with kvars := [] }
-def program : Expr := .letE "empty" (.ctor "nil" [.int] [])
-  (.ctor "cons" [.int] [.int 7, .var "empty"])
-def type : Ty := .refine (.data "List" [.int])
-  (.theory (.eq (.measure "len" (.var valueName)) (.int 1)))
+def program : Expr := [frk|
+  let empty := ctor nil[Int]();
+  ctor cons[Int](7, empty)
+]
+def type : Ty := [frkTy| {v : List[Int] | len(v) = 1}]
 def vc : Cstr := computedVC sig program type
 
 theorem generated : generate sig program type = .ok vc := by frk_compute
@@ -204,37 +213,25 @@ end Singleton
 
 /-! ## 6. Polymorphic structural map with a solver-inferred length invariant -/
 
-def listTy (element : Ty) : Ty := .data "List" [element]
+def mapTy : Ty := [frkTy| ∀ α β,
+  (f : (item : α) → β) →
+  (input : List[α]) → {v : List[β] | len(v) = len(input)}
+]
 
-def lengthOf (name : String) : LTerm := .measure "len" (.var name)
-
-private def mapSummary : Ty :=
-  .refine (listTy (.var 0))
-    (.kvar "mapLength" [lengthOf "xs", lengthOf valueName])
-
-def mapTy : Ty :=
-  .all (.all (
-    .arrow "f" (.arrow "item" (.var 1) (.var 0)) (
-      .arrow "input" (listTy (.var 1)) (
-        .refine (listTy (.var 0))
-          (.theory (.eq (lengthOf valueName) (lengthOf "input")))))))
-
-def map : Expr :=
-  .tyLam (.tyLam (
-    .lam "f" (.arrow "item" (.var 1) (.var 0)) (
-      .lam "input" (listTy (.var 1)) (
-        .letE "output"
-          (.app
-            (.structRec "xs" (listTy (.var 1)) mapSummary
-              (.matchE (.var "xs") [
-                ("nil", [], .ctor "nil" [.var 0] []),
-                ("cons", ["x", "tail"],
-                  .letE "y" (.app (.var "f") (.var "x")) (
-                    .letE "mapped" (.recur (.var "tail")) (
-                      .ctor "cons" [.var 0] [.var "y", .var "mapped"])))
-              ]))
-            (.var "input"))
-          (.var "output")))))
+def map : Expr := [frk|
+  Λ α β =>
+  fun (f : (item : α) → β) (input : List[α]) =>
+    let output :=
+      (fix (xs : List[α]) : {v : List[β] | κ mapLength(len(xs), len(v))} =>
+        match xs with
+        | nil => ctor nil[β]()
+        | cons x tail =>
+          let y := f x;
+          let mapped := recur tail;
+          ctor cons[β](y, mapped)
+        end) input;
+    output
+]
 
 namespace MapVC
 
@@ -381,17 +378,16 @@ theorem input_length (values : List Int) :
       exact same ▸ evaluation
 
 /-- Invoke the actual certified map, instantiated twice and applied to a total
-constant function and any finite integer list. The big-step application syntax
-here deliberately makes all four eliminations visible. -/
+constant function and any finite integer list. The application shows both type
+instantiations and both runtime arguments. -/
 theorem map_runs_on_every_int_list (values : List Int) :
     ∃ assignment result,
       Eval signature [] none
-        (.app (.app (.tyApp (.tyApp map .int) .int)
-          (.lam "auditElement" .int (.int 7))) (inputExpr values)) result ∧
+        [frk| ⌜map⌝[Int][Int] (fun (auditElement : Int) => 7) ⌜inputExpr values⌝] result ∧
       intLists assignment result ∧
       MeasureEval signature "len" result (Int.ofNat values.length) := by
   obtain ⟨assignment, polymorphic, evaluated, typed⟩ := MapVC.map_total_correct
-  simp only [mapTy, listTy, Ty.denote, List.map_cons, List.map_nil,
+  simp only [mapTy, Ty.denote, List.map_cons, List.map_nil,
     List.getElem?_cons_zero, List.getElem?_cons_succ, Option.getD_some] at typed
   obtain ⟨once, firstApplication, onceTyped⟩ := typed LSort.int.contains
   obtain ⟨twice, secondApplication, twiceTyped⟩ := onceTyped LSort.int.contains
@@ -405,7 +401,7 @@ theorem map_runs_on_every_int_list (values : List Int) :
     .app (.app (.tyApp (.tyApp evaluated firstApplication) secondApplication) .lam
       functionApplication) (input_evaluates values) listApplication,
     listTyped, ?_⟩
-  simp only [Atom.denote, Formula.denote, lengthOf] at measured
+  simp only [Atom.denote, Formula.denote] at measured
   obtain ⟨common, outputObservation, inputObservation⟩ := measured
   have inputObservation' : LogicalEval signature
       (Environment.bind (Environment.bind (Environment.bind [] "f" function)
@@ -438,12 +434,13 @@ def sig : Signature := {
   ] }]
 }
 
-def program : Expr :=
-  .letE "empty" (.ctor "end" [] []) (
-    .letE "tail" (.ctor "step" [] [.int 5, .var "empty"]) (
-      .letE "input" (.ctor "step" [] [.int 7, .var "tail"]) (
-        .measure "weight" (.var "input"))))
-def type : Ty := .refine .int (.theory (.eq (.var valueName) (.int 12)))
+def program : Expr := [frk|
+  let empty := ctor «end»[]();
+  let tail := ctor step[](5, empty);
+  let input := ctor step[](7, tail);
+  measure weight input
+]
+def type : Ty := [frkTy| {v : Int | v = 12}]
 def vc : Cstr := computedVC sig program type
 
 theorem generated : generate sig program type = .ok vc := by frk_compute
@@ -471,12 +468,13 @@ def sig : Signature := {
   ] }]
 }
 
-def type : Ty := .data "Suspended" [.int]
-def program : Expr :=
-  .letE "thunk" (.lam "argument" .int (.ctor "stop" [.int] [])) (
-    .letE "functionNode" (.ctor "function" [.int] [.var "thunk"]) (
-      .letE "poly" (.tyLam (.ctor "stop" [.int] [])) (
-        .ctor "polymorphic" [.int] [.var "poly"])))
+def type : Ty := [frkTy| Suspended[Int]]
+def program : Expr := [frk|
+  let thunk := fun (argument : Int) => ctor stop[Int]();
+  let functionNode := ctor function[Int](thunk);
+  let poly := Λ α => ctor stop[Int]();
+  ctor polymorphic[Int](poly)
+]
 def vc : Cstr := computedVC sig program type
 
 theorem generated : generate sig program type = .ok vc := by frk_compute
@@ -495,12 +493,19 @@ end HigherOrderData
 /-! ## 9. Recursive calls delayed through both type and ordinary closures -/
 namespace DelayedRecursion
 
-def nilCode : Expr := .lam "ignored" .int (.int 0)
-def consCode : Expr := .lam "ignored" .int
-  (.letE "later" (.recur (.var "tail"))
-    (.letE "call" (.tyApp (.var "later") .int) (.app (.var "call") (.int 0))))
-def body : Expr := .matchE (.var "xs")
-  [("nil", [], .tyLam nilCode), ("cons", ["head", "tail"], .tyLam consCode)]
+def nilCode : Expr := [frk| fun (ignored : Int) => 0]
+def consCode : Expr := [frk|
+  fun (ignored : Int) =>
+    let later := recur tail;
+    let call := later[Int];
+    call 0
+]
+def body : Expr := [frk|
+  match xs with
+  | nil => Λ α => ⌜nilCode⌝
+  | cons head tail => Λ α => ⌜consCode⌝
+  end
+]
 def loop : Value := .recursiveClosure "xs" body []
 def singleton : Value := .ctor "cons" [.int 7, .ctor "nil" []]
 def rootEnv : Environment :=
@@ -521,9 +526,11 @@ theorem empty_returns : Apply {} loop (.ctor "nil" [])
 the `none` caller frame cannot accidentally replace the captured function. -/
 theorem delayed_recursion_evaluates :
     Eval {} [("loop", loop), ("input", singleton)] none
-      (.letE "deferred" (.app (.var "loop") (.var "input"))
-        (.letE "instantiated" (.tyApp (.var "deferred") .int)
-          (.app (.var "instantiated") (.int 99)))) (.int 0) := by
+      [frk|
+        let deferred := loop input;
+        let instantiated := deferred[Int];
+        instantiated 99
+      ] (.int 0) := by
   apply Eval.letE (.app (.var rfl) (.var rfl) root_returns)
   apply Eval.letE (.tyApp (.var rfl) (.closure .lam))
   apply Eval.app (.var rfl) .int
@@ -534,14 +541,14 @@ theorem delayed_recursion_evaluates :
 
 
 def sig : Signature := { signature with kvars := [] }
-def program : Expr :=
-  .letE "loop" (.structRec "xs" (.data "List" [.int])
-    (.all (.arrow "ignored" .int .int)) body) (
-    .letE "empty" (.ctor "nil" [.int] []) (
-      .letE "input" (.ctor "cons" [.int] [.int 7, .var "empty"]) (
-        .letE "deferred" (.app (.var "loop") (.var "input")) (
-          .letE "instantiated" (.tyApp (.var "deferred") .int)
-            (.app (.var "instantiated") (.int 99))))))
+def program : Expr := [frk|
+  let loop := fix (xs : List[Int]) : ∀ α, (ignored : Int) → Int => ⌜body⌝;
+  let empty := ctor nil[Int]();
+  let input := ctor cons[Int](7, empty);
+  let deferred := loop input;
+  let instantiated := deferred[Int];
+  instantiated 99
+]
 def vc : Cstr := computedVC sig program .int
 
 theorem generated : generate sig program .int = .ok vc := by frk_compute
@@ -563,13 +570,13 @@ namespace Nonvacuity
 /-- An impredicative universal type cannot manufacture an arbitrary value. -/
 theorem forall_alpha_alpha_empty (signature : Signature) (model : DataModel)
     (assignment : KAssignment) (types : TypeEnvironment) (environment : Environment)
-    (value : Value) : ¬ (Ty.all (.var 0)).denote signature model assignment types environment value := by
+    (value : Value) : ¬ ([frkTy| ∀ α, α]).denote signature model assignment types environment value := by
   intro typed
   simp only [Ty.denote, List.getElem?_cons_zero, Option.getD_some] at typed
   obtain ⟨_, _, impossible⟩ := typed (fun _ => False)
   exact impossible
 
-def zeroAsOne : Ty := .refine .int (.theory (.eq (.var valueName) (.int 1)))
+def zeroAsOne : Ty := [frkTy| {v : Int | v = 1}]
 
 def zeroAsOneVC : Cstr := .all "$g0" .int
   (.guard (.theory (.eq (.var "$g0") (.int 0)))
@@ -604,18 +611,18 @@ theorem false_refinement_uncertifiable (signature : Signature) (expression : Exp
 
 /-- The evaluation relation cannot apply an integer as a function. -/
 theorem stuck_does_not_evaluate (signature : Signature) (value : Value) :
-    ¬ Eval signature [] none (.app (.int 0) (.int 1)) value := by
+    ¬ Eval signature [] none [frk| 0 1] value := by
   intro evaluated
   cases evaluated with
   | app function _ applied => cases function; cases applied
 
 theorem stuck_uncertifiable (signature : Signature) (type : Ty) :
     ¬ ∃ assignment constraint,
-      generate signature (.app (.int 0) (.int 1)) type = .ok constraint ∧
+      generate signature [frk| 0 1] type = .ok constraint ∧
       constraint.Valid signature assignment := by
   rintro ⟨assignment, constraint, generated, valid⟩
   obtain ⟨value, evaluated, _⟩ := generated_total_correctness signature assignment
-    (.app (.int 0) (.int 1)) type constraint generated valid
+    [frk| 0 1] type constraint generated valid
   exact stuck_does_not_evaluate signature value evaluated
 
 end Nonvacuity

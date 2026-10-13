@@ -13,6 +13,18 @@ for arbitrary earlier datatype constructors.
 
 namespace LambdaRK
 
+/-- A measure only reads integer fields or recurses on a direct field of its
+declared datatype. Field declarations have already been checked to be raw. -/
+def MeasureBody.ready (datatype : String) (fields : List Ty) : MeasureBody → Bool
+  | .literal _ => true
+  | .field index => match fields[index]? with
+    | some .int => true
+    | _ => false
+  | .recur index => match fields[index]? with
+    | some (.data name _) => name == datatype
+    | _ => false
+  | .add left right => left.ready datatype fields && right.ready datatype fields
+
 namespace Signature
 
 def findData (signature : Signature) (name : String) : Option DataDecl :=
@@ -117,14 +129,29 @@ private def validateCore (signature : Signature) (maxDepth : Nat := 256) : Excep
         | throw s!"constructor '{branch.ctor}' does not belong to '{datatype.name}'"
       validateMeasureBody datatype ctor branch.body
 
+/-- The semantic certificate uses the same first matching case as evaluation,
+and checks coverage from the datatype's constructors. -/
+def measuresReady (signature : Signature) : Bool :=
+  signature.measures.all fun measure =>
+    match signature.findData measure.datatype with
+    | none => false
+    | some datatype => datatype.ctors.all fun ctor =>
+      match measure.cases.find? (fun branch => branch.ctor == ctor.name) with
+      | none => false
+      | some branch => branch.body.ready measure.datatype ctor.fields
+
+/-- Constructor tags identify declarations globally at runtime. -/
+def ctorNamesUnique (signature : Signature) : Bool :=
+  decide (signature.datatypes.flatMap (fun datatype => datatype.ctors.map CtorDecl.name)).Nodup
+
 /-- Detailed diagnostics followed by an explicit structural formation
 certificate. The model construction consumes this certificate rather than
 assuming facts about the diagnostic checker's loops or fuel. -/
 def validate (signature : Signature) (maxDepth : Nat := 256) : Except String Unit :=
   match validateCore signature maxDepth with
   | .error message => .error message
-  | .ok () => if signature.modelReady then .ok () else
-      .error "datatype declarations failed the semantic formation check"
+  | .ok () => if signature.modelReady && signature.measuresReady && signature.ctorNamesUnique then .ok () else
+      .error "signature declarations failed the semantic formation check"
 
 theorem validate_modelReady (signature : Signature) (maxDepth : Nat)
     (accepted : signature.validate maxDepth = .ok ()) : signature.modelReady = true := by
@@ -132,6 +159,21 @@ theorem validate_modelReady (signature : Signature) (maxDepth : Nat)
   split at accepted
   · contradiction
   · split at accepted <;> simp_all
+
+theorem validate_measuresReady (signature : Signature) (maxDepth : Nat)
+    (accepted : signature.validate maxDepth = .ok ()) : signature.measuresReady = true := by
+  unfold validate at accepted
+  split at accepted
+  · contradiction
+  · split at accepted <;> simp_all
+
+theorem validate_ctorNamesUnique (signature : Signature) (maxDepth : Nat)
+    (accepted : signature.validate maxDepth = .ok ()) :
+    (signature.datatypes.flatMap (fun datatype => datatype.ctors.map CtorDecl.name)).Nodup := by
+  unfold validate at accepted
+  split at accepted
+  · contradiction
+  · split at accepted <;> simp_all [ctorNamesUnique]
 
 end Signature
 end LambdaRK

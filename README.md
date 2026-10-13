@@ -86,7 +86,7 @@ lake lean Demo/CHC/Instantiate.lean
 CHC_ELDARICA=/path/to/eld lake lean Demo/CHC/Instantiate.lean
 ```
 
-## λRK frontend: development stage
+## λRK frontend
 
 The STLC upgrade lives separately in [`Flex/VCG/LambdaRK/`](./Flex/VCG/LambdaRK/).
 Import `Flex.VCG.LambdaRK` for explicit impredicative System F, parameterized
@@ -109,19 +109,25 @@ leaves their unknown predicates for a solver. There is no unrestricted fixpoint.
 | `StructuralOrder`, `RecursionLemmas`, `DraftRecursion` | Well-founded descent and semantic structural-recursion rules |
 | `Judgments`, `VCGen` | Independent declarative typing and executable constraint generation |
 | `DraftBinding`, `DraftContext`, `DraftCore` | Completed proof interfaces and the proved System F core fundamental theorem |
-| `DraftTheorems` | Remaining full-language metatheory obligations |
+| `BranchContext`, `BranchRecursion`, `DatatypeTyping`, `PatternTyping`, `MeasureLemmas` | Proved constructor, match, and measure cases |
+| `ConstraintLemmas`, `SubtypingSoundness`, `Generator*`, `CheckerSoundness` | Logical constraint interfaces and executable checker soundness |
+| `Fundamental`, `Correctness` | Full declarative fundamental theorem and generator total correctness |
+| `DraftTheorems` | Proved compatibility wrappers for the original staged theorem names |
 
-**Full frontend verification remains unfinished.** Exactly three declarations
-are still admitted, all in
-[`DraftTheorems.lean`](./Flex/VCG/LambdaRK/DraftTheorems.lean): `measure_total`,
-`checker_soundness`, and `fundamental_open`. The ordinary frontend umbrella does
-not import them. PR7–9's foundation, recursion, and generated-map certificates
-have no admitted dependencies; their audits allow only Lean's standard axioms
-(`propext`, `Classical.choice`, and `Quot.sound`).
+**The retained λRK language now has a proved total-correctness theorem.**
+`generated_total_correctness` states that successful generation and validity of
+its returned CHCs imply evaluation to a value satisfying the expected semantic
+type, using the constructed datatype interpretation. No model-existence,
+checker-soundness, or termination premise is left unproved. All former admissions
+in `DraftTheorems` are closed; the transitive axiom audit permits only Lean's
+standard `propext`, `Classical.choice`, and `Quot.sound`.
+
+The general solver bridge remains work for PR13. The existing `map` bridge is
+proved and both external solvers' witnesses are checked by Lean.
 
 ### Revised 15-PR roadmap
 
-These are implementation phases. PR1–9 are implemented locally; the original
+These are implementation phases. PR1–12 are implemented locally; the original
 partial binding interfaces have now been proved as part of PR7.
 
 | PR | Concrete result | Status |
@@ -135,11 +141,11 @@ partial binding interfaces have now been proved as part of PR7.
 | 7 | Complete required binding/context proofs, audit capture and scope, and construct an adequate datatype model. | Proved and audited |
 | 8 | Prove structural descent and semantic recursion rules; check recursion captured inside ordinary and polymorphic closures. | Proved and audited |
 | 9 | Lower the actual generated `map` VC, synthesize an invariant with Spacer/Eldarica, and prove the original VC in Lean. | Both real backends pass |
-| 10 | Complete constructor/match and general measure semantic cases, including measure totality and equations. | Next |
-| 11 | Prove subtyping-constraint soundness and checker-to-declarative soundness. | Planned |
-| 12 | Assemble the full fundamental theorem and generator total correctness. | Planned |
+| 10 | Complete constructor/match and general measure semantic cases, including measure totality and equations. | Proved and audited |
+| 11 | Prove subtyping-constraint soundness and checker-to-declarative soundness. | Proved and audited |
+| 12 | Assemble the full fundamental theorem and generator total correctness. | Proved and audited |
 | 13 | Generalize the map-specific lowering/reconstruction bridge; preserve unsupported constraints as residual VCs. | Planned |
-| 14 | Close remaining proof debt and audit the full dependency chain. | Planned |
+| 14 | Consolidate compatibility modules, close any proof debt introduced by PR13, and audit the full dependency chain. | Planned |
 | 15 | Deliver verified versions of the same two examples, final checks, and documentation. | Planned |
 
 PR7 proves the open-substitution contracts, including replacements with free
@@ -162,8 +168,7 @@ for strictly smaller arguments. Ordinary and type closures retain their lexical
 recursion frame. A single proved
 [capture regression](./Demo/LambdaRKRecursionChecks.lean) delays a recursive call
 under both kinds of closure and invokes them from a caller with no recursion
-frame. The System F core theorem and recursion rules have no admitted dependencies;
-the combined full-language theorem awaits PR10–12.
+frame. These results now participate in the full-language fundamental theorem.
 
 PR9 connects the restored Spacer/Eldarica backend to the existing `map` example.
 [`MapVC.lean`](./Demo/LambdaRK/MapVC.lean) proves the constructor length equations,
@@ -175,12 +180,34 @@ certifies all scalar clauses with Lean, and proves the original generated VC.
 It does not supply a handwritten invariant or use trusted SMT axioms.
 
 Both real backends pass: Spacer finds a predicate equivalent to `input = output`;
-Eldarica finds `input = output ∧ input ≥ 0`. Individual local pipeline samples
+Eldarica finds `input = output ∧ input ≥ 0`. PR9's individual local pipeline samples
 were 97 ms for Spacer (20 ms solver) and 106 ms for Eldarica (37 ms solver).
 These are individual measurements, not benchmark averages, and exclude Lean
 startup and the separate lowering proof. The lowering is specific to `map`;
-PR13 generalizes it. This establishes solver viability, with source-program
-correctness still depending on PR11–12.
+PR13 generalizes it. `SolvedMap.map_total_correct` now also derives the source
+program's full semantic specification from the solver certificate via PR11–12.
+
+PR10 proves constructor and branch evaluation, field-environment transport,
+constructor equations, and strict decrease through nested patterns. Measures
+terminate on typed datatype values and satisfy their defining equations.
+Signature validation records constructor uniqueness and executable measure
+coverage/body certificates after its original diagnostic checks.
+
+PR11 proves subtyping locally from the emitted constraints, including dependent
+function contravariance, polymorphism, and outer refinements. Synthesis and
+checking soundness are proved together by fuel induction against the independent
+`HasType` rules. The proof exposed missing scope evidence: pattern rules now
+require scoped datatype arguments, each successful synthesis branch checks its
+result scope, and recursive checking validates expected-type scope. Generated
+subtyping witnesses avoid names already occurring in either type. Field and
+branch traversals use small helpers shared with their correctness arguments.
+
+PR12 combines those proofs with the full open fundamental theorem. The ordinary
+`Flex.VCG.LambdaRK` import exposes
+[`generated_total_correctness`](./Flex/VCG/LambdaRK/Correctness.lean), which
+constructs the datatype model and requires only successful generation and valid
+returned constraints. The solver-backed `map_total_correct` theorem and its
+axiom audit exercise this full dependency chain with both backends.
 
 There are two program examples in [`Demo/LambdaRK.lean`](./Demo/LambdaRK.lean):
 polymorphic identity (also instantiated at a polymorphic type), and polymorphic
@@ -192,7 +219,8 @@ Focused acceptance/rejection checks live in
 ```sh
 lake build Flex.VCG.LambdaRK Flex.VCG.LambdaRK.DraftTheorems \
   Demo.LambdaRKChecks Demo.LambdaRKRecursionChecks \
-  Demo.LambdaRK.Foundation Demo.LambdaRK.ProofAudit Demo.LambdaRK.MapVC
+  Demo.LambdaRK.Foundation Demo.LambdaRK.SoundnessChecks \
+  Demo.LambdaRK.ProofAudit Demo.LambdaRK.MapVC
 lake lean Demo/LambdaRK/SolvedMap.lean
 CHC_ELDARICA=/path/to/eld lake lean Demo/LambdaRK/SolvedMap.lean
 ```
@@ -200,9 +228,8 @@ CHC_ELDARICA=/path/to/eld lake lean Demo/LambdaRK/SolvedMap.lean
 The initial fragment uses ordered, nonmutual regular datatypes; recursive
 occurrences must preserve parameters, and nested recursion is rejected.
 Datatype type arguments are invariant. Measures use a restricted definition
-language with recursion only on direct recursive fields; its semantic totality
-proof is part of PR10. Recursive program calls require smaller pattern-bound
+language with recursion only on direct recursive fields, whose totality is proved. Recursive program calls require smaller pattern-bound
 variables. Source binders cannot shadow existing variables, and dependent
 arguments and matches use named values (literal arguments are also supported).
-Names starting with `$` are reserved. All required theorem dependencies must be
-proved before claiming that the full upgrade is verified.
+Names starting with `$` are reserved. Solver support remains narrower than the
+verified source language: generic datatype/measure lowering is still PR13.

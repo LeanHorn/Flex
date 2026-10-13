@@ -4,15 +4,14 @@ import Demo.LambdaRKRecursionChecks
 import Flex.VCG.LambdaRK.SyntaxEqualityLemmas
 
 /-!
-# Foundation and recursion proof audit
+# Frontend correctness proof audit
 
-This regression follows each completed PR7/PR8 theorem's transitive dependencies.
+This regression follows each completed PR7–12 theorem's transitive dependencies.
 It rejects `sorryAx`, native evaluation axioms, and any other axiom beyond Lean's
 standard propositional extensionality, choice, and quotient soundness.
 
-Importing `DraftTheorems` deliberately places the unfinished full-language
-statements in the same environment. The completed core and recursion results
-must remain independent of those later obligations. The actual solver-generated
+The original draft theorem names now delegate to completed proofs. This audit
+checks both their compatibility interfaces and the canonical full-language results. The actual solver-generated
 map proof has its own audit in `SolvedMap`; this file needs no external solver.
 -/
 namespace LambdaRK.ProofAudit
@@ -61,6 +60,20 @@ run_elab do
     ``Draft.semTyped_structRec,
     ``Draft.semTyped_recur,
     ``RecursionChecks.delayed_recursion_evaluates,
+    -- Full datatype, measure, checker, and end-to-end correctness.
+    ``measure_total,
+    ``semTyped_ctor,
+    ``semTyped_match,
+    ``fundamental_open,
+    ``fundamental_closed,
+    ``subtype_sound,
+    ``generator_sound,
+    ``checker_soundness,
+    ``generated_total_correctness,
+    ``Draft.measure_total,
+    ``Draft.checker_soundness,
+    ``Draft.fundamental_open,
+    ``Draft.vcgen_total_correctness,
     -- Executable comparisons used by the checker match syntactic equality.
     ``LTerm.equal_eq_true,
     ``Ty.equal_eq_true,

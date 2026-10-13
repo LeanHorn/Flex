@@ -7,19 +7,14 @@ import Flex.VCG.LambdaRK.SemanticsLemmas
 import Flex.VCG.LambdaRK.StructuralOrder
 import Flex.VCG.LambdaRK.DatatypeAdequacy
 import Flex.VCG.LambdaRK.DraftRecursion
+import Flex.VCG.LambdaRK.Correctness
 
 /-!
-# Remaining proof obligations for the λRK upgrade
+# Compatibility theorem names for the staged λRK development
 
-PR7 completed the binding, context, and datatype-model foundation. PR8 proved
-the semantic structural-recursion rules, including captured recursion frames.
-Those dependencies and the System F core theorem are now admission-free.
-
-This file deliberately retains the later-stage obligations for general measure
-termination, checker soundness, and the full-language fundamental theorem. It
-is not imported by the normal frontend. The final end-to-end theorem remains
-conditional on those unfinished PR10–12 arguments, even though datatype-model
-existence and the core/recursion cases are proved.
+The PR1–6 statements are now all proved. These wrappers retain their original
+interfaces; the canonical proofs live in `MeasureLemmas`, `CheckerSoundness`,
+`Fundamental`, and `Correctness`. There are no remaining admissions here.
 -/
 
 namespace LambdaRK.Draft
@@ -66,7 +61,8 @@ theorem measure_total
     (typed : (Ty.data declaration.datatype arguments).denote
       signature model assignment types environment value) :
     ∃ result, MeasureEval signature name value result := by
-  sorry
+  exact LambdaRK.measure_total signature model assignment validSignature adequate
+    types environment name declaration arguments value declared typed
 
 /-- PR11: semantic subtyping is transitive under the same context and facts. -/
 theorem subtyping_transitive
@@ -84,16 +80,17 @@ rules once its actual generated constraints are satisfied. -/
 theorem checker_soundness
     (signature : Signature) (model : DataModel) (assignment : KAssignment)
     (expression : Expr) (type : Ty) (constraint : Cstr)
-    (adequate : DatatypeAdequate signature model assignment)
+    (_adequate : DatatypeAdequate signature model assignment)
     (generated : generate signature expression type = .ok constraint)
     (satisfied : constraint.Valid signature assignment) :
     HasType signature model assignment {} [] expression type := by
-  sorry
+  exact LambdaRK.checker_soundness signature model assignment expression type constraint
+    generated satisfied
 
 /-- The open fundamental theorem introduced in PR4. `SemTyped` exposes static
 scope, typed environments, branch assumptions, and a recursion-frame induction
 hypothesis restricted to strict subvalues. PR6 establishes the System F cases;
-constructor/match and general measure cases complete this argument later. -/
+constructor/match, measure, and recursion cases now complete the argument. -/
 theorem fundamental_open
     (signature : Signature) (model : DataModel) (assignment : KAssignment)
     (validSignature : signature.validate = .ok ())
@@ -101,10 +98,10 @@ theorem fundamental_open
     (context : Context) (assumptions : List Atom) (expression : Expr) (type : Ty)
     (typed : HasType signature model assignment context assumptions expression type) :
     SemTyped signature model assignment context assumptions expression type := by
-  sorry
+  exact LambdaRK.fundamental_open signature model assignment validSignature adequate
+    context assumptions expression type typed
 
-/-- Closing the open theorem is proved; its dependency on the unfinished
-constructor/match/measure argument remains explicit. -/
+/-- Closed total correctness follows from the proved open fundamental theorem. -/
 theorem fundamental_closed
     (signature : Signature) (model : DataModel) (assignment : KAssignment)
     (validSignature : signature.validate = .ok ())

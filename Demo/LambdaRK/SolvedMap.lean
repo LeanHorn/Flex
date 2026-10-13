@@ -1,4 +1,5 @@
 import Demo.LambdaRK.MapVC
+import Flex.VCG.LambdaRK.Correctness
 import Flex.CHC
 
 /-!
@@ -8,7 +9,8 @@ Set `CHC_ELDARICA=/path/to/eld` to run the same check with Eldarica.
 
 The external solver chooses the predicate. Flex imports its model, Lean proves
 all scalar clauses, and `lowering_sound` proves the original generated VC.
-This is a solver viability gate, not yet source-program total correctness.
+The completed checker and fundamental theorem also establish source-program
+total correctness under the constructed datatype model.
 -/
 namespace LambdaRK.Examples.MapVC
 
@@ -48,8 +50,18 @@ theorem generated_valid : ∃ κ constraints,
   obtain ⟨candidate, certified⟩ := scalar_solved
   exact ⟨assignment candidate, raw, generated, lowering_sound candidate certified⟩
 
+/-- Both real solver paths now certify the source program's semantic type,
+including its impredicative function and length-preservation specification. -/
+theorem map_total_correct : ∃ κ value,
+    Eval signature [] none map value ∧
+      mapTy.denote signature (signature.datatypeModel κ) κ [] [] value := by
+  obtain ⟨κ, constraint, generated, valid⟩ := generated_valid
+  obtain ⟨value, evaluated, typed⟩ := generated_total_correctness
+    signature κ map mapTy constraint generated valid
+  exact ⟨κ, value, evaluated, typed⟩
+
 run_elab do
-  for theoremName in [``scalar_solved, ``generated_valid] do
+  for theoremName in [``scalar_solved, ``generated_valid, ``map_total_correct] do
     let axioms ← collectAxioms theoremName
     unless axioms.all (fun name => name == ``propext || name == ``Classical.choice ||
         name == ``Quot.sound) do

@@ -2,7 +2,7 @@ import Demo.LambdaRK
 
 /-!
 Focused executable checks for the draft frontend. These are implementation
-regressions, not replacements for the admitted soundness theorems.
+regressions complementing the proved soundness theorems.
 -/
 
 namespace LambdaRK.Checks

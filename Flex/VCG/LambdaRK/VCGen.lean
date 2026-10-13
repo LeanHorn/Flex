@@ -1,4 +1,4 @@
-import Flex.VCG.LambdaRK.Context
+import Flex.VCG.LambdaRK.Judgments
 
 /-!
 # Executable checking and Horn constraint generation
@@ -25,18 +25,64 @@ def bindConstraint (name : String) (ty : Ty) (body : Cstr) : Cstr :=
   .all name ty.sort (guardPredicates
     (ty.outerPredicates.map (Atom.substTerm valueName (.var name))) body)
 
-private def bindFields (fields : List (String × Ty)) (body : Cstr) : Cstr :=
+def bindFields (fields : List (String × Ty)) (body : Cstr) : Cstr :=
   fields.foldr (fun (name, ty) c => bindConstraint name ty c) body
 
-private def failUnless (condition : Bool) (message : String) : Except String Unit :=
+def failUnless (condition : Bool) (message : String) : Except String Unit :=
   if condition then .ok () else .error message
 
-private abbrev GenM := StateT Nat (Except String)
+abbrev GenM := StateT Nat (Except String)
 
-private def fresh : GenM String := do
+/-- Check a constructor's field telescope in source order. Kept separate from
+the expression recursion so its state and typing invariants have a direct
+structural induction. -/
+def checkFieldsWith (checkField : Expr → Ty → GenM Cstr) :
+    List Expr → List Ty → GenM Cstr
+  | [], [] => pure .truth
+  | field :: fields, type :: types => do
+    let head ← checkField field type
+    let tail ← checkFieldsWith checkField fields types
+    return head.andThen tail
+  | _, _ => throw "constructor field telescope has the wrong length"
+
+def fresh : GenM String := do
   let n ← get
   set (n + 1)
   return s!"$g{n}"
+
+/-- Keep the usual generated name when possible, and avoid capture even when
+subtyping is called on types containing generated logical names. -/
+def freshAvoid (avoid : List String) : GenM String := do
+  let candidate ← fresh
+  return if (valueName :: avoid).contains candidate then
+    freshTermName candidate (valueName :: avoid) else candidate
+
+/-- Observations used in dependent application may not refer to the reserved
+refinement witness. Source variables satisfy this check. -/
+def observeFresh (expression : Expr) : Except String LTerm := do
+  let term ← observe expression
+  failUnless (!term.freeVars.contains valueName) "observation captures the refinement witness"
+  return term
+
+/-- Check structural scope at recursive checker boundaries. -/
+def checkScope (context : Context) (type : Ty) : Except String Unit :=
+  failUnless (type.scopeCheck context) "inferred or expected type escapes its context"
+
+/-- Attach the outer refinement implication to a structural subtype constraint. -/
+def finishSubtype (source target : Ty) (structural : Cstr) : GenM Cstr := do
+  if target.outerPredicates.isEmpty then return structural
+  let witness ← freshAvoid (source.allTermNames ++ target.allTermNames)
+  let assumptions := source.outerPredicates.map (Atom.substTerm valueName (.var witness))
+  let goals := target.outerPredicates.map fun p =>
+    Cstr.head (Atom.substTerm valueName (.var witness) p)
+  return structural.andThen (.all witness source.sort
+    (guardPredicates assumptions (goals.foldr Cstr.andThen .truth)))
+
+/-- Finish a synthesis branch with checked structural scope. Kept as a
+separate computation so an early `return` cannot bypass the certificate. -/
+def finishSynth (context : Context) (output : Cstr × Ty) : GenM (Cstr × Ty) := do
+  checkScope context output.2
+  return output
 
 /-- Structural subtyping plus Horn obligations for the outer refinements.
 Type arguments of datatypes are invariant in this draft. -/
@@ -55,20 +101,31 @@ def subtype (sig : Signature) (ctx : Context) : Nat → Ty → Ty → GenM Cstr
         pure Cstr.truth
       | .arrow x a b, .arrow y a' b' =>
         let pre ← subtype sig ctx fuel a' a
-        let name ← fresh
+        let name ← freshAvoid (source.allTermNames ++ target.allTermNames)
         let next := { ctx with vars := (name, a') :: ctx.vars }
         let post ← subtype sig next fuel
           (Ty.substTerm x (.var name) b) (Ty.substTerm y (.var name) b')
         pure (pre.andThen (bindConstraint name a' post))
       | .all body, .all body' => subtype sig ctx.underType fuel body body'
       | _, _ => throw "source and expected type have different shapes"
-    if target.outerPredicates.isEmpty then return structural
-    let witness ← fresh
-    let assumptions := source.outerPredicates.map (Atom.substTerm valueName (.var witness))
-    let goals := target.outerPredicates.map fun p =>
-      Cstr.head (Atom.substTerm valueName (.var witness) p)
-    return structural.andThen (.all witness source.sort
-      (guardPredicates assumptions (goals.foldr Cstr.andThen .truth)))
+    finishSubtype source target structural
+
+/-- Check each pattern branch with a supplied recursive body checker. The
+shared context operations are also used by the independent typing rules. -/
+def checkBranchesWith (checkBody : Context → Expr → Ty → GenM Cstr)
+    (context : Context) (scrutinee : String) (data : DataDecl) (arguments : List Ty)
+    (expected : Ty) : List (String × List String × Expr) → GenM Cstr
+  | [] => pure .truth
+  | (name, names, body) :: rest => do
+    let some ctor := data.ctors.find? (fun ctor => ctor.name == name)
+      | throw s!"constructor '{name}' does not belong to '{data.name}'"
+    failUnless (names.length == ctor.fields.length) "pattern has the wrong number of fields"
+    let fields := names.zip (ctor.fields.map (Ty.instantiateParams arguments))
+    let next ← extendFields context fields
+    let bodyC ← checkBody (markSmaller next scrutinee fields) body expected
+    let restC ← checkBranchesWith checkBody context scrutinee data arguments expected rest
+    let equation := Atom.theory (.eq (.var scrutinee) (.ctor name (names.map LTerm.var)))
+    return (bindFields fields (.guard equation bodyC)).andThen restC
 
 mutual
   /-- Fuel-indexed synthesis. The public equations support executable-generator
@@ -79,32 +136,32 @@ mutual
       match expression with
       | .var name =>
         let some ty := ctx.vars.lookup name | throw s!"unbound term variable '{name}'"
-        return (.truth, selfType name ty)
-      | .int n => return (.truth, .refine .int (.theory (.eq (.var valueName) (.int n))))
-      | .bool b => return (.truth, .refine .bool (.theory (.eq (.var valueName) (.bool b))))
+        finishSynth ctx (.truth, selfType name ty)
+      | .int n => finishSynth ctx (.truth, .refine .int (.theory (.eq (.var valueName) (.int n))))
+      | .bool b => finishSynth ctx (.truth, .refine .bool (.theory (.eq (.var valueName) (.bool b))))
       | .ann e ty =>
         wfTy sig ctx 512 ty
         let c ← checkFuel sig ctx fuel e ty
-        return (c, ty)
+        finishSynth ctx (c, ty)
       | .lam name domain body =>
         wfTy sig ctx 512 domain
         let next ← ctx.add name domain
         let (c, result) ← synthFuel sig next fuel body
-        return (bindConstraint name domain c, .arrow name domain result)
+        finishSynth ctx (bindConstraint name domain c, .arrow name domain result)
       | .tyLam body =>
         let (c, ty) ← synthFuel sig ctx.underType fuel body
-        return (c, .all ty)
+        finishSynth ctx (c, .all ty)
       | .tyApp function argument =>
         wfTy sig ctx 512 argument
         let (c, ty) ← synthFuel sig ctx fuel function
         let .all body := ty.outerBase | throw "type application expects a polymorphic function"
-        return (c, Ty.substType argument 0 body)
+        finishSynth ctx (c, Ty.substType argument 0 body)
       | .app function argument =>
-        let observation ← observe argument
+        let observation ← observeFresh argument
         let (c, ty) ← synthFuel sig ctx fuel function
         let .arrow name domain result := ty.outerBase | throw "application expects a function"
         let pre ← checkFuel sig ctx fuel argument domain
-        return (c.andThen pre, Ty.substTerm name observation result)
+        finishSynth ctx (c.andThen pre, Ty.substTerm name observation result)
       | .letE name value body =>
         let (c, ty) ← synthFuel sig ctx fuel value
         let next ← ctx.add name ty
@@ -113,18 +170,18 @@ mutual
         -- of scope. Annotate the let expression when it needs such elimination.
         failUnless (!(result.freeVars.contains name))
           "inferred let result escapes its local binder; add an outer type annotation"
-        return (c.andThen (bindConstraint name ty d), result)
+        finishSynth ctx (c.andThen (bindConstraint name ty d), result)
       | .ctor name arguments fields =>
         let some (data, ctor) := sig.findCtor name | throw s!"unknown constructor '{name}'"
         failUnless (arguments.length == data.params) s!"constructor '{name}' has wrong type arity"
-        for argument in arguments do wfTy sig ctx 512 argument
+        let _ ← (arguments.forM (fun argument => do
+          wfTy sig ctx 512 argument
+          pure PUnit.unit) : Except String PUnit)
         failUnless (fields.length == ctor.fields.length) s!"constructor '{name}' has wrong field arity"
-        let mut c := Cstr.truth
-        let mut observed := []
-        for field in fields, expected in ctor.fields do
-          c := c.andThen (← checkFuel sig ctx fuel field (Ty.instantiateParams arguments expected))
-          observed := observed ++ [← observe field]
-        return (c, .refine (.data data.name arguments)
+        let c ← checkFieldsWith (checkFuel sig ctx fuel) fields
+          (ctor.fields.map (Ty.instantiateParams arguments))
+        let observed ← (fields.mapM observe : Except String (List LTerm))
+        finishSynth ctx (c, .refine (.data data.name arguments)
           (.theory (.eq (.var valueName) (.ctor name observed))))
       | .structRec name domain result body =>
         wfTy sig ctx 512 domain
@@ -134,26 +191,27 @@ mutual
         let next := { next with recursion := some { binder := name, domain, codomain := result }
                                 smaller := [] }
         let c ← checkFuel sig next fuel body result
-        return (bindConstraint name domain c, .arrow name domain result)
+        finishSynth ctx (bindConstraint name domain c, .arrow name domain result)
       | .recur argument =>
         let some recursion := ctx.recursion | throw "recursive call outside structural recursion"
         let .var name := argument | throw "recursive argument must be a smaller pattern variable"
         failUnless (ctx.smaller.contains name) "recursive call is not on a structurally smaller field"
         let c ← checkFuel sig ctx fuel argument recursion.domain
-        return (c, Ty.substTerm recursion.binder (.var name) recursion.codomain)
+        finishSynth ctx (c, Ty.substTerm recursion.binder (.var name) recursion.codomain)
       | .measure name argument =>
         let observed ← observe argument
         let (c, ty) ← synthFuel sig ctx fuel argument
         let some measure := sig.findMeasure name | throw s!"unknown measure '{name}'"
         let .data data _ := ty.outerBase | throw "measure argument must have a datatype type"
         failUnless (data == measure.datatype) s!"measure '{name}' has the wrong argument datatype"
-        return (c, .refine .int (.theory (.eq (.var valueName) (.measure name observed))))
+        finishSynth ctx (c, .refine .int (.theory (.eq (.var valueName) (.measure name observed))))
       | .matchE _ _ => throw "pattern matching needs an expected result type or annotation"
 
   /-- Fuel-indexed checking, exposed alongside `synthFuel` for equation proofs. -/
   def checkFuel (sig : Signature) (ctx : Context) : Nat → Expr → Ty → GenM Cstr
     | 0, _, _ => throw "expression exceeds the checker depth limit"
     | fuel + 1, expression, expected => do
+      checkScope ctx expected
       match expression, expected.outerBase with
       | .lam name domain body, .arrow binder targetDomain result =>
         wfTy sig ctx 512 domain
@@ -181,24 +239,9 @@ mutual
         failUnless (names.length == data.ctors.length && names.eraseDups.length == names.length &&
           data.ctors.all (fun ctor => names.contains ctor.name))
           "match must cover every constructor exactly once"
-        let mut c := scrutineeC
-        for (ctorName, binders, body) in branches do
-          let some ctor := data.ctors.find? (fun ctor => ctor.name == ctorName)
-            | throw s!"constructor '{ctorName}' does not belong to '{name}'"
-          failUnless (binders.length == ctor.fields.length) "pattern has the wrong number of fields"
-          let fields := binders.zip (ctor.fields.map (Ty.instantiateParams arguments))
-          let mut next := ctx
-          for (binder, ty) in fields do next ← next.add binder ty
-          if let some recursion := ctx.recursion then
-            if scrutineeName == recursion.binder || ctx.smaller.contains scrutineeName then
-              for (binder, ty) in fields do
-                if ty.outerBase == recursion.domain.outerBase then
-                  next := { next with smaller := binder :: next.smaller }
-          let bodyC ← checkFuel sig next fuel body expected
-          let equation := Atom.theory (.eq (.var scrutineeName)
-            (.ctor ctorName (binders.map LTerm.var)))
-          c := c.andThen (bindFields fields (.guard equation bodyC))
-        return c
+        let branchesC ← checkBranchesWith (checkFuel sig · fuel) ctx scrutineeName
+          data arguments expected branches
+        return scrutineeC.andThen branchesC
       | _, _ =>
         let (c, actual) ← synthFuel sig ctx fuel expression
         let d ← subtype sig ctx fuel actual expected

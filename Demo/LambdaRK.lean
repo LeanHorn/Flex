@@ -4,7 +4,8 @@ import Flex.VCG.LambdaRK.VCGen
 # The two λRK development examples
 
 These examples run the draft checker and display its generated constraints.
-They do not invoke the admitted metatheory or claim an end-to-end safety proof.
+This file displays generated constraints; `Demo.LambdaRK.SolvedMap` also proves
+source-program total correctness using a solver certificate.
 The same two programs are intended to accompany the later proof PRs.
 -/
 

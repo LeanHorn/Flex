@@ -100,6 +100,7 @@ mutual
             (.theory (.eq (.var valueName) (.ctor name observed))))
     | matchE {context assumptions scrutinee name arguments data branches result} :
         result.InScope context →
+        (∀ argument ∈ arguments, argument.InScope context) →
         HasType signature model assignment context assumptions (.var scrutinee) (.data name arguments) →
         signature.findData name = some data →
         (branches.map (·.1)).length = data.ctors.length →

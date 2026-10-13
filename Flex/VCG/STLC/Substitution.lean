@@ -487,14 +487,16 @@ def Base.substB (σ : BSubst) : Base → Base
   | .tbvar k => σ.bv k
   | .tfvar a => σ.fv a
 
-/-- Re-read a refinement-logic value of sort `b` at sort `b'`, through its
-    runtime representation. -/
-@[reducible] def Base.recast (b b' : Base) (c : b.interp) : b'.interp :=
-  Val.proj b' (Val.inj b c)
+/-- Literals only exist at `Int`/`Bool`, which sort substitutions fix. -/
+@[reducible] def Base.constSubst (σ : BSubst) : (b : Base) → b.interp → (b.substB σ).interp
+  | .int,     n => n
+  | .bool,    c => c
+  | .tbvar _, e => e.elim
+  | .tfvar _, e => e.elim
 
 /-- Retype a term along a sort substitution. -/
 def Term.substB (σ : BSubst) : {b : Base} → Term b → Term (b.substB σ)
-  | _, .const b c => .const _ (Base.recast b (b.substB σ) c)
+  | _, .const b c => .const _ (Base.constSubst σ b c)
   | _, .bvar _ k  => .bvar _ k
   | _, .fvar _ x  => .fvar _ x
   | _, .add t₁ t₂ => .add (Term.substB σ t₁) (Term.substB σ t₂)
@@ -518,49 +520,11 @@ def Refinement.substB (σ : BSubst) : Refinement → Refinement
   | .kapp kn args => .kapp kn (args.map (fun a => ⟨a.1.substB σ, a.2.substB σ⟩))
   | .conj r₁ r₂   => .conj (r₁.substB σ) (r₂.substB σ)
 
-/-- Re-reading a value through the type-variable code changes nothing at any
-    sort (closures all collapse to `other`, and every sort's projection treats
-    closures alike). -/
-@[simp] theorem Val.proj_toVal_toBVal (b' : Base) (w : Val) :
-    Val.proj b' (BVal.toVal (Val.toBVal w)) = Val.proj b' w := by
-  cases w <;> cases b' <;> rfl
+@[simp] theorem Val.proj_inj (s : BSort) (v : s.ty) : Val.proj s (Val.inj s v) = v := by
+  cases s <;> rfl
 
-theorem Base.recast_proj (σ : BSubst) (b : Base) (w : Val) :
-    Base.recast b (b.substB σ) (Val.proj b w) = Val.proj (b.substB σ) w := by
-  cases b with
-  | int  => cases w <;> rfl
-  | bool => cases w <;> rfl
-  | tbvar k => simp [Base.recast, Base.substB]
-  | tfvar a => simp [Base.recast, Base.substB]
-
-@[simp] theorem Base.recast_int (n : Int) : Base.recast .int .int n = n := rfl
-@[simp] theorem Base.recast_bool (c : Bool) : Base.recast .bool .bool c = c := rfl
-
-/-- Retyping is semantically a recast: unconditionally, at the `Term` level.
-    (Its `Formula`-level counterpart needs the recast to be injective on the
-    values involved, i.e. that type-variable-sorted slots hold values of the
-    target sort.) -/
-theorem Term.interp_substB (σ : BSubst) (γ : REnv) :
-    ∀ {b : Base} (t : Term b),
-      Term.interp γ (t.substB σ) = Base.recast b (b.substB σ) (Term.interp γ t) := by
-  intro b t
-  induction t with
-  | const b c => rfl
-  | bvar b k =>
-    simp only [Term.substB, Term.interp, REnv.getBV]
-    exact (Base.recast_proj σ b _).symm
-  | fvar b x =>
-    simp only [Term.substB, Term.interp, REnv.get]
-    exact (Base.recast_proj σ b _).symm
-  | add _ _ ih₁ ih₂ =>
-    simp only [Base.substB] at ih₁ ih₂
-    simp only [Term.substB, Term.interp, ih₁, ih₂, Base.substB]
-  | not _ ih =>
-    simp only [Base.substB] at ih
-    simp only [Term.substB, Term.interp, ih, Base.substB]
-  | and _ _ ih₁ ih₂ =>
-    simp only [Base.substB] at ih₁ ih₂
-    simp only [Term.substB, Term.interp, ih₁, ih₂, Base.substB]
+theorem Val.inj_injective (s : BSort) {v w : s.ty} : Val.inj s v = Val.inj s w ↔ v = w := by
+  cases s <;> simp
 
 @[simp] theorem Term.fv_substB (σ : BSubst) : ∀ {b : Base} (t : Term b),
     (t.substB σ).fv = t.fv := by
@@ -1394,9 +1358,9 @@ def EVar.fresh (L : List EVar) : EVar :=
 
 /-! ## 10. REnv helpers -/
 
-@[simp] theorem REnv.get_update_same (b : Base) (γ : REnv) (x : EVar) (v : b.interp) :
+@[simp] theorem REnv.get_update_same (b : Base) (γ : REnv) (x : EVar) (v : b.sem γ.sorts) :
     REnv.get b (γ.update b x v) x = v := by
-  cases b <;> (try cases v) <;> simp [REnv.get]
+  simp [REnv.get, REnv.update, REnv.write, REnv.lookup]
 
 /-! ## 11. EVar.fresh proof -/
 
@@ -1824,6 +1788,7 @@ theorem REnv.write_idem (γ : REnv) (x : EVar) : γ.write x (γ.map x) = γ := b
     · subst hxy; simp
     · simp [hxy]
   · rfl
+  · rfl
 
 /-- The closing substitution depends only on `γ` over the free names of `e`. -/
 theorem Exp.substEnv_congr (e : Exp) (γ₁ γ₂ : REnv)
@@ -2047,10 +2012,10 @@ theorem Term.interp_openBVar {b : Base} (x : EVar) (w : Val) :
       by_cases hjk : j = k
       · subst hjk
         simp only [Term.openBVar, Term.interp, REnv.get, REnv.lookup,
-          REnv.write, beq_self_eq_true, if_true, REnv.getBV, REnv.insertBV_bv,
+          REnv.write, beq_self_eq_true, if_true, REnv.getBV, REnv.insertBV_bv, REnv.insertBV_sorts,
           List.getElem?_insertIdx_self, hk, if_true, Option.getD_some]
       · simp only [Term.openBVar, if_neg hjk, Term.interp, REnv.getBV,
-          REnv.insertBV_bv]
+          REnv.insertBV_bv, REnv.insertBV_sorts]
         by_cases hlt : k < j
         · rw [if_pos hlt, Term.interp, REnv.getBV,
             List.getElem?_insertIdx_of_gt hlt]
@@ -2060,7 +2025,8 @@ theorem Term.interp_openBVar {b : Base} (x : EVar) (w : Val) :
       intro γ k _ hx
       simp only [Term.fv, List.mem_singleton] at hx
       simp only [Term.openBVar, Term.interp, REnv.get, REnv.lookup, REnv.write,
-        REnv.insertBV_map, beq_eq_false_iff_ne.mpr hx, Bool.false_eq_true, if_false]
+        REnv.insertBV_map, REnv.insertBV_sorts, beq_eq_false_iff_ne.mpr hx, Bool.false_eq_true,
+        if_false]
   | add t₁ t₂ ih₁ ih₂ =>
       intro γ k hk hx
       simp only [Term.fv, List.mem_append, not_or] at hx
@@ -2088,12 +2054,14 @@ theorem Formula.interp_openBVar (x : EVar) (w : Val) :
       simp only [Formula.openBVar, Formula.interp,
         Term.interp_openBVar x w t₁ γ k hk hx.1,
         Term.interp_openBVar x w t₂ γ k hk hx.2]
+      exact Iff.rfl
   | leq _ t₁ t₂ =>
       intro γ k hk hx
       simp only [Formula.fv, List.mem_append, not_or] at hx
       simp only [Formula.openBVar, Formula.interp,
         Term.interp_openBVar x w t₁ γ k hk hx.1,
         Term.interp_openBVar x w t₂ γ k hk hx.2]
+      exact Iff.rfl
   | and φ₁ φ₂ ih₁ ih₂ =>
       intro γ k hk hx
       simp only [Formula.fv, List.mem_append, not_or] at hx
@@ -2119,12 +2087,12 @@ theorem Formula.interp_openBVar (x : EVar) (w : Val) :
         refine ⟨v, ?_⟩
         rw [REnv.write_push] at hv
         rw [REnv.push_insertBV_comm]
-        exact (ih (γ.push (Val.inj b v)) (k + 1) (by simpa using Nat.succ_le_succ hk) hx).mp hv
+        exact (ih (γ.push (Val.inj (b.resolve γ.sorts) v)) (k + 1) (by simpa using Nat.succ_le_succ hk) hx).mp hv
       · rintro ⟨v, hv⟩
         refine ⟨v, ?_⟩
         rw [REnv.write_push]
         rw [REnv.push_insertBV_comm] at hv
-        exact (ih (γ.push (Val.inj b v)) (k + 1) (by simpa using Nat.succ_le_succ hk) hx).mpr hv
+        exact (ih (γ.push (Val.inj (b.resolve γ.sorts) v)) (k + 1) (by simpa using Nat.succ_le_succ hk) hx).mpr hv
   | all b φ ih =>
       intro γ k hk hx
       simp only [Formula.fv] at hx
@@ -2134,12 +2102,12 @@ theorem Formula.interp_openBVar (x : EVar) (w : Val) :
         rw [REnv.push_insertBV_comm]
         have := h v
         rw [REnv.write_push] at this
-        exact (ih (γ.push (Val.inj b v)) (k + 1) (by simpa using Nat.succ_le_succ hk) hx).mp this
+        exact (ih (γ.push (Val.inj (b.resolve γ.sorts) v)) (k + 1) (by simpa using Nat.succ_le_succ hk) hx).mp this
       · intro h v
         rw [REnv.write_push]
         have := h v
         rw [REnv.push_insertBV_comm] at this
-        exact (ih (γ.push (Val.inj b v)) (k + 1) (by simpa using Nat.succ_le_succ hk) hx).mpr this
+        exact (ih (γ.push (Val.inj (b.resolve γ.sorts) v)) (k + 1) (by simpa using Nat.succ_le_succ hk) hx).mpr this
 
 /-- Model-level bridge (refinement level): interpreting the `openBVar`-opened
     refinement against a `write`-updated name-map slot equals interpreting the
@@ -2161,9 +2129,10 @@ theorem Refinement.interp_openBVar (κ : KEnv) (r : Refinement) (γ : REnv)
       exact Formula.interp_openBVar x w φ γ k hk (by simpa [Refinement.fv] using hx)
   | kapp kn args =>
       have hmap :
-          (List.map (fun a => Base.canonArg a.1 (Term.interp (γ.write x w) a.2))
+          (List.map (fun a => Base.canonArg (γ.write x w).sorts a.1 (Term.interp (γ.write x w) a.2))
             (List.map (fun a => (⟨a.1, Term.openBVar k x a.2⟩ : Σ b : Base, Term b)) args))
-          = List.map (fun a => Base.canonArg a.1 (Term.interp (γ.insertBV k w) a.2)) args := by
+          = List.map (fun a => Base.canonArg (γ.insertBV k w).sorts a.1
+              (Term.interp (γ.insertBV k w) a.2)) args := by
         rw [List.map_map]
         apply List.map_congr_left
         intro a ha
@@ -2172,6 +2141,7 @@ theorem Refinement.interp_openBVar (κ : KEnv) (r : Refinement) (γ : REnv)
           exact fun h => hx (List.mem_flatMap.mpr ⟨a, ha, h⟩)
         have h := Term.interp_openBVar x w a.2 γ k hk hxa
         simp only [Function.comp_apply, h]
+        rfl
       simp only [Refinement.openBVar, Refinement.interp, hmap]
 
 /-! ## Datatype instantiation

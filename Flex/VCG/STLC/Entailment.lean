@@ -84,15 +84,15 @@ def Entail (κ : KEnv) (Γ : TEnv) (c : REnv → Prop) : Prop :=
     `γ.lookup x = Val.inj b (get b γ x)`. Bridges `ModelsEnv`'s `push (γ.lookup x)`
     to the `push (Val.inj b v)` form the `∀ v` consumers (`Entail.ext`, `implyBind`)
     expect. -/
+theorem Val.eq_inj_proj {s : BSort} {v : Val} (h : Val.HasSort s v) :
+    v = Val.inj s (Val.proj s v) := by
+  cases s with
+  | int  => obtain ⟨n, rfl⟩ := h; rfl
+  | bool => obtain ⟨c, rfl⟩ := h; rfl
+
 theorem REnv.lookup_eq_inj_get (b : Base) (γ : REnv) (x : EVar) (hb : γ.HasBase x b) :
-    γ.lookup x = Val.inj b (REnv.get b γ x) := by
-  cases b with
-  | int  => obtain ⟨n, hn⟩ := hb; simp [REnv.lookup, REnv.get, hn]
-  | bool => obtain ⟨c, hc⟩ := hb; simp [REnv.lookup, REnv.get, hc]
-  | tbvar _ | tfvar _ =>
-    rcases hb with ⟨n, hn⟩ | ⟨c, hc⟩
-    · simp [REnv.lookup, REnv.get, hn]
-    · simp [REnv.lookup, REnv.get, hc]
+    γ.lookup x = Val.inj (b.resolve γ.sorts) (REnv.get b γ x) :=
+  Val.eq_inj_proj hb
 
 /-- Updating slot `x` with its current value is the identity — provided the cell
     actually holds a base-`b` value (otherwise the read defaults and the write
@@ -108,6 +108,7 @@ theorem REnv.update_self (b : Base) (γ : REnv) (x : EVar) (hb : γ.HasBase x b)
       exact h.symm
     · simp [hxy]
   · rfl
+  · rfl
 
 /-- ENT-EMP: `∀ γ, c γ ⟹ κ; ∅ ⊢ c`. -/
 @[simp]
@@ -120,8 +121,9 @@ theorem Entail.emp {κ : KEnv} {c : REnv → Prop} (h : ∀ γ, c γ) :
     Instantiate with `REnv.get b γ x`, then close by `REnv.update_self`. -/
 theorem Entail.ext {κ : KEnv} {Γ : TEnv} {x : EVar} {t : Ty} {b : Base} {r : Refinement}
     {c : REnv → Prop} (ht : t.hyp? = some (b, r))
-    (h : Entail κ Γ (fun γ => ∀ v : b.interp,
-              Refinement.interp κ r (γ.push (Val.inj b v)) → c (REnv.update b γ x v))) :
+    (h : Entail κ Γ (fun γ => ∀ v : b.sem γ.sorts,
+              Refinement.interp κ r (γ.push (Val.inj (b.resolve γ.sorts) v)) →
+                c (REnv.update b γ x v))) :
     Entail κ ((x, t) :: Γ) c := by
   intro γ hm
   obtain ⟨⟨hb, hr⟩, hΓ⟩ := (ModelsEnv.cons_some ht).mp hm

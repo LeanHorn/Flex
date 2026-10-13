@@ -45,78 +45,72 @@ inductive Base where
   | tfvar : TVar → Base
   deriving Repr, DecidableEq
 
-/-- The refinement-logic domain of a type-variable sort. Only `B`-kinded type
-    variables are ever compared in refinements, and they only ever hold ints or
-    bools, so this code type (with closures collapsed to `other`) is faithful.
-    It is defined here, before `Val`, to break the `Val → Exp → Ty → Term`
-    definitional cycle. -/
-inductive BVal where
-  | int   : Int → BVal
-  | bool  : Bool → BVal
-  | other : BVal
+/-! ## Sorts and their carriers
+
+  `Int` and `Bool` are the base sorts. A `B`-kinded type variable stands for one
+  of them, so a type-variable sort is interpreted *by* the base it stands for:
+  a sort assignment `σ : SortEnv` (carried by the refinement environment, see
+  `REnv.sorts`) resolves every sort to an `Int` or a `Bool` (`Base.resolve`),
+  and a term of sort `b` denotes a value of `(b.resolve σ).ty`. So refinements
+  (and verification conditions) at a type-variable sort are ordinary `Int` or
+  `Bool` statements, once the sort is known. Comparison is polymorphic, like
+  equality: `≤` at a sort is `≤` at the base it resolves to (`BSort.le`); on
+  `Bool`, `false < true`. -/
+
+/-- The bases a sort can resolve to. -/
+inductive BSort where
+  | int  : BSort
+  | bool : BSort
   deriving Repr, DecidableEq
 
+/-- The carrier of a base. -/
+@[simp, reducible] def BSort.ty : BSort → Type
+  | .int  => Int
+  | .bool => Bool
+
+@[simp, reducible] def BSort.toBase : BSort → Base
+  | .int  => .int
+  | .bool => .bool
+
+/-- The order at a base; on `Bool` it is implication (`false < true`). -/
+@[simp, reducible] def BSort.le : (s : BSort) → s.ty → s.ty → Prop
+  | .int,  x, y => x ≤ y
+  | .bool, x, y => x = true → y = true
+
+instance (s : BSort) : DecidableRel (BSort.le s) := fun x y => by
+  cases s <;> simp only [BSort.le] <;> infer_instance
+
+/-- A sort assignment: the base each type variable stands for (the bound ones
+    by de Bruijn index, the free ones by name). -/
+structure SortEnv where
+  bv : List BSort := []
+  fv : TVar → BSort := fun _ => .int
+
+/-- The base a sort stands for under `σ`. -/
+@[simp, reducible] def Base.resolve (σ : SortEnv) : Base → BSort
+  | .int     => .int
+  | .bool    => .bool
+  | .tbvar j => σ.bv.getD j .int
+  | .tfvar a => σ.fv a
+
+/-- The carrier of sort `b` under `σ`. -/
+@[simp, reducible] def Base.sem (σ : SortEnv) (b : Base) : Type := (b.resolve σ).ty
+
+/-- Literal constants exist at `Int` and `Bool` only (a type-variable sort has
+    no literals). -/
 @[simp, reducible]
 def Base.interp : Base → Type
   | .int     => Int
   | .bool    => Bool
-  | .tbvar _ => BVal
-  | .tfvar _ => BVal
+  | .tbvar _ => Empty
+  | .tfvar _ => Empty
 
-/-! ## Ordered sorts
-
-  Every base sort is ordered, and comparison is polymorphic, like equality. The
-  order on the type-variable domain `BVal` is one fixed total order that
-  restricts to `≤` on integers and to `false < true` on booleans (the cross-tag
-  cases only make it total; a `B`-kinded variable holds values of one base sort,
-  so they are never observed). Because the per-sort orders are restrictions of
-  this one order, instantiating a type variable never changes the meaning of a
-  comparison — and since base values carry their tag at runtime, the operational
-  comparison needs no type information (`Val.leb?`). -/
-
-def BVal.le : BVal → BVal → Prop
-  | .int a,  .int b  => a ≤ b
-  | .bool a, .bool b => a ≤ b
-  | .int _,  _       => True
-  | .bool _, .int _  => False
-  | .bool _, .other  => True
-  | .other,  .other  => True
-  | .other,  _       => False
-
-instance : DecidableRel BVal.le := fun a b => by
-  cases a <;> cases b <;> simp only [BVal.le] <;> infer_instance
-
-/-! `BVal.le` is a total order — the laws the solver uses for comparisons at a
-    type-variable sort. -/
-
-@[simp] theorem BVal.le_refl (a : BVal) : a.le a := by
-  cases a <;> simp [BVal.le]
-
-theorem BVal.le_trans {a b c : BVal} (h₁ : a.le b) (h₂ : b.le c) : a.le c := by
-  cases a <;> cases b <;> cases c <;> simp_all [BVal.le]
-  · omega
-  · rename_i x y z; cases x <;> cases y <;> cases z <;> simp_all
-
-theorem BVal.le_total (a b : BVal) : a.le b ∨ b.le a := by
-  cases a <;> cases b <;> simp [BVal.le]
-  · omega
-  · rename_i x y; cases x <;> cases y <;> simp
-
-theorem BVal.le_antisymm {a b : BVal} (h₁ : a.le b) (h₂ : b.le a) : a = b := by
-  cases a <;> cases b <;> simp_all [BVal.le]
-  · omega
-  · rename_i x y; cases x <;> cases y <;> simp_all <;> contradiction
-
-theorem BVal.le_of_not_le {a b : BVal} (h : ¬ a.le b) : b.le a :=
-  (BVal.le_total a b).resolve_left h
-
-/-- The order at each sort. -/
-@[simp, reducible]
-def Base.le : (b : Base) → b.interp → b.interp → Prop
-  | .int,     x, y => x ≤ y
-  | .bool,    x, y => x ≤ y
-  | .tbvar _, x, y => BVal.le x y
-  | .tfvar _, x, y => BVal.le x y
+/-- A literal, read at its sort. -/
+@[simp, reducible] def Base.ofConst (σ : SortEnv) : (b : Base) → b.interp → b.sem σ
+  | .int,     n => n
+  | .bool,    c => c
+  | .tbvar _, e => e.elim
+  | .tfvar _, e => e.elim
 
 -- `REnv` (the runtime environment) is a single `EVar → Val` map; it is defined
 -- *after* `Val` below, since its operations mention `Val`.
@@ -422,42 +416,34 @@ def Exp.openVal (k : Nat) (v : Val) : Exp → Exp := Exp.openExp k v.toExp
 structure REnv where
   map : EVar → Val
   bv  : List Val := []
+  /-- The base each type-variable sort stands for. -/
+  sorts : SortEnv := {}
 
-@[simp] def REnv.empty : REnv := ⟨fun _ => .iconst 0, []⟩
+@[simp] def REnv.empty : REnv := { map := fun _ => .iconst 0 }
 
-/-- Code a runtime value into the type-variable sort's domain. -/
-@[simp, reducible]
-def Val.toBVal : Val → BVal
-  | .iconst n => .int n
-  | .bconst c => .bool c
-  | _         => .other
+/-- Reinterpret the type-variable sorts. -/
+@[simp, reducible] def REnv.withSorts (γ : REnv) (σ : SortEnv) : REnv := { γ with sorts := σ }
 
-/-- Decode a type-variable-sort value. `other` decodes to a (dummy) closure,
-    so that `toBVal (toVal c) = c` for every code `c`. -/
-@[simp, reducible]
-def BVal.toVal : BVal → Val
-  | .int n  => .iconst n
-  | .bool c => .bconst c
-  | .other  => .clos .unreach
-
-/-- Project a stored `Val` to a base-typed value. The mismatch cases
+/-- Project a stored `Val` to a value of base `s`. The mismatch cases
     (`0`/`false`) are unreachable for well-typed reads. -/
 @[simp, reducible]
-def Val.proj : (b : Base) → Val → b.interp
+def Val.proj : (s : BSort) → Val → s.ty
   | .int,  .iconst n => n
   | .bool, .bconst c => c
   | .int,  _ => 0
   | .bool, _ => false
-  | .tbvar _, v => Val.toBVal v
-  | .tfvar _, v => Val.toBVal v
 
-/-- Inject a base-typed value into `Val`. -/
+/-- Inject a value of base `s` into `Val`. -/
 @[simp, reducible]
-def Val.inj : (b : Base) → b.interp → Val
+def Val.inj : (s : BSort) → s.ty → Val
   | .int,  n => .iconst n
   | .bool, c => .bconst c
-  | .tbvar _, v => BVal.toVal v
-  | .tfvar _, v => BVal.toVal v
+
+/-- Tag a value with its base, as a κ argument. -/
+@[simp, reducible]
+def Val.tag : (s : BSort) → s.ty → (Σ b : Base, b.interp)
+  | .int,  n => ⟨.int, n⟩
+  | .bool, c => ⟨.bool, c⟩
 
 /-- The base a `Val` carries (`none` for a closure). Mirrors `Ty.optBase`:
     a value inhabiting a refinement type `{ν:b|…}` has `optBase = some b`. -/
@@ -485,17 +471,17 @@ def REnv.lookup (γ : REnv) (x : EVar) : Val := γ.map x
     unconditionally. Preserves the de Bruijn stack `bv`. -/
 @[simp, reducible]
 def REnv.write (γ : REnv) (x : EVar) (v : Val) : REnv :=
-  ⟨fun y => if x == y then v else γ.map y, γ.bv⟩
+  { γ with map := fun y => if x == y then v else γ.map y }
 
 /-- Enter a binder: push value `v` as the new innermost de Bruijn slot (index 0),
     shifting the existing stack up one. The name map is untouched. -/
-@[simp] def REnv.push (γ : REnv) (v : Val) : REnv := ⟨γ.map, v :: γ.bv⟩
+@[simp] def REnv.push (γ : REnv) (v : Val) : REnv := { γ with bv := v :: γ.bv }
 
 /-- Insert value `v` at de Bruijn index `k` (shifting indices `≥ k` up one).
     `insertBV 0 = push`. Used to bridge `push`-style `TyDenote` with `openVar`:
     putting a value into the stack at level `k` mirrors opening `BVar k` to a
     fresh name bound to that value. -/
-def REnv.insertBV (k : Nat) (v : Val) (γ : REnv) : REnv := ⟨γ.map, γ.bv.insertIdx k v⟩
+def REnv.insertBV (k : Nat) (v : Val) (γ : REnv) : REnv := { γ with bv := γ.bv.insertIdx k v }
 
 @[simp] theorem REnv.insertBV_zero (v : Val) (γ : REnv) : γ.insertBV 0 v = γ.push v := rfl
 
@@ -505,6 +491,9 @@ def REnv.insertBV (k : Nat) (v : Val) (γ : REnv) : REnv := ⟨γ.map, γ.bv.ins
 @[simp] theorem REnv.insertBV_bv (k : Nat) (v : Val) (γ : REnv) :
     (γ.insertBV k v).bv = γ.bv.insertIdx k v := rfl
 
+@[simp] theorem REnv.insertBV_sorts (k : Nat) (v : Val) (γ : REnv) :
+    (γ.insertBV k v).sorts = γ.sorts := rfl
+
 /-- Pushing then inserting deeper = inserting then pushing: `push` is `insertBV 0`,
     and inserting at `k+1` after a `push` is the same as inserting at `k` first. -/
 theorem REnv.push_insertBV_comm (γ : REnv) (w v : Val) (k : Nat) :
@@ -513,30 +502,32 @@ theorem REnv.push_insertBV_comm (γ : REnv) (w v : Val) (k : Nat) :
 /-- Read the `b`-typed value of the de Bruijn `BVar k` from the stack. Out of
     range (never on a well-formed read) defaults per base via `Val.proj`. -/
 @[simp, reducible]
-def REnv.getBV (b : Base) (γ : REnv) (k : Nat) : b.interp :=
-  Val.proj b (γ.bv[k]?.getD (.iconst 0))
+def REnv.getBV (b : Base) (γ : REnv) (k : Nat) : b.sem γ.sorts :=
+  Val.proj (b.resolve γ.sorts) (γ.bv[k]?.getD (.iconst 0))
 
 /-- Look up the `b`-typed value of variable `x` in `γ` (base-indexed view). -/
 @[simp, reducible]
-def REnv.get (b : Base) (γ : REnv) (x : EVar) : b.interp :=
-  (γ.lookup x).proj b
+def REnv.get (b : Base) (γ : REnv) (x : EVar) : b.sem γ.sorts :=
+  (γ.lookup x).proj (b.resolve γ.sorts)
 
 /-- Update the `b`-typed slot for `x` in `γ` to `v` (base-indexed view). -/
 @[simp, reducible]
-def REnv.update (b : Base) (γ : REnv) (x : EVar) (v : b.interp) : REnv :=
-  γ.write x (Val.inj b v)
+def REnv.update (b : Base) (γ : REnv) (x : EVar) (v : b.sem γ.sorts) : REnv :=
+  γ.write x (Val.inj (b.resolve γ.sorts) v)
 
 /-- Derived accessors mirroring the old two-field layout. -/
 @[simp, reducible] def REnv.bools (γ : REnv) (x : EVar) : Bool := REnv.get .bool γ x
 
-/-- The cell for `x` stores a value of base `b`. Holds for every slot bound at
-    base `b` in a well-typed model; needed to know `update b _ x (get b _ x)`
-    round-trips. -/
-def REnv.HasBase (γ : REnv) (x : EVar) : Base → Prop
-  | .int  => ∃ n, γ.map x = .iconst n
-  | .bool => ∃ c, γ.map x = .bconst c
-  | .tbvar _ => (∃ n, γ.map x = .iconst n) ∨ (∃ c, γ.map x = .bconst c)
-  | .tfvar _ => (∃ n, γ.map x = .iconst n) ∨ (∃ c, γ.map x = .bconst c)
+/-- `v` is a value of base `s`. -/
+@[simp] def Val.HasSort : BSort → Val → Prop
+  | .int,  v => ∃ n, v = .iconst n
+  | .bool, v => ∃ c, v = .bconst c
+
+/-- The cell for `x` stores a value of the base sort `b` stands for. Holds for
+    every slot bound at sort `b` in a well-typed model; needed to know
+    `update b _ x (get b _ x)` round-trips. -/
+@[simp] def REnv.HasBase (γ : REnv) (x : EVar) (b : Base) : Prop :=
+  Val.HasSort (b.resolve γ.sorts) (γ.map x)
 
 
 /-! ## 5b. Val operations (depend on Exp.* declared above) -/

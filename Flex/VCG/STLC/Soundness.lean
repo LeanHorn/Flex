@@ -31,14 +31,16 @@ theorem Ty.hyp?_eq_some {t : Ty} {b : Base} {r : Refinement}
 theorem implyBindCstr_interp_some {κ : KEnv} {x : EVar} {t : Ty} {b : Base} {r : Refinement}
     {c : Cstr} {γ : REnv} (ht : t.hyp? = some (b, r)) (hx : x ∉ r.fv) :
     (implyBindCstr x t c).interp κ γ ↔
-    ∀ v : b.interp, Refinement.interp κ r (γ.push (Val.inj b v)) →
+    ∀ v : b.sem γ.sorts, Refinement.interp κ r (γ.push (Val.inj (b.resolve γ.sorts) v)) →
       c.interp κ (REnv.update b γ x v) := by
   simp only [implyBindCstr, ht, Cstr.interp]
   constructor <;> intro h v
   · intro hr
-    exact h v ((Refinement.interp_openBVar κ r γ x (Val.inj b v) 0 (Nat.zero_le _) hx).mpr hr)
+    exact h v ((Refinement.interp_openBVar κ r γ x (Val.inj (b.resolve γ.sorts) v) 0
+      (Nat.zero_le _) hx).mpr hr)
   · intro hr
-    exact h v ((Refinement.interp_openBVar κ r γ x (Val.inj b v) 0 (Nat.zero_le _) hx).mp hr)
+    exact h v ((Refinement.interp_openBVar κ r γ x (Val.inj (b.resolve γ.sorts) v) 0
+      (Nat.zero_le _) hx).mp hr)
 
 /-- `implyBindCstr` over a binding with no hypothesis is the identity. -/
 theorem implyBindCstr_interp_none {κ : KEnv} {x : EVar} {t : Ty} {c : Cstr} {γ : REnv}
@@ -48,8 +50,8 @@ theorem implyBindCstr_interp_none {κ : KEnv} {x : EVar} {t : Ty} {c : Cstr} {γ
 /-- Semantic (`push`-form) reading of a bind. -/
 def implyBindSem (κ : KEnv) (x : EVar) (t : Ty) (c : Cstr) (γ : REnv) : Prop :=
   match t.hyp? with
-  | some (b, r) => ∀ v : b.interp,
-                     Refinement.interp κ r (γ.push (Val.inj b v)) →
+  | some (b, r) => ∀ v : b.sem γ.sorts,
+                     Refinement.interp κ r (γ.push (Val.inj (b.resolve γ.sorts) v)) →
                        c.interp κ (REnv.update b γ x v)
   | none        => c.interp κ γ
 

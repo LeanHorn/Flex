@@ -11,14 +11,14 @@ open STLC
   * **Ordered sorts.** Comparison is polymorphic, exactly like equality: the
     logic has `Formula.leq b` at every sort, and `Exp.leq` types at every
     *comparable* sort — `Int`, `Bool` and `B`-kinded type variables
-    (`Synth.leq_var`). At a type-variable sort, `≤` is one fixed total order on
-    the base-value domain (`BVal.le`) that restricts to `≤` on `Int` and to
-    `false < true` on `Bool`, so instantiating `α` never changes what a
-    comparison means (`Base.le_proj_of_optBase`). Types stay erased: a
-    `B`-kinded variable only ever holds ints or only bools, whose runtime tags
-    already determine the order, so the operational comparison (`Val.leb?`)
-    needs no type information. The VCs at sort `α` need just the order laws
-    (`BVal.le_trans`, `BVal.le_of_not_le`).
+    (`Synth.leq_var`). As in *Mechanizing Refinement Types*, a type-variable
+    sort stands for the base sort of its instances — `Int` or `Bool` — and is
+    read at that base (`Base.resolve`), so `≤` at `α` is just `≤` at `Int` or
+    at `Bool` (`false < true`). A verification condition for polymorphic code
+    must hold for either choice; `split_sorts` splits it into an `Int` goal and
+    a `Bool` goal. Types stay erased: a `B`-kinded variable only ever holds ints
+    or only bools, whose runtime tags already determine the order, so the
+    operational comparison (`Val.leb?`) needs no type information.
 
   * **Polymorphic recursion.** In `insert`, the recursive call inserts into the
     tail `olist(α{y ≤ ν})`, i.e. at a *different instance* of `α`. `Check.fix`
@@ -37,7 +37,7 @@ attribute [local simp] Exp.ftv Ty.ftv Refinement.ftv Formula.ftv Term.ftv Base.f
   Exp.openTv Ty.openTv Refinement.substB Formula.substB Term.substB Base.substB BSubst.openAt
   BSubst.instAt Ty.instTy Ty.strengthen Ty.sortOf Ty.kindOf Kind.le Ty.wfB Refinement.wfB
   Formula.wfB Term.wfB Base.isTv Base.sortOK Base.fvOK Base.tyOK Base.isStarB Refinement.isTT
-  Base.recast Ty.optBase Base.shiftT
+  Ty.optBase Base.shiftT
   DEnv.payload? DEnv.decl? DEnv.nCtors DEnv.instOK Ty.instTysOK Ty.instTysFrom Ty.instTys
   Cstr.conjAll List.finRange DEnv.var TEnv.genVars Ty.closeTv BSubst.closeAt List.eraseDups_cons
 
@@ -54,10 +54,10 @@ abbrev maxTy : Ty := .forall .B (.arrow (Par 0) (.arrow (Par 0)
 abbrev maxE : Exp := .tabs .B (.lam (.lam
   (.letin (.leq (.bvar 1) (.bvar 0)) (.ite (.bvar 0) (.bvar 1) (.bvar 2)))))
 
-/-- The VC is reflexivity and totality of the order at sort `α`. -/
+/-- The VC is reflexivity and totality of `≤`, at `Int` and at `Bool`. -/
 theorem ord_max (κ : KEnv) : topVC κ [] maxE maxTy := by
   simp [topVC]
-  grind [BVal.le_trans, BVal.le_of_not_le]
+  split_sorts <;> grind
 
 /-- At `Bool`, the abstract order is `false < true`: `max[Bool] false true` is `true`. -/
 theorem ord_max_bool (κ : KEnv) : topVC κ []
@@ -65,7 +65,7 @@ theorem ord_max_bool (κ : KEnv) : topVC κ []
       (.app (.app (.tapp (.ann maxE maxTy) BoolT) (.bvar 1)) (.bvar 0))))
     TrueB := by
   simp [topVC]
-  exact fun _ => ⟨fun _ _ h => BVal.le_of_not_le h, by decide⟩
+  split_sorts <;> grind
 
 /-- Comparison is only available at comparable sorts: a `⋆`-kinded variable may
     hold functions. -/
@@ -148,10 +148,10 @@ abbrev insE : Exp := .tabs .B (.fix (.lam                    -- ys=0 x=1 ins=2
               (.letin (.app (.bvar 0) (.bvar 2))             -- tl     g=1 c=2 ys'=3 y=4
                 (oconsE (Par 0) (.bvar 4) (.bvar 0)))))) ])))
 
-/-- The VC is totality and transitivity of the order at sort `α`. -/
+/-- The VC is totality and transitivity of `≤`, at `Int` and at `Bool`. -/
 theorem ord_insert (κ : KEnv) : topVC κ [] insE insTy olistEnv := by
   simp [topVC, olistEnv, olistDecl]
-  grind [BVal.le_trans, BVal.le_of_not_le]
+  split_sorts <;> grind
 
 /-- With a monomorphic recursive call (`ins x ys'`, at `α` itself) the tail is
     only an `olist(α)`, which is not an `olist(α{y ≤ ν})`: rejected. -/
@@ -170,8 +170,7 @@ abbrev insMonoE : Exp := .tabs .B (.fix (.lam
 
 theorem ord_insert_mono_bad (κ : KEnv) : ¬ topVC κ [] insMonoE insTy olistEnv := by
   simp [topVC, olistEnv, olistDecl]
-  exact ⟨REnv.empty, .int 1, .int 0, fun h =>
-    absurd (h (by simp [BVal.le]) (.int (-1))) (by simp [BVal.le])⟩
+  exact ⟨REnv.empty, (1 : Int), (0 : Int), fun h => absurd (h (by decide) (-1 : Int)) (by decide)⟩
 
 /-! ## Insertion sort -/
 
@@ -196,7 +195,7 @@ abbrev isortE : Exp :=
 
 theorem ord_isort (κ : KEnv) : topVC κ [] isortE isortTy sortEnv := by
   simp [topVC, sortEnv, olistDecl, listDecl]
-  grind [BVal.le_trans, BVal.le_of_not_le]
+  split_sorts <;> grind
 
 /-! ## Using the invariant: the first two elements of an `olist` are in order
 
@@ -238,7 +237,7 @@ abbrev sortClientE : Exp :=
 
 theorem ord_sortClient_vc (κ : KEnv) : topVC κ [] sortClientE TrueB sortEnv := by
   simp [topVC, sortEnv, olistDecl, listDecl]
-  grind [BVal.le_trans, BVal.le_of_not_le]
+  split_sorts <;> grind
 
 theorem ord_sortClient_safe (n : Nat) :
     ∃ o, Run n sortClientE o ∧ ∀ v m, o = .val v m → v = .bconst true := by

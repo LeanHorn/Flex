@@ -160,3 +160,39 @@ macro "vc_generate" : tactic =>
 macro "vc_reify" : tactic =>
   `(tactic| intro_kenv <;> simp [STLC.mkKEnv, List.lookup, STLC.liftKPred,
                                   STLC.liftKPred_zero, STLC.liftKPred_succ_int])
+
+/-! ## Splitting a verification condition on the sorts it reads
+
+  A verification condition for polymorphic code reads a `B`-kinded type
+  variable `a` at the base `γ.sorts.fv a` it stands for, which is either `Int`
+  or `Bool`. `split_sorts` case-splits every such base, leaving ordinary `Int`
+  and `Bool` goals. -/
+
+section SplitSorts
+open Lean Elab Tactic Meta
+
+/-- The first read of a type-variable sort, `σ.fv a`, in `e` (outside binders). -/
+private partial def findSortRead (e : Expr) : Option Expr :=
+  if e.isAppOfArity ``STLC.SortEnv.fv 2 && !e.hasLooseBVars then some e else
+  match e with
+  | .app f a => (findSortRead f).orElse fun _ => findSortRead a
+  | .lam _ t b _ | .forallE _ t b _ => (findSortRead t).orElse fun _ => findSortRead b
+  | .letE _ t v b _ =>
+    ((findSortRead t).orElse fun _ => findSortRead v).orElse fun _ => findSortRead b
+  | .mdata _ e => findSortRead e
+  | _ => none
+
+/-- Case-split one type-variable sort read in the goal. -/
+elab "split_sort" : tactic => do
+  let g ← getMainGoal
+  let t ← instantiateMVars (← g.getType)
+  let some e := findSortRead t | throwError "split_sort: no type-variable sort is read"
+  let (fvs, g') ← g.generalize #[{ expr := e, xName? := `s }]
+  let gs ← g'.cases fvs[0]!
+  replaceMainGoal (gs.toList.map (·.mvarId))
+
+end SplitSorts
+
+/-- Introduce the environment and split every type-variable sort it reads. -/
+macro "split_sorts" : tactic =>
+  `(tactic| (intro γ; repeat' split_sort; all_goals dsimp only))

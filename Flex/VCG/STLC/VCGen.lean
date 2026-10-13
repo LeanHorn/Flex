@@ -70,7 +70,7 @@ def sub (de : DEnv) (Γ : TEnv) : Ty → Ty → Option Cstr
       | _, _ => none
   | .forall k₁ t₁, .forall k₂ t₂ =>
       if k₁ = k₂ then
-        let a := TVar.fresh (t₁.ftv ++ t₂.ftv) k₁
+        let a := TVar.fresh (TEnv.ftv Γ ++ t₁.ftv ++ t₂.ftv) k₁
         sub de Γ (t₁.openTv 0 a) (t₂.openTv 0 a)
       else none
   | .prod s₁ t₁, .prod s₂ t₂ =>

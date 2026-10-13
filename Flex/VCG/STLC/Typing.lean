@@ -37,7 +37,7 @@ inductive Subtyp : DEnv → KEnv → TEnv → Ty → Ty → Prop where
   /-- S-POLY: open both bodies with the same fresh type variable. -/
   | «forall» {de κ Γ k t₁ t₂ a} :
       a.2 = k →
-      a ∉ t₁.ftv ++ t₂.ftv →
+      a ∉ TEnv.ftv Γ ++ t₁.ftv ++ t₂.ftv →
       Subtyp de κ Γ (t₁.openTv 0 a) (t₂.openTv 0 a) →
       Subtyp de κ Γ (.forall k t₁) (.forall k t₂)
 

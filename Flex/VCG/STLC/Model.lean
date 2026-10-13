@@ -7,8 +7,8 @@ namespace STLC
     the name map (`REnv.get`); `bvar` resolves through the de Bruijn stack
     (`REnv.getBV`) — the values of ν and the enclosing quantifier/arrow binders
     live there.. -/
-def Term.interp (γ : REnv) : {b : Base} → Term b → b.interp
-  | _, .const _ c   => c
+def Term.interp (γ : REnv) : {b : Base} → Term b → b.sem γ.sorts
+  | _, .const b c   => Base.ofConst γ.sorts b c
   | _, .bvar b k    => REnv.getBV b γ k
   | _, .fvar b x    => REnv.get b γ x
   | _, .add t₁ t₂   => Term.interp γ t₁ + Term.interp γ t₂
@@ -22,23 +22,18 @@ def Formula.interp (γ : REnv) : Formula → Prop
   | .tt           => True
   | .ff           => False
   | .eq _ t₁ t₂   => Term.interp γ t₁ = Term.interp γ t₂
-  | .leq b t₁ t₂   => Base.le b (Term.interp γ t₁) (Term.interp γ t₂)
+  | .leq b t₁ t₂   => BSort.le (b.resolve γ.sorts) (Term.interp γ t₁) (Term.interp γ t₂)
   | .and φ₁ φ₂    => Formula.interp γ φ₁ ∧ Formula.interp γ φ₂
   | .or φ₁ φ₂     => Formula.interp γ φ₁ ∨ Formula.interp γ φ₂
   | .not φ        => ¬ Formula.interp γ φ
   | .imp φ₁ φ₂    => Formula.interp γ φ₁ → Formula.interp γ φ₂
-  | .ex b φ       => ∃ x : b.interp,  Formula.interp (γ.push (Val.inj b x)) φ
-  | .all b φ      => ∀ x : b.interp,  Formula.interp (γ.push (Val.inj b x)) φ
+  | .ex b φ       => ∃ x : b.sem γ.sorts, Formula.interp (γ.push (Val.inj (b.resolve γ.sorts) x)) φ
+  | .all b φ      => ∀ x : b.sem γ.sorts, Formula.interp (γ.push (Val.inj (b.resolve γ.sorts) x)) φ
 
-/-- Package a κ-argument with its sort. Arguments at a type-variable sort are
-    all tagged with one canonical sort, so that renaming type variables (opening
-    a type binder) never changes what a κ sees. Int and Bool arguments are
-    passed as is. -/
-@[simp] def Base.canonArg : (b : Base) → b.interp → (Σ b : Base, b.interp)
-  | .int,     v => ⟨.int, v⟩
-  | .bool,    v => ⟨.bool, v⟩
-  | .tbvar _, v => ⟨.tbvar 0, v⟩
-  | .tfvar _, v => ⟨.tbvar 0, v⟩
+/-- Package a κ-argument: a term of sort `b` is passed as a value of the base
+    `b` stands for, tagged with that base. -/
+@[simp, reducible] def Base.canonArg (σ : SortEnv) (b : Base) (v : b.sem σ) : (Σ b : Base, b.interp) :=
+  Val.tag (b.resolve σ) v
 
 /-- Interpret a refinement under `γ`. This is the *only* interpretation
     that consults the κ-assignment. -/
@@ -46,14 +41,14 @@ def Refinement.interp (κ : KEnv) (r : Refinement) (γ : REnv) : Prop :=
   match r with
   | .fmla φ       => Formula.interp γ φ
   | .kapp kn args =>
-      κ kn (args.map (fun a => Base.canonArg a.1 (Term.interp γ a.2)))
+      κ kn (args.map (fun a => Base.canonArg γ.sorts a.1 (Term.interp γ a.2)))
   | .conj r₁ r₂   => Refinement.interp κ r₁ γ ∧ Refinement.interp κ r₂ γ
 
 /-- Interpret a syntactic constraint as a `κ`-indexed `REnv` predicate. -/
 def Cstr.interp : Cstr → KEnv → REnv → Prop
   | .head r,     κ, γ => Refinement.interp κ r γ
   | .imp r c,    κ, γ => Refinement.interp κ r γ → c.interp κ γ
-  | .all x b c,  κ, γ => ∀ v : b.interp, c.interp κ (REnv.update b γ x v)
+  | .all x b c,  κ, γ => ∀ v : b.sem γ.sorts, c.interp κ (REnv.update b γ x v)
   | .conj c₁ c₂, κ, γ => c₁.interp κ γ ∧ c₂.interp κ γ
 
 /-! ## Semantic types for type variables
@@ -67,35 +62,38 @@ structure SemTy where
   rel  : Nat → Val → Prop
   mono : ∀ {j k : Nat} {v : Val}, j ≤ k → rel k v → rel j v
   wf   : ∀ {k : Nat} {v : Val}, rel k v → Val.lc v ∧ Val.closed v ∧ Val.Erased v
+  /-- The base the values have, for an interpretation of a `B`-kinded variable
+      (refinements at the variable's sort are read at this base). -/
+  sort : BSort
 
 /-- `R` is a legal interpretation of a type variable of kind `k`. -/
 def SemTy.Fits (R : SemTy) : Kind → Prop
-  | .B    => ∃ b, (b = .int ∨ b = .bool) ∧ ∀ k v, R.rel k v → v.optBase = some b
+  | .B    => ∀ k v, R.rel k v → v.optBase = some R.sort.toBase
   | .star => True
 
 /-- The interpretation used for unbound type variables (never consulted for
     well-scoped types): all locally closed, closed values. -/
 def SemTy.top : SemTy :=
-  ⟨fun _ v => Val.lc v ∧ Val.closed v ∧ Val.Erased v, fun _ h => h, fun h => h⟩
+  ⟨fun _ v => Val.lc v ∧ Val.closed v ∧ Val.Erased v, fun _ h => h, fun h => h, .int⟩
 
 /-- The integers, as a semantic type. Fits both kinds; the default
     interpretation of `B`-kinded type variables. -/
 def SemTy.ints : SemTy :=
   ⟨fun _ v => ∃ n, v = .iconst n, fun _ h => h,
-   fun h => by obtain ⟨n, rfl⟩ := h; exact ⟨trivial, rfl, trivial⟩⟩
+   fun h => by obtain ⟨n, rfl⟩ := h; exact ⟨trivial, rfl, trivial⟩, .int⟩
 
 theorem SemTy.ints_fits (k : Kind) : SemTy.ints.Fits k := by
   cases k with
-  | B => exact ⟨.int, Or.inl rfl, fun _ v ⟨n, h⟩ => by subst h; rfl⟩
+  | B => exact fun _ v ⟨n, h⟩ => by subst h; rfl
   | star => trivial
 
 /-- A semantic type that agrees with `R` up to index `i` (and is empty above).
     Downward closed and well-formed by construction, so it can be built inside
     the definition of `TyDenote` without any proof obligations. -/
-def SemTy.upto (i : Nat) (R : Fin (i+1) → Val → Prop) : SemTy :=
+def SemTy.upto (i : Nat) (R : Fin (i+1) → Val → Prop) (s : BSort) : SemTy :=
   ⟨fun j w => (∃ j' : Fin (i+1), j ≤ j'.val ∧ R j' w) ∧ Val.lc w ∧ Val.closed w ∧ Val.Erased w,
    fun hjk ⟨⟨j', hj', hR⟩, hw⟩ => ⟨⟨j', Nat.le_trans hjk hj', hR⟩, hw⟩,
-   fun h => h.2⟩
+   fun h => h.2, s⟩
 
 /-- Interpretation of type variables: a de Bruijn stack for the `tbvar`s
     (pushed when entering a `Ty.forall`) and a map for the `tfvar`s — together
@@ -109,6 +107,16 @@ structure TyEnvSem where
     ones as all (closed) values. Satisfies `WK`. -/
 def TyEnvSem.empty (de : DEnv := []) : TyEnvSem :=
   { bv := [], fv := fun a => match a.2 with | .B => SemTy.ints | .star => SemTy.top, denv := de }
+
+/-- The bases the type variables stand for under `δ`. -/
+def TyEnvSem.sorts (δ : TyEnvSem) : SortEnv :=
+  { bv := δ.bv.map SemTy.sort, fv := fun a => (δ.fv a).sort }
+
+/-- The base a refined type's values have under `δ` (`int`, arbitrarily, for
+    other types). -/
+def Ty.semSort (δ : TyEnvSem) : Ty → BSort
+  | .refine b _ => b.resolve δ.sorts
+  | _           => .int
 
 /-- Well-kindedness: every free type variable is interpreted by a semantic type
     fitting its kind (the kind is carried on the name). -/
@@ -152,7 +160,8 @@ def BaseDen (δ : TyEnvSem) (k : Nat) : Base → Val → Prop
   recursive datatypes well-founded: the definition recurses on `(k, t.skel)`
   lexicographically. -/
 def TyDenote : KEnv → TyEnvSem → Nat → Ty → REnv → Val → Prop
-  | κ, δ, k, .refine b r, γ, v => BaseDen δ k b v ∧ Refinement.interp κ r (γ.push v)
+  | κ, δ, k, .refine b r, γ, v =>
+      BaseDen δ k b v ∧ Refinement.interp κ r ((γ.withSorts δ.sorts).push v)
   | κ, δ, k, .arrow s t,  γ, v =>
       (∃ body, v = .clos body ∨ v = .fclos body) ∧
         Val.lc v ∧ Val.closed v ∧ Val.Erased v ∧
@@ -167,7 +176,8 @@ def TyDenote : KEnv → TyEnvSem → Nat → Ty → REnv → Val → Prop
       Val.lc v ∧ Val.closed v ∧ Val.Erased v ∧
       ∃ j w P, v = .ctor C j w ∧ δ.denv.payload? C j = some P ∧
         ∀ i < k, TyDenote κ
-          { bv := List.ofFn (fun l => SemTy.upto i (fun j' w' => TyDenote κ δ j'.val (args l) γ w')),
+          { bv := List.ofFn (fun l => SemTy.upto i (fun j' w' => TyDenote κ δ j'.val (args l) γ w')
+                    ((args l).semSort δ)),
             fv := fun _ => SemTy.top, denv := δ.denv } i P REnv.empty w
 termination_by _ _ k t _ _ => (k, t.skel)
 decreasing_by

@@ -138,6 +138,7 @@ private def resolveBase (b : TSyntax `ident) : MacroM Base :=
 private def baseStx : Base → MacroM (TSyntax `term)
   | .int  => `(Base.int)
   | .bool => `(Base.bool)
+  | _     => Macro.throwError "type-variable sorts are not supported by the notation yet"
 
 /-- The refinement-level name stack pairs each bound name with the `Base` it was
     bound at (its type), so a `BVar` occurrence can be elaborated to a

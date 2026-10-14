@@ -26,5 +26,9 @@ import Flex.VCG.STLC.Typing
 import Flex.VCG.STLC.VCGen
 import Flex.VCG.STLC.Declarative
 import Flex.VCG.STLC.Semantics
+import Flex.VCG.STLC.TypeSubst
 import Flex.VCG.STLC.Safety
 import Flex.VCG.STLC.Examples
+import Flex.VCG.STLC.DataExamples
+import Flex.VCG.STLC.OrdExamples
+import Flex.VCG.STLC.Audit

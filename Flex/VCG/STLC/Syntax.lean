@@ -121,6 +121,9 @@ inductive Term : Base → Type where
   | mbvar : String → Nat → Term .int
   /-- `m(x)`: measure `m` of the value of the free variable `x`. -/
   | mfvar : String → EVar → Term .int
+  /-- The value bound at de Bruijn index `k`, read as an integer whatever the
+      binder's sort (a payload field, in a measure equation). -/
+  | ibvar : Nat → Term .int
   | not   : Term .bool → Term .bool
   | and   : Term .bool → Term .bool → Term .bool
 -- NOTE: no cross-base constructors (e.g. `leq : Term .int → Term .int → Term .bool`).
@@ -623,22 +626,26 @@ def Ty.tuple : List Ty → Ty
   | t :: ts => .prod t (Ty.tuple ts)
 
 /-- A measure's body for one constructor, over that constructor's fields:
-    an integer built from literals and measures of fields. -/
+    an integer built from literals, `Int` fields, and measures of fields. -/
 inductive MBody where
   | const : Int → MBody
+  | field : Nat → MBody               -- the (`Int`) field `i`
   | meas  : String → Nat → MBody      -- measure `m` of field `i`
   | add   : MBody → MBody → MBody
   deriving Repr
 
-/-- A measure body as a refinement term, given terms for the fields' measures. -/
-def MBody.toTerm (msr : String → Nat → Term .int) : MBody → Term .int
+/-- A measure body as a refinement term, given terms for the fields and for
+    the fields' measures. -/
+def MBody.toTerm (fld : Nat → Term .int) (msr : String → Nat → Term .int) : MBody → Term .int
   | .const n  => .const .int n
+  | .field i  => fld i
   | .meas m i => msr m i
-  | .add a b  => .add (a.toTerm msr) (b.toTerm msr)
+  | .add a b  => .add (a.toTerm fld msr) (b.toTerm fld msr)
 
 /-- Every field a body reads is one of the `n` fields. -/
 def MBody.idxOK (n : Nat) : MBody → Bool
   | .const _  => true
+  | .field i  => decide (i < n)
   | .meas _ i => decide (i < n)
   | .add a b  => a.idxOK n && b.idxOK n
 
@@ -717,14 +724,16 @@ def DEnv.nFields (de : DEnv) (C : String) (j : Nat) : Nat := ((de.fields? C j).m
 def DEnv.ctorFacts (de : DEnv) (C : String) (j : Nat) (as : List EVar) : Refinement :=
   .fmla (Formula.conjAll ((de.ctorMeasures C j).map fun mb =>
     .eq .int (.mbvar mb.1 0)
-      (mb.2.toTerm fun m' i => if i < as.length then .mfvar m' (as.getD i "") else .const .int 0)))
+      (mb.2.toTerm (fun i => if i < as.length then .fvar .int (as.getD i "") else .const .int 0)
+        (fun m' i => if i < as.length then .mfvar m' (as.getD i "") else .const .int 0))))
 
 /-- What matching `x` against `C j` (with `n` fields) reveals, read at the
     payload's last field — where field `i` is `BVar (n - 1 - i)` — : each
     measure of `x` equals its body for this constructor. -/
 def DEnv.caseFacts (de : DEnv) (C : String) (j n : Nat) (x : EVar) : Refinement :=
   .fmla (Formula.conjAll ((de.ctorMeasures C j).map fun mb =>
-    .eq .int (.mfvar mb.1 x) (mb.2.toTerm fun m' i => .mbvar m' (n - 1 - i))))
+    .eq .int (.mfvar mb.1 x)
+      (mb.2.toTerm (fun i => .ibvar (n - 1 - i)) (fun m' i => .mbvar m' (n - 1 - i)))))
 
 /-- The names of the measures of `C`. -/
 def DEnv.measNames (de : DEnv) (C : String) : List String :=
@@ -747,6 +756,7 @@ def DEnv.boundFacts (de : DEnv) (C : String) (x : EVar) : Refinement :=
     reads (none if it can be arbitrarily small). -/
 def MBody.lowerBound (bs : List (String × Int)) : MBody → Option Int
   | .const n  => some n
+  | .field _  => none
   | .meas m _ => bs.lookup m
   | .add a b  => (a.lowerBound bs).bind fun x => (b.lowerBound bs).map (x + ·)
 
@@ -803,20 +813,23 @@ theorem Val.sizeOf_le_of_mem_fieldsN : ∀ {n : Nat} {w f : Val}, f ∈ w.fields
   | _ + 2, .iconst _, _, h | _ + 2, .bconst _, _, h | _ + 2, .clos _, _, h
   | _ + 2, .fclos _, _, h | _ + 2, .ctor _ _ _, _, h => by simp [Val.fieldsN] at h
 
-/-- Evaluate a measure body, given the measures of the fields. -/
-def MBody.eval (fm : Nat → String → Int) : MBody → Int
+/-- Evaluate a measure body, given the (integer) fields and their measures. -/
+def MBody.eval (fv : Nat → Int) (fm : Nat → String → Int) : MBody → Int
   | .const n  => n
+  | .field i  => fv i
   | .meas m i => fm i m
-  | .add a b  => a.eval fm + b.eval fm
+  | .add a b  => a.eval fv fm + b.eval fv fm
 
 /-- The value of measure `m` on `v`. -/
 def DEnv.measEval (de : DEnv) (m : String) : Val → Int
   | .ctor C j w =>
     match (de.decl? C).bind fun d => d.measBody? m j with
     | some body =>
-      body.eval fun i m' =>
-        if h : i < (w.fieldsN (de.nFields C j)).length then
-          DEnv.measEval de m' (w.fieldsN (de.nFields C j))[i] else 0
+      body.eval
+        (fun i => if h : i < (w.fieldsN (de.nFields C j)).length then
+          Val.proj .int (w.fieldsN (de.nFields C j))[i] else 0)
+        (fun i m' => if h : i < (w.fieldsN (de.nFields C j)).length then
+          DEnv.measEval de m' (w.fieldsN (de.nFields C j))[i] else 0)
     | none => 0
   | _ => 0
 termination_by v => sizeOf v
@@ -831,9 +844,11 @@ def DEnv.BoundsHold (de : DEnv) (meas : String → Val → Int) : Prop :=
 theorem DEnv.measEval_ctor (de : DEnv) (m : String) (C : String) (j : Nat) (w : Val) :
     de.measEval m (.ctor C j w) =
       match (de.decl? C).bind fun d => d.measBody? m j with
-      | some body => body.eval fun i m' =>
-          if h : i < (w.fieldsN (de.nFields C j)).length then
-            de.measEval m' (w.fieldsN (de.nFields C j))[i] else 0
+      | some body => body.eval
+          (fun i => if h : i < (w.fieldsN (de.nFields C j)).length then
+            Val.proj .int (w.fieldsN (de.nFields C j))[i] else 0)
+          (fun i m' => if h : i < (w.fieldsN (de.nFields C j)).length then
+            de.measEval m' (w.fieldsN (de.nFields C j))[i] else 0)
       | none => 0 := by
   rw [DEnv.measEval]
 

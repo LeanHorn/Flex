@@ -56,23 +56,30 @@ theorem DEnv.wfB_meas {de : DEnv} (h : de.wfB = true) {C : String} {d : DataDecl
 
 /-! ## Evaluating facts -/
 
-theorem MBody.interp_toTerm (γ : REnv) (msr : String → Nat → Term .int) : ∀ (b : MBody),
-    Term.interp γ (b.toTerm msr) = b.eval (fun i m => Term.interp γ (msr m i))
+theorem MBody.interp_toTerm (γ : REnv) (fld : Nat → Term .int) (msr : String → Nat → Term .int) :
+    ∀ (b : MBody),
+      Term.interp γ (b.toTerm fld msr) =
+        b.eval (fun i => Term.interp γ (fld i)) (fun i m => Term.interp γ (msr m i))
   | .const _ => rfl
+  | .field _ => rfl
   | .meas _ _ => rfl
   | .add x y => by
-    simp only [MBody.toTerm, MBody.eval, Term.interp, MBody.interp_toTerm γ msr x,
-      MBody.interp_toTerm γ msr y]
+    simp only [MBody.toTerm, MBody.eval, Term.interp, MBody.interp_toTerm γ fld msr x,
+      MBody.interp_toTerm γ fld msr y]
 
-theorem MBody.eval_congr {n : Nat} {f g : Nat → String → Int} (hfg : ∀ i < n, ∀ m, f i m = g i m) :
-    ∀ (b : MBody), b.idxOK n = true → b.eval f = b.eval g
+theorem MBody.eval_congr {n : Nat} {fv gv : Nat → Int} {f g : Nat → String → Int}
+    (hv : ∀ i < n, fv i = gv i) (hfg : ∀ i < n, ∀ m, f i m = g i m) :
+    ∀ (b : MBody), b.idxOK n = true → b.eval fv f = b.eval gv g
   | .const _, _ => rfl
+  | .field i, h => by
+    simp only [MBody.idxOK, decide_eq_true_eq] at h
+    exact hv i h
   | .meas m i, h => by
     simp only [MBody.idxOK, decide_eq_true_eq] at h
     exact hfg i h m
   | .add x y, h => by
     simp only [MBody.idxOK, Bool.and_eq_true] at h
-    simp only [MBody.eval, MBody.eval_congr hfg x h.1, MBody.eval_congr hfg y h.2]
+    simp only [MBody.eval, MBody.eval_congr hv hfg x h.1, MBody.eval_congr hv hfg y h.2]
 
 /-! ## Payloads -/
 
@@ -178,13 +185,20 @@ theorem DEnv.ctorRefine_sound {κ : KEnv} {de : DEnv} {C : String} {j : Nat} {e 
       rw [DEnv.measEval_ctor]
       simp only [hd, Option.bind_some, DataDecl.measBody?_of_mem (hnd d hd) hmb]
       congr 1
-      funext i m'
-      by_cases hi : i < as.length
-      · have hi' : i < (w.fieldsN (de.nFields C j)).length := by simp [hf, hi]
-        simp [hi, hi', hf, List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi]
-        simp [Term.interp, hσ]
-      · have hi' : ¬ i < (w.fieldsN (de.nFields C j)).length := by simp [hf, hi]
-        simp [hi, hi', Term.interp]
+      · funext i
+        by_cases hi : i < as.length
+        · have hi' : i < (w.fieldsN (de.nFields C j)).length := by simp [hf, hi]
+          simp [hi, hi', hf, List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi]
+          simp [Term.interp]
+        · have hi' : ¬ i < (w.fieldsN (de.nFields C j)).length := by simp [hf, hi]
+          simp [hi, hi', Term.interp]
+      · funext i m'
+        by_cases hi : i < as.length
+        · have hi' : i < (w.fieldsN (de.nFields C j)).length := by simp [hf, hi]
+          simp [hi, hi', hf, List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi]
+          simp [Term.interp, hσ]
+        · have hi' : ¬ i < (w.fieldsN (de.nFields C j)).length := by simp [hf, hi]
+          simp [hi, hi', Term.interp]
   · simp [Refinement.interp, Formula.interp]
 
 /-- What matching `x` against `C j` records at the payload's last field holds. -/
@@ -209,10 +223,13 @@ theorem DEnv.caseFacts_sound {κ : KEnv} {de : DEnv} {C : String} {j : Nat} {x :
     simp only [Term.interp, hx, hmeas]
     rw [DEnv.measEval_ctor]
     simp only [hd, Option.bind_some, DataDecl.measBody?_of_mem (hnd d hd) hmb]
-    apply MBody.eval_congr _ mb.2 hidx'
-    intro i hi m'
-    obtain ⟨h, hb⟩ := hbv i hi
-    simp only [dif_pos h, hb, Option.getD_some]
+    apply MBody.eval_congr ?_ ?_ mb.2 hidx'
+    · intro i hi
+      obtain ⟨h, hb⟩ := hbv i hi
+      simp only [dif_pos h, hb, Option.getD_some]
+    · intro i hi m'
+      obtain ⟨h, hb⟩ := hbv i hi
+      simp only [dif_pos h, hb, Option.getD_some]
 
 /-! ## Payloads written out as variables -/
 
@@ -297,18 +314,19 @@ theorem Exp.tupleVarsN_eval {γ : REnv} {n k m : Nat} {e : Exp} {as : List EVar}
 
 /-! ## Measure bounds -/
 
-theorem MBody.lowerBound_le {bs : List (String × Int)} {fm : Nat → String → Int}
+theorem MBody.lowerBound_le {bs : List (String × Int)} {fv : Nat → Int} {fm : Nat → String → Int}
     (hfm : ∀ i m c, (m, c) ∈ bs → c ≤ fm i m) :
-    ∀ (body : MBody) (l : Int), body.lowerBound bs = some l → l ≤ body.eval fm
+    ∀ (body : MBody) (l : Int), body.lowerBound bs = some l → l ≤ body.eval fv fm
   | .const n, l, h => by simp [MBody.lowerBound] at h; simp [MBody.eval, h]
+  | .field _, l, h => by simp [MBody.lowerBound] at h
   | .meas m i, l, h => by
     simp only [MBody.lowerBound] at h
     exact hfm i m l (List.mem_of_lookup_eq_some' h)
   | .add a b, l, h => by
     simp only [MBody.lowerBound, Option.bind_eq_some_iff, Option.map_eq_some_iff] at h
     obtain ⟨x, hx, y, hy, rfl⟩ := h
-    have := MBody.lowerBound_le hfm a x hx
-    have := MBody.lowerBound_le hfm b y hy
+    have := MBody.lowerBound_le (fv := fv) hfm a x hx
+    have := MBody.lowerBound_le (fv := fv) hfm b y hy
     simp only [MBody.eval]; omega
 
 /-- The declared bounds hold of every value. -/

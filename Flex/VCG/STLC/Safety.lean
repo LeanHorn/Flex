@@ -131,6 +131,7 @@ theorem Term.interp_nofv (γ : REnv) (m : EVar → Val) :
   | bvar b k => intro _; rfl
   | fvar b x => intro h; simp [Term.fv] at h
   | mbvar _ _ => intro _; rfl
+  | ibvar _ => intro _; rfl
   | mfvar _ _ => intro h; simp [Term.fv] at h
   | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
     intro h; simp only [Term.fv, List.append_eq_nil_iff] at h

@@ -1,4 +1,4 @@
-import Flex.VCG.STLC.DataExamples
+import Flex.VCG.STLC.OrdExamples
 
 open STLC
 
@@ -19,6 +19,7 @@ attribute [local simp] Exp.ftv Ty.ftv Refinement.ftv Formula.ftv Term.ftv Base.f
   Ty.optBase Base.shiftT
   DEnv.payload? DEnv.decl? DEnv.nCtors DEnv.instOK Ty.instTysOK Ty.instTysFrom Ty.instTys
   Cstr.conjAll List.finRange DEnv.var DataDecl.measBody? Base.constSubst
+  TEnv.genVars Ty.closeTv BSubst.closeAt List.eraseDups_cons
 
 /-! ## Lists with a length measure -/
 
@@ -166,3 +167,150 @@ theorem meas_headClient_safe (n : Nat) :
   simp only [TyDenote, BaseDen] at this
   obtain ⟨⟨i, rfl⟩, _⟩ := this
   exact ⟨i, rfl⟩
+
+/-! ## Measure bounds: `len ≥ 0`
+
+  With `len` uninterpreted, nothing says a length is non-negative — proving it
+  for an arbitrary list takes induction. Declaring the bound `len ≥ 0` checks
+  it once against the bodies (`0 ≥ 0`, and `1 + n ≥ 0` given `n ≥ 0`) and then
+  assumes `0 ≤ len x` for every list variable `x`. -/
+
+def natLenDecl : DataDecl := { lenListDecl with bounds := [("len", 0)] }
+def natLenEnv : DEnv := [("list", natLenDecl)]
+
+theorem natLenEnv_wf : natLenEnv.wfB = true := by decide
+
+/-- A bound the bodies do not preserve is rejected: `len ≥ 1` fails at `Nil`. -/
+theorem badBound_wf : DEnv.wfB [("list", { lenListDecl with bounds := [("len", 1)] })] = false := by
+  decide
+
+/-- `cons : ∀α. α → t:list α → list α{0 < len ν}` -/
+abbrev consPosTy : Ty :=
+  .forall .star (.arrow (Par 0) (.arrow (ListT (Par 0))
+    (.dataL "list" [Par 0] (.fmla (.not (.leqI (lenB 0) (.const .int 0)))))))
+
+/-- `Λα. λh. λt. Cons(h, t)` -/
+abbrev consPosE : Exp := .tabs .star (.lam (.lam (consE (Par 0) (.bvar 1) (.bvar 0))))
+
+/-- With the bound: `len ν = 1 + len t` and `0 ≤ len t` give `0 < len ν`. -/
+theorem meas_consPos (κ : KEnv) : topVC κ [] consPosE consPosTy natLenEnv := by
+  simp [topVC, consPosE, consPosTy, natLenEnv, natLenDecl, lenListDecl, listDecl]
+  intros; omega
+
+/-- Without it, `t` might have negative length. -/
+theorem meas_consPos_bad (κ : KEnv) : ¬ topVC κ [] consPosE consPosTy lenEnv := by
+  simp [topVC, consPosE, consPosTy, lenEnv, lenListDecl, listDecl]
+  -- `t` of length -1 makes `Cons(h, t)` have length 0
+  refine ⟨{ map := fun y => .iconst y.length,
+            sorts := { meas := fun _ v => match v with | .iconst n => n - 3 | _ => 0 } }, ?_⟩
+  decide
+
+/-! ## Reading `Int` fields: `sum` of an integer list -/
+
+/-- `ilist = INil | ICons (Int, ilist)` with `sum INil = 0`, `sum (ICons h t) = h + sum t`. -/
+def ilistDecl : DataDecl :=
+  { params := [], ctorFields := [("INil", []), ("ICons", [TT, .dataL "ilist" []])],
+    measures := [("sum", [.const 0, .add (.field 0) (.meas "sum" 1)])] }
+def ilistEnv : DEnv := [("ilist", ilistDecl)]
+
+theorem ilistEnv_wf : ilistEnv.wfB = true := by decide
+
+/-- `sumList : xs:ilist → Int{ν = sum xs}`:
+    `fix go. λxs. case xs of INil _ => 0 | ICons p => let (h, t) = p; let r = go t; h + r` -/
+abbrev sumIListTy : Ty :=
+  .arrow (.dataL "ilist" []) (.refine .int (.fmla (.eq .int (.bvar .int 0) (.mbvar "sum" 1))))
+abbrev sumIListE : Exp :=
+  .fix (caseL (.bvar 0)                                   -- xs=0 go=1
+    [ .iconst 0
+    , .split (.bvar 0)                                    -- t=0 h=1 p=2 xs=3 go=4
+        (.letin (.app (.bvar 4) (.bvar 0))                -- r = go t
+        (.add (.bvar 2) (.bvar 0))) ])                    -- h + r
+
+/-- The match records `sum xs = h + sum t`, reading the field `h`. -/
+theorem meas_sumIList (κ : KEnv) : topVC κ [] sumIListE sumIListTy ilistEnv := by
+  simp [topVC, sumIListE, sumIListTy, ilistEnv, ilistDecl]
+  intro γ; constructor <;> intros <;> omega
+
+/-! ## Trees: `size`, with the bound `size ≥ 0` -/
+
+/-- `tree α = Leaf | Node (tree α, α, tree α)`, `size Leaf = 0`,
+    `size (Node l x r) = 1 + size l + size r`, and `size ≥ 0`. -/
+def treeDecl : DataDecl :=
+  { params := [.star],
+    ctorFields := [("Leaf", []), ("Node", [.dataL "tree" [Par 0], Par 0, .dataL "tree" [Par 0]])],
+    variances := [.co],
+    measures := [("size", [.const 0, .add (.const 1) (.add (.meas "size" 0) (.meas "size" 2))])],
+    bounds := [("size", 0)] }
+def treeEnv : DEnv := [("tree", treeDecl)]
+
+theorem treeEnv_wf : treeEnv.wfB = true := by decide
+
+abbrev TreeT (τ : Ty) (r : Refinement := ttR) : Ty := .dataL "tree" [τ] r
+abbrev sizeB (i : Nat) : Term .int := .mbvar "size" i
+
+/-- `mirror : ∀α. t:tree α → tree α{size ν = size t}` -/
+abbrev mirrorTy : Ty :=
+  .forall .star (.arrow (TreeT (Par 0)) (TreeT (Par 0) (.fmla (.eq .int (sizeB 0) (sizeB 1)))))
+
+/-- `Λα. fix go. λt. case t of
+      Leaf _ => Leaf
+      Node p => let (l, q) = p; let (x, r) = q; let l' = go l; let r' = go r; Node(r', x, l')` -/
+abbrev mirrorE : Exp :=
+  .tabs .star (.fix (caseL (.bvar 0)                                  -- t=0 go=1
+    [ .ctor "tree" 0 [Par 0] unitE
+    , .split (.bvar 0)                                                -- q=0 l=1 p=2 t=3 go=4
+        (.split (.bvar 0)                                             -- r=0 x=1 q=2 l=3 … go=6
+          (.letin (.app (.bvar 6) (.bvar 3))                          -- l' = go l
+          (.letin (.app (.bvar 7) (.bvar 1))                          -- r' = go r  (l'=0 r=1 x=2)
+          (.ctor "tree" 1 [Par 0] (.pair (.bvar 0) (.pair (.bvar 3) (.bvar 1))))))) ]))
+
+theorem meas_mirror (κ : KEnv) : topVC κ [] mirrorE mirrorTy treeEnv := by
+  simp [topVC, mirrorE, mirrorTy, treeEnv, treeDecl]
+  intro γ _; constructor <;> intros <;> omega
+
+/-- `node : ∀α. l:tree α → x:α → r:tree α → tree α{size l < size ν}` needs the
+    bound (`size r ≥ 0`). -/
+abbrev nodeTy : Ty :=
+  .forall .star (.arrow (TreeT (Par 0)) (.arrow (Par 0) (.arrow (TreeT (Par 0))
+    (TreeT (Par 0) (.fmla (.not (.leqI (sizeB 0) (sizeB 3))))))))
+abbrev nodeE : Exp :=
+  .tabs .star (.lam (.lam (.lam (.ctor "tree" 1 [Par 0] (.pair (.bvar 2) (.pair (.bvar 1) (.bvar 0)))))))
+
+theorem meas_node (κ : KEnv) : topVC κ [] nodeE nodeTy treeEnv := by
+  simp [topVC, nodeE, nodeTy, treeEnv, treeDecl]
+  intros; omega
+
+/-! ## `filterGe` shrinks: `len ν ≤ len xs`
+
+  The path-sensitive filter of DataExamples, at a type that also bounds the
+  result's length; the element refinement of the `Cons` instance is still
+  inferred. -/
+
+abbrev filterGeLenTy : Ty :=
+  .arrow TT (.arrow (ListT TT)
+    (.dataL "list" [.refine .int (.fmla (.leqI (.bvar .int 2) (.bvar .int 0)))]
+      (.fmla (.leqI (lenB 0) (lenB 1)))))
+
+theorem meas_filterGe : ∃ κ : KEnv, Check lenEnv κ [] filterGeE filterGeLenTy := by
+  simp only [filterGeE, lenEnv, lenListDecl, listDecl]
+  generate
+  zap
+  grind
+
+/-! ## `insert` into an ordered list adds one element
+
+  The ordered-list `insert` of OrdExamples (polymorphic recursion included), at
+  `∀α:B. x:α → ys:olist α → olist α{len ν = 1 + len ys}`. -/
+
+def olistLenEnv : DEnv :=
+  [("olist", { olistDecl with measures := [("len", [.const 0, .add (.const 1) (.meas "len" 1)])] })]
+
+theorem olistLenEnv_wf : olistLenEnv.wfB = true := by decide
+
+abbrev insLenTy : Ty := .forall .B (.arrow (Par 0) (.arrow (OListT (Par 0))
+  (.dataL "olist" [Par 0] (.fmla (.eq .int (lenB 0) (.add (.const .int 1) (lenB 1)))))))
+
+theorem meas_insert (κ : KEnv) : topVC κ [] insE insLenTy olistLenEnv := by
+  simp [topVC, olistLenEnv, olistDecl]
+  split_sorts
+  all_goals grind

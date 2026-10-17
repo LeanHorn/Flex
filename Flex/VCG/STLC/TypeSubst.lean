@@ -37,6 +37,7 @@ def Term.sorts : {b : Base} → Term b → List Base
   | _, .add t₁ t₂ => Term.sorts t₁ ++ Term.sorts t₂
   | _, .mbvar _ _ => []
   | _, .mfvar _ _ => []
+  | _, .ibvar _   => []
   | _, .not t     => Term.sorts t
   | _, .and t₁ t₂ => Term.sorts t₁ ++ Term.sorts t₂
 
@@ -121,6 +122,9 @@ theorem Term.ival_substB (θ : BSubst) {γ γ' : REnv} (hmap : γ'.map = γ.map)
   | mfvar m x =>
     intro _ _ _
     simp [Term.ival, Term.substB, Term.interp, hmeas, hmap, Base.substB]
+  | ibvar k =>
+    intro _ hmbv _
+    simp [Term.ival, Term.substB, Term.interp, hmbv k rfl, Base.substB]
   | add t₁ t₂ ih₁ ih₂ | and t₁ t₂ ih₁ ih₂ =>
     intro hbv hmbv hA
     have h₁ := ih₁ (fun c k hk => hbv c k (Or.inl hk)) (fun k hk => hmbv k (Or.inl hk)) hA.left
@@ -231,7 +235,7 @@ theorem Term.substB_id : ∀ {b : Base} (t : Term b),
   | const b c => cases b <;> first | rfl | exact c.elim
   | bvar b k => cases b <;> rfl
   | fvar b x => cases b <;> rfl
-  | mbvar _ _ | mfvar _ _ => rfl
+  | mbvar _ _ | mfvar _ _ | ibvar _ => rfl
   | add t₁ t₂ ih₁ ih₂ | and t₁ t₂ ih₁ ih₂ =>
     simp only [Base.substB, Sigma.mk.injEq, heq_eq_eq, true_and] at ih₁ ih₂
     simp only [Term.substB, Base.substB, ih₁, ih₂]
@@ -297,7 +301,7 @@ theorem Term.ftv_of_mem_sorts {a : TVar} : ∀ {b : Base} (t : Term b), .tfvar a
   induction t with
   | const b _ | bvar b _ | fvar b _ =>
     intro h; simp only [Term.sorts, List.mem_singleton] at h; subst h; simp [Term.ftv, Base.ftv]
-  | mbvar _ _ | mfvar _ _ => intro h; simp [Term.sorts] at h
+  | mbvar _ _ | mfvar _ _ | ibvar _ => intro h; simp [Term.sorts] at h
   | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
     intro h; simp only [Term.sorts, List.mem_append] at h
     simp only [Term.ftv, List.mem_append]; exact h.imp ih₁ ih₂
@@ -343,7 +347,7 @@ theorem Term.sortOK_of_mem_sorts {kctx : List Kind} {ctx : List (Option Base)} :
   | const b _ =>
     intro hw c hc; simp only [Term.sorts, List.mem_singleton] at hc; subst hc
     cases c <;> simp_all [Term.wfB, Base.isTv, Base.sortOK]
-  | mbvar _ _ | mfvar _ _ => intro _ c hc; simp [Term.sorts] at hc
+  | mbvar _ _ | mfvar _ _ | ibvar _ => intro _ c hc; simp [Term.sorts] at hc
   | bvar b _ =>
     intro hw c hc; simp only [Term.sorts, List.mem_singleton] at hc; subst hc
     simp only [Term.wfB, Bool.and_eq_true] at hw; exact hw.2

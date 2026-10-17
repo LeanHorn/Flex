@@ -120,3 +120,18 @@ open STLC
 
 /-- info: 'meas_headClient_safe' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms meas_headClient_safe
+
+/-- info: 'meas_consPos' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms meas_consPos
+
+/-- info: 'meas_sumIList' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms meas_sumIList
+
+/-- info: 'meas_mirror' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms meas_mirror
+
+/-- info: 'meas_filterGe' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms meas_filterGe
+
+/-- info: 'meas_insert' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms meas_insert

@@ -13,6 +13,7 @@ def Term.fv : {b : Base} → Term b → List EVar
   | _, .add t₁ t₂   => Term.fv t₁ ++ Term.fv t₂
   | _, .mbvar _ _   => []
   | _, .mfvar _ x   => [x]
+  | _, .ibvar _     => []
   | _, .not t       => Term.fv t
   | _, .and t₁ t₂   => Term.fv t₁ ++ Term.fv t₂
 
@@ -28,6 +29,8 @@ def Term.openBVar (k : Nat) (x : EVar) : {b : Base} → Term b → Term b
   | _, .mbvar m j    =>
       if j = k then .mfvar m x else if k < j then .mbvar m (j - 1) else .mbvar m j
   | _, .mfvar m y    => .mfvar m y
+  | _, .ibvar j      =>
+      if j = k then .fvar .int x else if k < j then .ibvar (j - 1) else .ibvar j
   | _, .not t        => .not (Term.openBVar k x t)
   | _, .and t₁ t₂    => .and (Term.openBVar k x t₁) (Term.openBVar k x t₂)
 
@@ -157,6 +160,11 @@ theorem Term.fv_openBVar {k : Nat} {x z : EVar} : ∀ {b : Base} (t : Term b),
     · simp [Term.fv]
     · split <;> simp [Term.fv]
   | mfvar => simp only [Term.openBVar, Term.fv, List.mem_singleton]; exact Or.inl
+  | ibvar j =>
+    simp only [Term.openBVar]
+    split
+    · simp [Term.fv]
+    · split <;> simp [Term.fv]
   | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
     simp only [Term.openBVar, Term.fv, List.mem_append]
     rintro (h | h)
@@ -237,6 +245,7 @@ def Term.hasBVar (b : Base) (k : Nat) : {b' : Base} → Term b' → Prop
   | _, .add t₁ t₂  => Term.hasBVar b k t₁ ∨ Term.hasBVar b k t₂
   | _, .mbvar _ _  => False
   | _, .mfvar _ _  => False
+  | _, .ibvar _    => False
   | _, .not t      => Term.hasBVar b k t
   | _, .and t₁ t₂  => Term.hasBVar b k t₁ ∨ Term.hasBVar b k t₂
 
@@ -269,6 +278,7 @@ def Term.hasMBVar (k : Nat) : {b' : Base} → Term b' → Prop
   | _, .add t₁ t₂  => Term.hasMBVar k t₁ ∨ Term.hasMBVar k t₂
   | _, .mbvar _ j  => k = j
   | _, .mfvar _ _  => False
+  | _, .ibvar j    => k = j
   | _, .not t      => Term.hasMBVar k t
   | _, .and t₁ t₂  => Term.hasMBVar k t₁ ∨ Term.hasMBVar k t₂
 
@@ -408,6 +418,7 @@ theorem Term.hasBVar_openBVar {b'' : Base} (t : Term b'') (b : Base) (i k : Nat)
   | fvar _ _ => simp [Term.openBVar, Term.hasBVar]
   | mbvar m j => simp only [Term.openBVar]; split <;> (try split) <;> simp [Term.hasBVar]
   | mfvar _ _ => simp [Term.openBVar, Term.hasBVar]
+  | ibvar j => simp only [Term.openBVar]; split <;> (try split) <;> simp [Term.hasBVar]
   | add t₁ t₂ ih1 ih2 => simp only [Term.openBVar, Term.hasBVar, ih1, ih2]; grind
   | not t ih  => simp only [Term.openBVar, Term.hasBVar, ih]
   | and t₁ t₂ ih1 ih2 => simp only [Term.openBVar, Term.hasBVar, ih1, ih2]; grind
@@ -564,6 +575,7 @@ def Term.substB (σ : BSubst) : {b : Base} → Term b → Term (b.substB σ)
   | _, .add t₁ t₂ => .add (Term.substB σ t₁) (Term.substB σ t₂)
   | _, .mbvar m k => .mbvar m k
   | _, .mfvar m x => .mfvar m x
+  | _, .ibvar k   => .ibvar k
   | _, .not t     => .not (Term.substB σ t)
   | _, .and t₁ t₂ => .and (Term.substB σ t₁) (Term.substB σ t₂)
 
@@ -594,7 +606,7 @@ theorem Val.inj_injective (s : BSort) {v w : s.ty} : Val.inj s v = Val.inj s w �
     (t.substB σ).fv = t.fv := by
   intro b t
   induction t with
-  | const _ _ | bvar _ _ | fvar _ _ | mbvar _ _ | mfvar _ _ => rfl
+  | const _ _ | bvar _ _ | fvar _ _ | mbvar _ _ | mfvar _ _ | ibvar _ => rfl
   | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
     simp only [Term.substB, Term.fv]; exact congr (congrArg (· ++ ·) ih₁) ih₂
   | not _ ih => simp only [Term.substB, Term.fv]; exact ih
@@ -729,6 +741,7 @@ def Term.wfB (kctx : List Kind) (ctx : List (Option Base)) : {b : Base} → Term
   | _, .add t₁ t₂ => Term.wfB kctx ctx t₁ && Term.wfB kctx ctx t₂
   | _, .mbvar _ i => decide (i < ctx.length)
   | _, .mfvar _ _ => true
+  | _, .ibvar i   => decide (i < ctx.length)
   | _, .not t     => Term.wfB kctx ctx t
   | _, .and t₁ t₂ => Term.wfB kctx ctx t₁ && Term.wfB kctx ctx t₂
 
@@ -768,7 +781,7 @@ theorem Term.wfB_hasBVar {kctx : List Kind} {ctx : List (Option Base)} :
       ∀ b k, Term.hasBVar b k t → ctx[k]? = some (some b) := by
   intro b'' t
   induction t with
-  | const _ _ | fvar _ _ | mbvar _ _ | mfvar _ _ => intro _ b k h; simp [Term.hasBVar] at h
+  | const _ _ | fvar _ _ | mbvar _ _ | mfvar _ _ | ibvar _ => intro _ b k h; simp [Term.hasBVar] at h
   | bvar b' i =>
     intro hw b k h
     simp only [Term.hasBVar] at h
@@ -840,6 +853,10 @@ theorem Term.wfB_hasMBVar {kctx : List Kind} {ctx : List (Option Base)} :
   induction t with
   | const _ _ | bvar _ _ | fvar _ _ | mfvar _ _ => intro _ k h; simp [Term.hasMBVar] at h
   | mbvar m j =>
+    intro hw k h
+    simp only [Term.hasMBVar] at h; subst h
+    simpa [Term.wfB] using hw
+  | ibvar j =>
     intro hw k h
     simp only [Term.hasMBVar] at h; subst h
     simpa [Term.wfB] using hw
@@ -934,7 +951,7 @@ theorem Term.hasBVar_substB (σ : BSubst) (b : Base) (k : Nat) :
       ∃ b₀, b = b₀.substB σ ∧ Term.hasBVar b₀ k t := by
   intro b'' t
   induction t with
-  | const _ _ | fvar _ _ | mbvar _ _ | mfvar _ _ => intro h; simp [Term.substB, Term.hasBVar] at h
+  | const _ _ | fvar _ _ | mbvar _ _ | mfvar _ _ | ibvar _ => intro h; simp [Term.substB, Term.hasBVar] at h
   | bvar b' i =>
     intro h
     simp only [Term.substB, Term.hasBVar] at h
@@ -1166,6 +1183,7 @@ def Term.ftv : {b : Base} → Term b → List TVar
   | _, .add t₁ t₂  => Term.ftv t₁ ++ Term.ftv t₂
   | _, .mbvar _ _  => []
   | _, .mfvar _ _  => []
+  | _, .ibvar _    => []
   | _, .not t      => Term.ftv t
   | _, .and t₁ t₂  => Term.ftv t₁ ++ Term.ftv t₂
 
@@ -2087,6 +2105,7 @@ theorem Term.interp_write_fresh {b : Base} (t : Term b)
     have hxy : x ≠ y := fun he => h (by subst he; simp [Term.fv])
     exact REnv.get_write_other bv γ x v hxy
   | mbvar _ _ => rfl
+  | ibvar _ => rfl
   | mfvar m y =>
     have hxy : x ≠ y := fun he => h (by subst he; simp [Term.fv])
     simp [Term.interp, REnv.write, hxy]
@@ -2196,6 +2215,21 @@ theorem Term.interp_openBVar {b : Base} (x : EVar) (w : Val) :
       simp only [Term.fv, List.mem_singleton] at hx
       simp only [Term.openBVar, Term.interp, REnv.write, REnv.insertBV_map, REnv.insertBV_sorts,
         beq_eq_false_iff_ne.mpr hx, Bool.false_eq_true, if_false]
+  | ibvar j =>
+      intro γ k hk _
+      by_cases hjk : j = k
+      · subst hjk
+        simp only [Term.openBVar, Term.interp, REnv.get, REnv.lookup, REnv.write,
+          beq_self_eq_true, if_true, REnv.insertBV_bv, REnv.insertBV_sorts,
+          List.getElem?_insertIdx_self, hk, if_true, Option.getD_some, Base.resolve]
+      · simp only [Term.openBVar, if_neg hjk]
+        by_cases hlt : k < j
+        · rw [if_pos hlt]
+          simp only [Term.interp, REnv.insertBV_bv, REnv.insertBV_sorts]
+          rw [List.getElem?_insertIdx_of_gt hlt]
+        · rw [if_neg hlt]
+          simp only [Term.interp, REnv.insertBV_bv, REnv.insertBV_sorts]
+          rw [List.getElem?_insertIdx_of_lt (by omega)]
   | add t₁ t₂ ih₁ ih₂ =>
       intro γ k hk hx
       simp only [Term.fv, List.mem_append, not_or] at hx
@@ -2460,14 +2494,15 @@ theorem Formula.hasBVar_conjAll {b : Base} {k : Nat} : ∀ (φs : List Formula),
     · obtain ⟨ψ, hψ, h⟩ := Formula.hasBVar_conjAll φs h
       exact ⟨ψ, List.mem_cons_of_mem _ hψ, h⟩
 
-theorem MBody.toTerm_noBVar {msr : String → Nat → Term .int}
-    (hm : ∀ m i b k, ¬ Term.hasBVar b k (msr m i)) :
-    ∀ (body : MBody) b k, ¬ Term.hasBVar b k (body.toTerm msr)
+theorem MBody.toTerm_noBVar {fld : Nat → Term .int} {msr : String → Nat → Term .int}
+    (hf : ∀ i b k, ¬ Term.hasBVar b k (fld i)) (hm : ∀ m i b k, ¬ Term.hasBVar b k (msr m i)) :
+    ∀ (body : MBody) b k, ¬ Term.hasBVar b k (body.toTerm fld msr)
   | .const _, b, k => by simp [MBody.toTerm, Term.hasBVar]
+  | .field i, b, k => hf i b k
   | .meas m i, b, k => hm m i b k
   | .add x y, b, k => by
     simp only [MBody.toTerm, Term.hasBVar, not_or]
-    exact ⟨MBody.toTerm_noBVar hm x b k, MBody.toTerm_noBVar hm y b k⟩
+    exact ⟨MBody.toTerm_noBVar hf hm x b k, MBody.toTerm_noBVar hf hm y b k⟩
 
 /-- A constructor's measure facts mention no sorted bound variable (they read
     ν and the fields only through measures). -/
@@ -2481,7 +2516,8 @@ theorem DEnv.ctorRefine_noBVar (de : DEnv) (C : String) (j : Nat) (e : Exp) :
     simp only [List.mem_map] at hφ
     obtain ⟨mb, _, rfl⟩ := hφ
     simp only [Formula.hasBVar, Term.hasBVar, false_or] at h
-    exact MBody.toTerm_noBVar (fun _ _ _ _ h => by split at h <;> simp [Term.hasBVar] at h) _ _ _ h
+    exact MBody.toTerm_noBVar (fun _ _ _ h => by split at h <;> simp [Term.hasBVar] at h)
+      (fun _ _ _ _ h => by split at h <;> simp [Term.hasBVar] at h) _ _ _ h
   · simp [Refinement.hasBVar, Formula.hasBVar] at h
 
 theorem DEnv.caseFacts_noBVar (de : DEnv) (C : String) (j n : Nat) (x : EVar) :
@@ -2492,7 +2528,8 @@ theorem DEnv.caseFacts_noBVar (de : DEnv) (C : String) (j n : Nat) (x : EVar) :
   simp only [List.mem_map] at hφ
   obtain ⟨mb, _, rfl⟩ := hφ
   simp only [Formula.hasBVar, Term.hasBVar, false_or] at h
-  exact MBody.toTerm_noBVar (fun _ _ _ _ h => by simp [Term.hasBVar] at h) _ _ _ h
+  exact MBody.toTerm_noBVar (fun _ _ _ h => by simp [Term.hasBVar] at h)
+    (fun _ _ _ _ h => by simp [Term.hasBVar] at h) _ _ _ h
 
 theorem Ty.WFBVarCtx_strengthenLast {r : Refinement} (hr : ∀ b k, ¬ r.hasBVar b k) :
     ∀ (n : Nat) (t : Ty) (ctx : List (Option Base)), Ty.WFBVarCtx ctx t →

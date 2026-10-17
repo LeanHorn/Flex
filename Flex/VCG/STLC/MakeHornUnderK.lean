@@ -152,6 +152,7 @@ macro "vc_generate" : tactic =>
     under_exists =>
       apply check_sound
       simp ; rfl
+      apply Entail.emp
       simp)
 
 /-- `vc_reify` — reify the single `KEnv` into typed per-κ unknowns (arities

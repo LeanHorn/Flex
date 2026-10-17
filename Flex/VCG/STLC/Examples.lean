@@ -103,7 +103,7 @@ attribute [simp] Refinement.openBVar Formula.openBVar Term.openBVar String.lengt
 attribute [simp] List.lookup TEnv.tyFv
 attribute [simp] DataDecl.ctors Ty.tuple DEnv.ctorRefine DEnv.nFields DEnv.fields? Exp.tupleVarsN
   DEnv.ctorFacts DEnv.ctorMeasures DataDecl.ctorMeasures DEnv.altTy Exp.var? Ty.strengthenLast
-  DEnv.caseFacts Formula.conjAll MBody.toTerm DEnv.measEqs DEnv.measNames
+  DEnv.caseFacts Formula.conjAll MBody.toTerm DEnv.measEqs DEnv.measNames DEnv.boundFacts DEnv.allBounds
 
 macro "generate" : tactic => `(tactic| (vc_generate ; vc_reify))
 
@@ -246,7 +246,7 @@ example (κ : KEnv) : topVC κ [] exUnreachable tyUnreachable := by
 
 -- Declarative-side: `unreach` is directly derivable from a contradictory `Entail`.
 example (κ : KEnv) (Γ : TEnv) (t : Ty)
-    (h : Entail κ Γ (fun _ => False)) (hwf : Ty.WFBVars t) :
+    (h : Entail [] κ Γ (fun _ => False)) (hwf : Ty.WFBVars t) :
     Hastype [] κ Γ .unreach t := .unreach h hwf
 
 -- Sanity check: `unreach` genuinely gets stuck — it has no `Eval` rule, not

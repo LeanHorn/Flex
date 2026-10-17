@@ -44,7 +44,7 @@ theorem DEnv.wfB_meas {de : DEnv} (h : de.wfB = true) {C : String} {d : DataDecl
       ∀ j mb c, mb ∈ d.ctorMeasures j → d.ctorFields[j]? = some c → mb.2.idxOK c.2.length = true := by
   have hmem := List.mem_of_lookup_eq_some' hd
   simp only [DEnv.wfB, Bool.and_eq_true, List.all_eq_true] at h
-  have hok := h.2 (C, d) hmem
+  have hok := h.2.1 (C, d) hmem
   simp only [DataDecl.measOK, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hok
   refine ⟨hok.1, fun j mb c hmb hc => ?_⟩
   simp only [DataDecl.ctorMeasures, List.mem_filterMap, Option.map_eq_some_iff] at hmb
@@ -55,11 +55,6 @@ theorem DEnv.wfB_meas {de : DEnv} (h : de.wfB = true) {C : String} {d : DataDecl
   exact hok.2 x hx (b, c) hzip
 
 /-! ## Evaluating facts -/
-
-theorem Formula.interp_conjAll (γ : REnv) : ∀ (φs : List Formula),
-    Formula.interp γ (Formula.conjAll φs) ↔ ∀ φ ∈ φs, Formula.interp γ φ
-  | [] => by simp [Formula.conjAll, Formula.interp]
-  | φ :: φs => by simp [Formula.conjAll, Formula.interp, Formula.interp_conjAll γ φs]
 
 theorem MBody.interp_toTerm (γ : REnv) (msr : String → Nat → Term .int) : ∀ (b : MBody),
     Term.interp γ (b.toTerm msr) = b.eval (fun i m => Term.interp γ (msr m i))
@@ -299,5 +294,57 @@ theorem Exp.tupleVarsN_eval {γ : REnv} {n k m : Nat} {e : Exp} {as : List EVar}
     have := Val.fieldsN_ofList (as.map γ.map)
     rw [hl] at this
     exact this
+
+/-! ## Measure bounds -/
+
+theorem MBody.lowerBound_le {bs : List (String × Int)} {fm : Nat → String → Int}
+    (hfm : ∀ i m c, (m, c) ∈ bs → c ≤ fm i m) :
+    ∀ (body : MBody) (l : Int), body.lowerBound bs = some l → l ≤ body.eval fm
+  | .const n, l, h => by simp [MBody.lowerBound] at h; simp [MBody.eval, h]
+  | .meas m i, l, h => by
+    simp only [MBody.lowerBound] at h
+    exact hfm i m l (List.mem_of_lookup_eq_some' h)
+  | .add a b, l, h => by
+    simp only [MBody.lowerBound, Option.bind_eq_some_iff, Option.map_eq_some_iff] at h
+    obtain ⟨x, hx, y, hy, rfl⟩ := h
+    have := MBody.lowerBound_le hfm a x hx
+    have := MBody.lowerBound_le hfm b y hy
+    simp only [MBody.eval]; omega
+
+/-- The declared bounds hold of every value. -/
+theorem DEnv.measEval_bounds {de : DEnv} (h : de.boundsOK = true) :
+    ∀ (v : Val), ∀ mc ∈ de.allBounds, mc.2 ≤ de.measEval mc.1 v := by
+  intro v
+  induction v using (measure fun v : Val => sizeOf v).wf.induction with
+  | h v ih =>
+  intro mc hmc
+  simp only [DEnv.boundsOK, List.all_eq_true, Bool.and_eq_true, decide_eq_true_eq] at h
+  have h0 := (h mc hmc).1
+  cases v with
+  | ctor C j w =>
+    rw [DEnv.measEval_ctor]
+    split
+    · rename_i body hbody
+      simp only [Option.bind_eq_some_iff, DataDecl.measBody?] at hbody
+      obtain ⟨d, hd, bs, hbs, hb⟩ := hbody
+      have hdmem := List.mem_of_lookup_eq_some' hd
+      have hbsmem := List.mem_of_lookup_eq_some' hbs
+      have hchk := (h mc hmc).2 (C, d) hdmem (mc.1, bs) (by simp [hbsmem]) body
+        (List.mem_of_getElem? hb)
+      split at hchk
+      · rename_i l hl
+        simp only [decide_eq_true_eq] at hchk
+        refine Int.le_trans hchk (MBody.lowerBound_le ?_ body l hl)
+        intro i m c hmc'
+        split
+        · rename_i hi
+          refine ih _ ?_ (m, c) hmc'
+          show sizeOf _ < sizeOf (Val.ctor C j w)
+          have := Val.sizeOf_le_of_mem_fieldsN (List.getElem_mem hi)
+          simp; omega
+        · exact (h (m, c) hmc').1
+      · simp at hchk
+    · exact h0
+  | _ => simpa [DEnv.measEval] using h0
 
 end STLC

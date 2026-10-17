@@ -56,7 +56,7 @@ inductive Hastype : DEnv → KEnv → TEnv → Exp → Ty → Prop where
       Γ.lookup y = some (.refine .bool ry) →
       Hastype de κ Γ (.and (.fvar x) (.fvar y)) <ty|Bool{ν : (ν = x ∧ y)}|>
   | unreach {de κ Γ t} :
-      Entail κ Γ (fun _ => False) →
+      Entail de κ Γ (fun _ => False) →
       Ty.WFBVars t →
       Hastype de κ Γ .unreach t
   | ite {de κ Γ x y e₁ e₂ r t} :

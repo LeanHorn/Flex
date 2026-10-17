@@ -13,15 +13,16 @@ open STLC
 
 namespace STLC
 
-def implyBindCstr (x : EVar) (t : Ty) (c : Cstr) : Cstr :=
+def implyBindCstr (de : DEnv) (x : EVar) (t : Ty) (c : Cstr) : Cstr :=
   match t.hyp? with
   | some (b, r) => .all x b (.imp (r.openBVar 0 x) c)
   | none        =>
-    -- a datatype binding has no sort to quantify over: its refinement is a
-    -- hypothesis about the (top-level universally quantified) slot `x`
-    match t.dhyp? with
-    | some r => .imp (r.openBVar 0 x) c
-    | none   => c
+    -- a datatype binding has no sort to quantify over: its refinement — and
+    -- the bounds of its measures — are hypotheses about the (top-level
+    -- universally quantified) slot `x`
+    match t with
+    | .data C _ _ r => .imp (de.boundFacts C x) (.imp (r.openBVar 0 x) c)
+    | _             => c
 
 /-- Conjoin the constraints produced for every element of a list (failing if
     any element fails). -/
@@ -64,14 +65,14 @@ def sub (de : DEnv) (Γ : TEnv) : Ty → Ty → Option Cstr
         let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ r₁.fv ++ r₂.fv)
         -- `∀x:b. r₁[x] ⇒ r₂[x]`; sorts without a model hypothesis (⋆-kinded
         -- type variables) bind nothing — see `implyBindCstr`.
-        some (implyBindCstr x (.refine b₁ r₁) (.head (r₂.openBVar 0 x)))
+        some (implyBindCstr de x (.refine b₁ r₁) (.head (r₂.openBVar 0 x)))
       else none
   | .arrow s₁ t₁, .arrow s₂ t₂ =>
       let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ
                             ++ s₁.fv ++ s₂.fv ++ t₁.fv ++ t₂.fv)
       match sub de Γ s₂ s₁, sub de ((x, s₂) :: Γ) (t₁.openVar 0 x) (t₂.openVar 0 x) with
       | some c₁, some c₂ =>
-          some (.conj c₁ (implyBindCstr x s₂ c₂))
+          some (.conj c₁ (implyBindCstr de x s₂ c₂))
       | _, _ => none
   | .forall k₁ t₁, .forall k₂ t₂ =>
       if k₁ = k₂ then
@@ -82,7 +83,7 @@ def sub (de : DEnv) (Γ : TEnv) : Ty → Ty → Option Cstr
       let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ
                             ++ s₁.fv ++ s₂.fv ++ t₁.fv ++ t₂.fv)
       match sub de Γ s₁ s₂, sub de ((x, s₁) :: Γ) (t₁.openVar 0 x) (t₂.openVar 0 x) with
-      | some c₁, some c₂ => some (.conj c₁ (implyBindCstr x s₁ c₂))
+      | some c₁, some c₂ => some (.conj c₁ (implyBindCstr de x s₁ c₂))
       | _, _ => none
   | .data C₁ n₁ a₁ r₁, .data C₂ n₂ a₂ r₂ =>
       -- type arguments related according to the declared variances
@@ -96,7 +97,7 @@ def sub (de : DEnv) (Γ : TEnv) : Ty → Ty → Option Cstr
             match sub de Γ (a₁ i) (a₂ (Fin.cast h.2 i)), sub de Γ (a₂ (Fin.cast h.2 i)) (a₁ i) with
             | some c, some c' => some (.conj c c')
             | _, _ => none) (List.finRange n₁)).map fun c =>
-          .conj c (implyBindCstr x (.data C₁ n₁ a₁ r₁) (.head (r₂.openBVar 0 x)))
+          .conj c (implyBindCstr de x (.data C₁ n₁ a₁ r₁) (.head (r₂.openBVar 0 x)))
       else none
   | _, _ => none
 termination_by s t => s.skel + t.skel
@@ -173,7 +174,7 @@ mutual
     | .lam e, .arrow s₁ s₂ =>
         let x := EVar.fresh (TEnv.dom Γ ++ e.fv ++ s₁.fv ++ s₂.fv ++ TEnv.tyFv Γ)
         match check de ((x, s₁) :: Γ) (e.openVar 0 x) (s₂.openVar 0 x) with
-        | some c => some (implyBindCstr x s₁ c)
+        | some c => some (implyBindCstr de x s₁ c)
         | none   => none
     | .fix e, .arrow s t =>
         -- Chk-Rec: check the body assuming `f : s → t` (assume–guarantee). The
@@ -185,7 +186,7 @@ mutual
         let as := if (e.openVar 1 f).tappsVar f then TEnv.genVars Γ (.arrow s t) else []
         match check de ((x, s) :: (f, Ty.gen as (.arrow s t)) :: Γ)
                 ((e.openVar 1 f).openVar 0 x) (t.openVar 0 x) with
-        | some c => some (implyBindCstr x s c)
+        | some c => some (implyBindCstr de x s c)
         | none   => none
     | .tabs k e, .forall k' t =>
         if k = k' then
@@ -205,7 +206,7 @@ mutual
             let y := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ body.fv ++ s.fv ++ t.fv ++ t'.fv ++ [x])
             match check de ((y, t.openVar 0 x) :: (x, s) :: Γ)
                     ((body.openVar 1 x).openVar 0 y) t' with
-            | some c' => some (Cstr.conj c (implyBindCstr x s (implyBindCstr y (t.openVar 0 x) c')))
+            | some c' => some (Cstr.conj c (implyBindCstr de x s (implyBindCstr de y (t.openVar 0 x) c')))
             | none    => none
         | _ => none
     | .case e m alts, t =>
@@ -218,7 +219,7 @@ mutual
                       let tz := de.altTy C j.val e.var? (Ty.instTys (List.ofFn args) P)
                       let z := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ (alts j).fv ++ t.fv ++ tz.fv)
                       match check de ((z, tz) :: Γ) ((alts j).openVar 0 z) t with
-                      | some cj => some (implyBindCstr z tz cj)
+                      | some cj => some (implyBindCstr de z tz cj)
                       | none    => none
                   | none => none) (List.finRange m) with
               | some cs => some (Cstr.conj c cs)
@@ -230,7 +231,7 @@ mutual
         | some (c₁, s) =>
             let x := EVar.fresh (TEnv.dom Γ ++ e₂.fv ++ s.fv ++ t.fv ++ TEnv.tyFv Γ)
             match check de ((x, s) :: Γ) (e₂.openVar 0 x) t with
-            | some c₂ => some (Cstr.conj c₁ (implyBindCstr x s c₂))
+            | some c₂ => some (Cstr.conj c₁ (implyBindCstr de x s c₂))
             | none    => none
         | none => none
     | .ite e₀ e₁ e₂, t =>
@@ -249,8 +250,8 @@ mutual
                   match check de ((y, r_true) :: Γ) e₁ t,
                         check de ((y, r_false) :: Γ) e₂ t with
                   | some c₁, some c₂ =>
-                      some (Cstr.conj (implyBindCstr y r_true  c₁)
-                                      (implyBindCstr y r_false c₂))
+                      some (Cstr.conj (implyBindCstr de y r_true  c₁)
+                                      (implyBindCstr de y r_false c₂))
                   | _, _ => none
               | _ => none
         | _ => none

@@ -667,6 +667,9 @@ structure DataDecl where
   variances : List Variance := []
   /-- The measures, each with one body per constructor (in order). -/
   measures : List (String × List MBody) := []
+  /-- Declared lower bounds of measures (`("len", 0)`: `len v ≥ 0`), checked
+      against the bodies and then assumed of every value. -/
+  bounds : List (String × Int) := []
 
 /-- The constructors with their payload types. -/
 def DataDecl.ctors (d : DataDecl) : List (String × Ty) :=
@@ -731,6 +734,21 @@ def DEnv.measNames (de : DEnv) (C : String) : List String :=
     measure of ν equals that measure of `x`. -/
 def DEnv.measEqs (de : DEnv) (C : String) (x : EVar) : Refinement :=
   .fmla (Formula.conjAll ((de.measNames C).map fun m => .eq .int (.mbvar m 0) (.mfvar m x)))
+
+/-- All declared measure bounds. -/
+def DEnv.allBounds (de : DEnv) : List (String × Int) := de.flatMap fun d => d.2.bounds
+
+/-- The bounds of `C`'s measures, as facts about `x`. -/
+def DEnv.boundFacts (de : DEnv) (C : String) (x : EVar) : Refinement :=
+  .fmla (Formula.conjAll ((de.allBounds.filter fun mc => mc.1 ∈ de.measNames C).map fun mc =>
+    .leqI (.const .int mc.2) (.mfvar mc.1 x)))
+
+/-- The least value a body can take, given lower bounds for the measures it
+    reads (none if it can be arbitrarily small). -/
+def MBody.lowerBound (bs : List (String × Int)) : MBody → Option Int
+  | .const n  => some n
+  | .meas m _ => bs.lookup m
+  | .add a b  => (a.lowerBound bs).bind fun x => (b.lowerBound bs).map (x + ·)
 
 /-- The scrutinee of a `case`, when it is a variable. -/
 def Exp.var? : Exp → Option EVar
@@ -805,6 +823,10 @@ termination_by v => sizeOf v
 decreasing_by
   have := Val.sizeOf_le_of_mem_fieldsN (List.getElem_mem h)
   simp; omega
+
+/-- A measure interpretation respects the declared bounds. -/
+def DEnv.BoundsHold (de : DEnv) (meas : String → Val → Int) : Prop :=
+  ∀ mc ∈ de.allBounds, ∀ v, mc.2 ≤ meas mc.1 v
 
 theorem DEnv.measEval_ctor (de : DEnv) (m : String) (C : String) (j : Nat) (w : Val) :
     de.measEval m (.ctor C j w) =

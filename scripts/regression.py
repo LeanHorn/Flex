@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regression anchor for Flex.
 
-Compiles every benchmark / demo file individually with `lake env lean` and
+Compiles every benchmark / demo file individually with `lake lean` and
 reports a green ✓ (pass) or red ✗ (fail) per file. A file passes iff Lean
 exits 0 and emits no `error:` diagnostics. `sorry` warnings are surfaced but
 do not by themselves fail a file (use --strict-sorry to treat them as fails).
@@ -72,9 +72,10 @@ class Result:
 
 def check_file(path: Path, strict_sorry: bool) -> Result:
     start = time.monotonic()
-    # Flex is mathlib-free: every file compiles with plain `lake env lean`.
+    # Lake loads native plugins required by imports (notably lean-smt/cvc5).
+    # Hide dependency build logs; --strict-sorry checks this file's diagnostics.
     proc = subprocess.run(
-        ["lake", "env", "lean", str(path)],
+        ["lake", "--log-level=error", "lean", str(path)],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,

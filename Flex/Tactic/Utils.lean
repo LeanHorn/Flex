@@ -1,4 +1,5 @@
 import Lean
+import Flex.Core
 
 open Lean Elab Tactic
 
@@ -31,8 +32,7 @@ register_option flex.benchPhases : Bool := {
   AND restore the Core message log so any errors
   the tactic logged before throwing don't leak —
   `saveState`/`saved.restore` only cover Term/Meta
-  state, not the message log.
--/
+  state, not the message log. -/
 def attemptTactic (tactic : TacticM Unit) : TacticM Bool := do
   let saved     ← saveState
   let savedMsgs ← Core.getMessageLog
@@ -43,3 +43,18 @@ def attemptTactic (tactic : TacticM Unit) : TacticM Bool := do
     saved.restore
     Core.setMessageLog savedMsgs
     return false
+
+/-- Set up a κ-goal for a solver tactic:
+    1. unfold top-level definition, e.g., `theorem x : yProp := ..` gets `yProp` unfolded
+    2. peel `∃ κ₁ ⋯ κₙ` chain into `κ-mvars`
+    3. Return the κ context and the κs in `∃`-order
+-/
+def peelKVars : TacticM (KContext × List KVar) := do
+  let goal ← getMainGoal
+  let _    ← attemptTactic do
+    let newGoal ← goal.withContext do
+      goal.replaceTargetDefEq (← Meta.unfoldDefinition (← goal.getType))
+    replaceMainGoal [newGoal]
+  let ⟨kvarMap, kvars, bodyGoal⟩ ← peelExistentialsAndIntro (← getMainGoal)
+  replaceMainGoal [bodyGoal]
+  return ({ kvars := kvarMap }, kvars)

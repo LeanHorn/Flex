@@ -78,7 +78,7 @@ partial def exprSol1 (κ : KVar) (e : Expr) : KM Expr := do
           return mkConst ``False
         let abstr := conjunct.abstract #[fvar]
         let lam   := Expr.lam name dom abstr .default
-        return mkApp2 (mkConst ``Exists [levelOne]) dom lam
+        return mkApp2 (mkConst ``Exists [Level.one]) dom lam
   -- κ(y₁, ..., yₙ)
   else if e.getAppFn.isMVar && e.getAppFn.mvarId! == κ.mvarId then
     let args := e.getAppArgs.toList
@@ -87,7 +87,7 @@ partial def exprSol1 (κ : KVar) (e : Expr) : KM Expr := do
     let eqs := (κ.params.zip (args.zip κ.paramTypes)).filterMap fun (pi, (ai, ty)) =>
       let lhs : Expr := .fvar (FVarId.mk pi)
       if lhs == ai then none
-      else some (mkApp3 (mkConst ``Eq [levelOne]) ty lhs ai)
+      else some (mkApp3 (mkConst ``Eq [Level.one]) ty lhs ai)
     match eqs with
     | []      => return mkConst ``True
     | [eq]    => return eq

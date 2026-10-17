@@ -22,7 +22,7 @@ rev = "main"
 ### Step 2 — Fetch the dependency
 
 ```bash
-lake update
+MATHLIB_NO_CACHE_ON_UPDATE=1 lake update
 ```
 
 This clones the repo into `.lake/packages/Flex/` using your local Git credentials.
@@ -37,8 +37,9 @@ lake build
 > Its modules do not import Mathlib, but the pinned lean-smt package declares
 > Mathlib as a transitive dependency. `flex_auto` needs `z3` on `PATH`;
 > lean-smt downloads its own cvc5 native library during the first build.
-> `MATHLIB_NO_CACHE_ON_UPDATE=1 lake --keep-toolchain update` avoids fetching
-> unused Mathlib build caches. The Lean toolchain remains `v4.29.0-rc8`.
+> `MATHLIB_NO_CACHE_ON_UPDATE=1 lake update` avoids fetching
+> unused Mathlib build caches. Lean and the pinned dependencies use `v4.34.0`,
+> the newest common release supported by the pinned lean-smt revision.
 
 ---
 

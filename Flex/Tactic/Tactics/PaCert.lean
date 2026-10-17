@@ -10,6 +10,19 @@ import Flex.PA.Scrape
 
 open Lean Elab Meta Tactic
 
+register_option flex.reportQualifiers : Bool := {
+  defValue := true
+  descr := "Show scraped qualifier templates in the Infoview before predicate abstraction."
+}
+
+private def reportScrapedQualifiers (cfg : PAScrapeConfig) (qs : Array Expr) : TacticM Unit := do
+  unless flex.reportQualifiers.get (← getOptions) do return
+  if cfg.mode == .no && cfg.defs.isEmpty then return
+  withOptions (·.setBool `pp.funBinderTypes true) do
+    let header := m!"fix: scraped qualifiers ({qs.size})"
+    let entries := qs.toList.mapIdx fun i q => m!"  {i + 1}. {q}"
+    logInfo (MessageData.joinSep (header :: entries) "\n")
+
 /-- Wall time includes external solver work, unlike Lean heartbeats. -/
 register_option flex.benchOracles : Bool := {
   defValue := false
@@ -57,6 +70,7 @@ def paCertImpl (oracle : PAOracle := proveLeaf) (scrape : PAScrapeConfig := {})
     -- Scrape before `reduce` erases surface predicates and unfolds definitions.
     let rawBody ← bodyGoal.getType
     let extraQualifiers ← scrapePAQualifiers rawBody scrape
+    reportScrapedQualifiers scrape extraQualifiers
     let body ← reduce rawBody
 
     -- Cut-only: every ∃-bound κ is solved by PA. Warn (don't fail) if an

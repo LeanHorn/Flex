@@ -54,6 +54,11 @@ import Flex
 This includes all core types, tactics, elaboration, and the solver.
 For lean-smt, additionally import `Flex.Tactic.Oracles.Smt`.
 
+With `(scrape := head)`, `(scrape := both)`, or `(defs := [...])`, `fix` shows
+the scraped qualifier count and typed templates in the Infoview. These are
+candidates before predicate abstraction. Hide this report with
+`set_option flex.reportQualifiers false`.
+
 ### Example
 
 ```lean4

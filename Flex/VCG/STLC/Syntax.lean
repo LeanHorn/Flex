@@ -80,22 +80,6 @@ inductive BSort where
 instance (s : BSort) : DecidableRel (BSort.le s) := fun x y => by
   cases s <;> simp only [BSort.le] <;> infer_instance
 
-/-- A sort assignment: the base each type variable stands for (the bound ones
-    by de Bruijn index, the free ones by name). -/
-structure SortEnv where
-  bv : List BSort := []
-  fv : TVar → BSort := fun _ => .int
-
-/-- The base a sort stands for under `σ`. -/
-@[simp, reducible] def Base.resolve (σ : SortEnv) : Base → BSort
-  | .int     => .int
-  | .bool    => .bool
-  | .tbvar j => σ.bv.getD j .int
-  | .tfvar a => σ.fv a
-
-/-- The carrier of sort `b` under `σ`. -/
-@[simp, reducible] def Base.sem (σ : SortEnv) (b : Base) : Type := (b.resolve σ).ty
-
 /-- Literal constants exist at `Int` and `Bool` only (a type-variable sort has
     no literals). -/
 @[simp, reducible]
@@ -104,13 +88,6 @@ def Base.interp : Base → Type
   | .bool    => Bool
   | .tbvar _ => Empty
   | .tfvar _ => Empty
-
-/-- A literal, read at its sort. -/
-@[simp, reducible] def Base.ofConst (σ : SortEnv) : (b : Base) → b.interp → b.sem σ
-  | .int,     n => n
-  | .bool,    c => c
-  | .tbvar _, e => e.elim
-  | .tfvar _, e => e.elim
 
 -- `REnv` (the runtime environment) is a single `EVar → Val` map; it is defined
 -- *after* `Val` below, since its operations mention `Val`.
@@ -139,6 +116,11 @@ inductive Term : Base → Type where
   | bvar  : (b : Base) → Nat → Term b
   | fvar  : (b : Base) → EVar → Term b
   | add   : Term .int  → Term .int  → Term .int
+  /-- `m(BVar k)`: measure `m` of the value bound at de Bruijn index `k` (any
+      value — typically a datatype value, which has no sort of its own). -/
+  | mbvar : String → Nat → Term .int
+  /-- `m(x)`: measure `m` of the value of the free variable `x`. -/
+  | mfvar : String → EVar → Term .int
   | not   : Term .bool → Term .bool
   | and   : Term .bool → Term .bool → Term .bool
 -- NOTE: no cross-base constructors (e.g. `leq : Term .int → Term .int → Term .bool`).
@@ -394,6 +376,33 @@ def Exp.openExp (k : Nat) (u : Exp) (e : Exp) : Exp :=
 
 /-- Open `bvar k` with a value (via `Val.toExp`). Handy for big-step. -/
 def Exp.openVal (k : Nat) (v : Val) : Exp → Exp := Exp.openExp k v.toExp
+
+/-- A sort assignment: the base each type variable stands for (the bound ones
+    by de Bruijn index, the free ones by name) — and the interpretation of the
+    measures (`meas m v`: the value of measure `m` on `v`). Verification
+    conditions hold for *every* assignment, so in them measures are
+    uninterpreted; the semantic model fixes them to the measures' definitions. -/
+structure SortEnv where
+  bv : List BSort := []
+  fv : TVar → BSort := fun _ => .int
+  meas : String → Val → Int := fun _ _ => 0
+
+/-- The base a sort stands for under `σ`. -/
+@[simp, reducible] def Base.resolve (σ : SortEnv) : Base → BSort
+  | .int     => .int
+  | .bool    => .bool
+  | .tbvar j => σ.bv.getD j .int
+  | .tfvar a => σ.fv a
+
+/-- The carrier of sort `b` under `σ`. -/
+@[simp, reducible] def Base.sem (σ : SortEnv) (b : Base) : Type := (b.resolve σ).ty
+
+/-- A literal, read at its sort. -/
+@[simp, reducible] def Base.ofConst (σ : SortEnv) : (b : Base) → b.interp → b.sem σ
+  | .int,     n => n
+  | .bool,    c => c
+  | .tbvar _, e => e.elim
+  | .tfvar _, e => e.elim
 
 /-! ## Runtime environment
 

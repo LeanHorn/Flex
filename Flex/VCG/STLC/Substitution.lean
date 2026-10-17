@@ -11,6 +11,8 @@ def Term.fv : {b : Base} → Term b → List EVar
   | _, .bvar _ _    => []
   | _, .fvar _ x    => [x]
   | _, .add t₁ t₂   => Term.fv t₁ ++ Term.fv t₂
+  | _, .mbvar _ _   => []
+  | _, .mfvar _ x   => [x]
   | _, .not t       => Term.fv t
   | _, .and t₁ t₂   => Term.fv t₁ ++ Term.fv t₂
 
@@ -23,6 +25,9 @@ def Term.openBVar (k : Nat) (x : EVar) : {b : Base} → Term b → Term b
       if j = k then .fvar b x else if k < j then .bvar b (j - 1) else .bvar b j
   | _, .fvar b y     => .fvar b y
   | _, .add t₁ t₂    => .add (Term.openBVar k x t₁) (Term.openBVar k x t₂)
+  | _, .mbvar m j    =>
+      if j = k then .mfvar m x else if k < j then .mbvar m (j - 1) else .mbvar m j
+  | _, .mfvar m y    => .mfvar m y
   | _, .not t        => .not (Term.openBVar k x t)
   | _, .and t₁ t₂    => .and (Term.openBVar k x t₁) (Term.openBVar k x t₂)
 
@@ -145,6 +150,12 @@ theorem Term.fv_openBVar {k : Nat} {x z : EVar} : ∀ {b : Base} (t : Term b),
     · split <;> simp [Term.fv]
   | const => simp [Term.openBVar, Term.fv]
   | fvar => simp only [Term.openBVar, Term.fv, List.mem_singleton]; exact Or.inl
+  | mbvar m j =>
+    simp only [Term.openBVar]
+    split
+    · simp [Term.fv]
+    · split <;> simp [Term.fv]
+  | mfvar => simp only [Term.openBVar, Term.fv, List.mem_singleton]; exact Or.inl
   | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
     simp only [Term.openBVar, Term.fv, List.mem_append]
     rintro (h | h)
@@ -223,6 +234,8 @@ def Term.hasBVar (b : Base) (k : Nat) : {b' : Base} → Term b' → Prop
   | _, .bvar b' j  => b = b' ∧ k = j
   | _, .fvar _ _   => False
   | _, .add t₁ t₂  => Term.hasBVar b k t₁ ∨ Term.hasBVar b k t₂
+  | _, .mbvar _ _  => False
+  | _, .mfvar _ _  => False
   | _, .not t      => Term.hasBVar b k t
   | _, .and t₁ t₂  => Term.hasBVar b k t₁ ∨ Term.hasBVar b k t₂
 
@@ -245,6 +258,31 @@ def Refinement.hasBVar (b : Base) (k : Nat) (r : Refinement) : Prop :=
   | .fmla φ      => Formula.hasBVar b k φ
   | .kapp _ args => ∃ a ∈ args, Term.hasBVar b k a.2
   | .conj r₁ r₂  => Refinement.hasBVar b k r₁ ∨ Refinement.hasBVar b k r₂
+
+/-- `Term.hasMBVar k t`: t contains a measure application `m(BVar k)` (which
+    reads the de Bruijn slot `k` whatever value it holds). -/
+def Term.hasMBVar (k : Nat) : {b' : Base} → Term b' → Prop
+  | _, .const _ _  => False
+  | _, .bvar _ _   => False
+  | _, .fvar _ _   => False
+  | _, .add t₁ t₂  => Term.hasMBVar k t₁ ∨ Term.hasMBVar k t₂
+  | _, .mbvar _ j  => k = j
+  | _, .mfvar _ _  => False
+  | _, .not t      => Term.hasMBVar k t
+  | _, .and t₁ t₂  => Term.hasMBVar k t₁ ∨ Term.hasMBVar k t₂
+
+def Formula.hasMBVar (k : Nat) : Formula → Prop
+  | .tt | .ff => False
+  | .eq _ t₁ t₂ | .leq _ t₁ t₂ => Term.hasMBVar k t₁ ∨ Term.hasMBVar k t₂
+  | .and φ₁ φ₂ | .or φ₁ φ₂ | .imp φ₁ φ₂ => Formula.hasMBVar k φ₁ ∨ Formula.hasMBVar k φ₂
+  | .not φ => Formula.hasMBVar k φ
+  | .ex _ φ | .all _ φ => Formula.hasMBVar (k+1) φ
+
+def Refinement.hasMBVar (k : Nat) (r : Refinement) : Prop :=
+  match r with
+  | .fmla φ      => Formula.hasMBVar k φ
+  | .kapp _ args => ∃ a ∈ args, Term.hasMBVar k a.2
+  | .conj r₁ r₂  => Refinement.hasMBVar k r₁ ∨ Refinement.hasMBVar k r₂
 
 /-- Extract the base of a refinement type; None for arrow types. -/
 def Ty.optBase : Ty → Option Base
@@ -367,6 +405,8 @@ theorem Term.hasBVar_openBVar {b'' : Base} (t : Term b'') (b : Base) (i k : Nat)
         · simp [Term.openBVar, hjk, hlt, Term.hasBVar, hbb]
         · simp [Term.openBVar, hjk, hlt, Term.hasBVar, hbb]
   | fvar _ _ => simp [Term.openBVar, Term.hasBVar]
+  | mbvar m j => simp only [Term.openBVar]; split <;> (try split) <;> simp [Term.hasBVar]
+  | mfvar _ _ => simp [Term.openBVar, Term.hasBVar]
   | add t₁ t₂ ih1 ih2 => simp only [Term.openBVar, Term.hasBVar, ih1, ih2]; grind
   | not t ih  => simp only [Term.openBVar, Term.hasBVar, ih]
   | and t₁ t₂ ih1 ih2 => simp only [Term.openBVar, Term.hasBVar, ih1, ih2]; grind
@@ -521,6 +561,8 @@ def Term.substB (σ : BSubst) : {b : Base} → Term b → Term (b.substB σ)
   | _, .bvar _ k  => .bvar _ k
   | _, .fvar _ x  => .fvar _ x
   | _, .add t₁ t₂ => .add (Term.substB σ t₁) (Term.substB σ t₂)
+  | _, .mbvar m k => .mbvar m k
+  | _, .mfvar m x => .mfvar m x
   | _, .not t     => .not (Term.substB σ t)
   | _, .and t₁ t₂ => .and (Term.substB σ t₁) (Term.substB σ t₂)
 
@@ -551,7 +593,7 @@ theorem Val.inj_injective (s : BSort) {v w : s.ty} : Val.inj s v = Val.inj s w �
     (t.substB σ).fv = t.fv := by
   intro b t
   induction t with
-  | const _ _ | bvar _ _ | fvar _ _ => rfl
+  | const _ _ | bvar _ _ | fvar _ _ | mbvar _ _ | mfvar _ _ => rfl
   | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
     simp only [Term.substB, Term.fv]; exact congr (congrArg (· ++ ·) ih₁) ih₂
   | not _ ih => simp only [Term.substB, Term.fv]; exact ih
@@ -684,6 +726,8 @@ def Term.wfB (kctx : List Kind) (ctx : List (Option Base)) : {b : Base} → Term
   | _, .bvar b i  => ctx[i]? == some (some b) && b.sortOK kctx
   | _, .fvar b _  => b.fvOK
   | _, .add t₁ t₂ => Term.wfB kctx ctx t₁ && Term.wfB kctx ctx t₂
+  | _, .mbvar _ i => decide (i < ctx.length)
+  | _, .mfvar _ _ => true
   | _, .not t     => Term.wfB kctx ctx t
   | _, .and t₁ t₂ => Term.wfB kctx ctx t₁ && Term.wfB kctx ctx t₂
 
@@ -723,7 +767,7 @@ theorem Term.wfB_hasBVar {kctx : List Kind} {ctx : List (Option Base)} :
       ∀ b k, Term.hasBVar b k t → ctx[k]? = some (some b) := by
   intro b'' t
   induction t with
-  | const _ _ | fvar _ _ => intro _ b k h; simp [Term.hasBVar] at h
+  | const _ _ | fvar _ _ | mbvar _ _ | mfvar _ _ => intro _ b k h; simp [Term.hasBVar] at h
   | bvar b' i =>
     intro hw b k h
     simp only [Term.hasBVar] at h
@@ -789,6 +833,71 @@ theorem Refinement.wfB_hasBVar (r : Refinement) : ∀ {kctx : List Kind} {ctx : 
     · exact ih₁ hw.1 b k h
     · exact ih₂ hw.2 b k h
 
+theorem Term.wfB_hasMBVar {kctx : List Kind} {ctx : List (Option Base)} :
+    ∀ {b'' : Base} (t : Term b''), t.wfB kctx ctx = true → ∀ k, Term.hasMBVar k t → k < ctx.length := by
+  intro b'' t
+  induction t with
+  | const _ _ | bvar _ _ | fvar _ _ | mfvar _ _ => intro _ k h; simp [Term.hasMBVar] at h
+  | mbvar m j =>
+    intro hw k h
+    simp only [Term.hasMBVar] at h; subst h
+    simpa [Term.wfB] using hw
+  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
+    intro hw k h
+    simp only [Term.wfB, Bool.and_eq_true] at hw
+    simp only [Term.hasMBVar] at h
+    rcases h with h | h
+    · exact ih₁ hw.1 k h
+    · exact ih₂ hw.2 k h
+  | not _ ih => intro hw k h; exact ih hw k h
+
+theorem Formula.wfB_hasMBVar (φ : Formula) : ∀ {kctx : List Kind} {ctx : List (Option Base)},
+    φ.wfB kctx ctx = true → ∀ k, Formula.hasMBVar k φ → k < ctx.length := by
+  induction φ with
+  | tt | ff => intro _ _ _ k h; simp [Formula.hasMBVar] at h
+  | eq _ t₁ t₂ | leq _ t₁ t₂ =>
+    intro kctx ctx hw k h
+    simp only [Formula.wfB, Bool.and_eq_true] at hw
+    simp only [Formula.hasMBVar] at h
+    rcases h with h | h
+    · exact Term.wfB_hasMBVar t₁ hw.1 k h
+    · exact Term.wfB_hasMBVar t₂ hw.2 k h
+  | and _ _ ih₁ ih₂ | or _ _ ih₁ ih₂ | imp _ _ ih₁ ih₂ =>
+    intro kctx ctx hw k h
+    simp only [Formula.wfB, Bool.and_eq_true] at hw
+    simp only [Formula.hasMBVar] at h
+    rcases h with h | h
+    · exact ih₁ hw.1 k h
+    · exact ih₂ hw.2 k h
+  | not _ ih =>
+    intro kctx ctx hw k h
+    simp only [Formula.wfB] at hw
+    exact ih hw k h
+  | ex b₀ _ ih | all b₀ _ ih =>
+    intro kctx ctx hw k h
+    simp only [Formula.wfB, Bool.and_eq_true] at hw
+    simp only [Formula.hasMBVar] at h
+    have := ih hw.2 (k+1) h
+    simpa using this
+
+theorem Refinement.wfB_hasMBVar (r : Refinement) : ∀ {kctx : List Kind} {ctx : List (Option Base)},
+    r.wfB kctx ctx = true → ∀ k, Refinement.hasMBVar k r → k < ctx.length := by
+  induction r with
+  | fmla φ => intro kctx ctx hw; exact Formula.wfB_hasMBVar φ hw
+  | kapp kn args =>
+    intro kctx ctx hw k h
+    simp only [Refinement.wfB, List.all_eq_true, Bool.and_eq_true] at hw
+    simp only [Refinement.hasMBVar] at h
+    obtain ⟨a, ha, hbv⟩ := h
+    exact Term.wfB_hasMBVar a.2 (hw a ha).2 k hbv
+  | conj _ _ ih₁ ih₂ =>
+    intro kctx ctx hw k h
+    simp only [Refinement.wfB, Bool.and_eq_true] at hw
+    simp only [Refinement.hasMBVar] at h
+    rcases h with h | h
+    · exact ih₁ hw.1 k h
+    · exact ih₂ hw.2 k h
+
 /-- The checker is sound for bound-variable sort consistency. -/
 theorem Ty.wfB_WFBVarCtx (t : Ty) : ∀ {kctx : List Kind} {ctx : List (Option Base)},
     t.wfB kctx ctx = true → Ty.WFBVarCtx ctx t := by
@@ -824,7 +933,7 @@ theorem Term.hasBVar_substB (σ : BSubst) (b : Base) (k : Nat) :
       ∃ b₀, b = b₀.substB σ ∧ Term.hasBVar b₀ k t := by
   intro b'' t
   induction t with
-  | const _ _ | fvar _ _ => intro h; simp [Term.substB, Term.hasBVar] at h
+  | const _ _ | fvar _ _ | mbvar _ _ | mfvar _ _ => intro h; simp [Term.substB, Term.hasBVar] at h
   | bvar b' i =>
     intro h
     simp only [Term.substB, Term.hasBVar] at h
@@ -1054,6 +1163,8 @@ def Term.ftv : {b : Base} → Term b → List TVar
   | _, .bvar b _   => b.ftv
   | _, .fvar b _   => b.ftv
   | _, .add t₁ t₂  => Term.ftv t₁ ++ Term.ftv t₂
+  | _, .mbvar _ _  => []
+  | _, .mfvar _ _  => []
   | _, .not t      => Term.ftv t
   | _, .and t₁ t₂  => Term.ftv t₁ ++ Term.ftv t₂
 
@@ -1974,6 +2085,10 @@ theorem Term.interp_write_fresh {b : Base} (t : Term b)
   | fvar bv y =>
     have hxy : x ≠ y := fun he => h (by subst he; simp [Term.fv])
     exact REnv.get_write_other bv γ x v hxy
+  | mbvar _ _ => rfl
+  | mfvar m y =>
+    have hxy : x ≠ y := fun he => h (by subst he; simp [Term.fv])
+    simp [Term.interp, REnv.write, hxy]
   | add t₁ t₂ ih₁ ih₂ =>
     simp only [Term.fv, List.mem_append, not_or] at h
     simp only [Term.interp, ih₁ h.1, ih₂ h.2]
@@ -2060,6 +2175,26 @@ theorem Term.interp_openBVar {b : Base} (x : EVar) (w : Val) :
       simp only [Term.openBVar, Term.interp, REnv.get, REnv.lookup, REnv.write,
         REnv.insertBV_map, REnv.insertBV_sorts, beq_eq_false_iff_ne.mpr hx, Bool.false_eq_true,
         if_false]
+  | mbvar m j =>
+      intro γ k hk _
+      by_cases hjk : j = k
+      · subst hjk
+        simp only [Term.openBVar, Term.interp, REnv.write, beq_self_eq_true, if_true,
+          REnv.insertBV_bv, REnv.insertBV_sorts, List.getElem?_insertIdx_self, hk, if_true,
+          Option.getD_some]
+      · simp only [Term.openBVar, if_neg hjk]
+        by_cases hlt : k < j
+        · rw [if_pos hlt]
+          simp only [Term.interp, REnv.insertBV_bv, REnv.insertBV_sorts]
+          rw [List.getElem?_insertIdx_of_gt hlt]
+        · rw [if_neg hlt]
+          simp only [Term.interp, REnv.insertBV_bv, REnv.insertBV_sorts]
+          rw [List.getElem?_insertIdx_of_lt (by omega)]
+  | mfvar m y =>
+      intro γ k _ hx
+      simp only [Term.fv, List.mem_singleton] at hx
+      simp only [Term.openBVar, Term.interp, REnv.write, REnv.insertBV_map, REnv.insertBV_sorts,
+        beq_eq_false_iff_ne.mpr hx, Bool.false_eq_true, if_false]
   | add t₁ t₂ ih₁ ih₂ =>
       intro γ k hk hx
       simp only [Term.fv, List.mem_append, not_or] at hx

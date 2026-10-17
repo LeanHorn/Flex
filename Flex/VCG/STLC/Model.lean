@@ -12,6 +12,8 @@ def Term.interp (γ : REnv) : {b : Base} → Term b → b.sem γ.sorts
   | _, .bvar b k    => REnv.getBV b γ k
   | _, .fvar b x    => REnv.get b γ x
   | _, .add t₁ t₂   => Term.interp γ t₁ + Term.interp γ t₂
+  | _, .mbvar m k   => γ.sorts.meas m (γ.bv[k]?.getD (.iconst 0))
+  | _, .mfvar m x   => γ.sorts.meas m (γ.map x)
   | _, .not t       => !Term.interp γ t
   | _, .and t₁ t₂   => Term.interp γ t₁ && Term.interp γ t₂
 

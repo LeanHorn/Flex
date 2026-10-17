@@ -129,6 +129,8 @@ theorem Term.interp_nofv (γ : REnv) (m : EVar → Val) :
   | const => intro _; rfl
   | bvar b k => intro _; rfl
   | fvar b x => intro h; simp [Term.fv] at h
+  | mbvar _ _ => intro _; rfl
+  | mfvar _ _ => intro h; simp [Term.fv] at h
   | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
     intro h; simp only [Term.fv, List.append_eq_nil_iff] at h
     simp only [Term.interp, ih₁ h.1, ih₂ h.2]
@@ -225,7 +227,7 @@ theorem TyDenote.ftv_irrel {κ : KEnv} (t : Ty) : t.ftv = [] →
     intro h ρ η η' D k γ v
     simp only [Ty.ftv, List.append_eq_nil_iff] at h
     simp only [TyDenote]
-    refine and_congr ?_ (Refinement.interp_congr r rfl (fun _ _ _ => rfl) fun c hc => ?_)
+    refine and_congr ?_ (Refinement.interp_congr r rfl rfl (fun _ _ _ => rfl) (fun _ _ => rfl) fun c hc => ?_)
     · cases b with
       | tfvar a => simp [Base.ftv] at h
       | _ => rfl
@@ -259,7 +261,7 @@ theorem TyDenote.ftv_irrel {κ : KEnv} (t : Ty) : t.ftv = [] →
     simp only [Ty.ftv, List.append_eq_nil_iff, List.flatMap_eq_nil_iff, List.mem_finRange,
       true_implies] at h
     refine TyDenote.data_congr rfl (fun l j _ w => ih l (h.1 l) ρ η η' D j γ w) (fun l => ?_)
-      (fun v => Refinement.interp_congr r rfl (fun _ _ _ => rfl) fun c hc => by
+      (fun v => Refinement.interp_congr r rfl rfl (fun _ _ _ => rfl) (fun _ _ => rfl) fun c hc => by
         cases c with
         | tfvar a => exact absurd (Refinement.ftv_of_mem_sorts r hc) (by simp [h.2])
         | _ => rfl)
@@ -777,7 +779,7 @@ theorem TyDenote.var_mono {κ : KEnv} {de : DEnv} (hde : de.wfB = true) :
       have hri : Refinement.interp κ r
             ((γ.withSorts (⟨inner ++ ρ, η, de⟩ : TyEnvSem).sorts).push v) ↔
           Refinement.interp κ r ((γ.withSorts (⟨inner ++ ρ', η, de⟩ : TyEnvSem).sorts).push v) :=
-        Refinement.interp_congr r rfl (fun _ _ _ => rfl) (fun c _ => RelVar.resolve hrel c)
+        Refinement.interp_congr r rfl rfl (fun _ _ _ => rfl) (fun _ _ => rfl) (fun c _ => RelVar.resolve hrel c)
       exact ⟨fun hp h => ⟨hb.1 hp h.1, hri.mp h.2⟩, fun hp h => ⟨hb.2 hp h.1, hri.mpr h.2⟩⟩
     cases b with
     | tbvar j =>
@@ -841,7 +843,7 @@ theorem TyDenote.var_mono {κ : KEnv} {de : DEnv} (hde : de.wfB = true) :
     have hri : Refinement.interp κ r
           ((γ.withSorts (⟨inner ++ ρ, η, de⟩ : TyEnvSem).sorts).push v) ↔
         Refinement.interp κ r ((γ.withSorts (⟨inner ++ ρ', η, de⟩ : TyEnvSem).sorts).push v) :=
-      Refinement.interp_congr r rfl (fun _ _ _ => rfl) (fun c _ => RelVar.resolve hrel c)
+      Refinement.interp_congr r rfl rfl (fun _ _ _ => rfl) (fun _ _ => rfl) (fun c _ => RelVar.resolve hrel c)
     simp only [Ty.varOK, List.all_eq_true, List.mem_finRange, true_implies] at hok
     -- the arguments are related at every index below `k`, by their polarity
     have harg : ∀ l : Fin n, ∀ j < k, ∀ w,
@@ -968,6 +970,7 @@ private theorem ModelsEnv.extendBy_cons {κ : KEnv} {δ : TyEnvSem} {Γ : TEnv} 
 
 /-- Models only read the sorts of the type variables the context mentions. -/
 theorem ModelsEnv.sorts_congr {κ : KEnv} {γ γ' : REnv} (hmap : γ.map = γ'.map)
+    (hmeas : γ.sorts.meas = γ'.sorts.meas)
     (hbv : γ.bv = γ'.bv) (hsbv : γ.sorts.bv = γ'.sorts.bv) :
     ∀ {Γ : TEnv}, (∀ a ∈ TEnv.ftv Γ, γ.sorts.fv a = γ'.sorts.fv a) →
       ModelsEnv κ γ Γ → ModelsEnv κ γ' Γ
@@ -981,7 +984,7 @@ theorem ModelsEnv.sorts_congr {κ : KEnv} {γ γ' : REnv} (hmap : γ.map = γ'.m
         | tbvar j => simp [Base.resolve, hsbv]
         | tfvar a => exact hfv a (Or.inl (hc a rfl))
         | _ => rfl
-      refine ⟨?_, ModelsEnv.sorts_congr hmap hbv hsbv (fun a ha => hfv a (Or.inr ha)) htl⟩
+      refine ⟨?_, ModelsEnv.sorts_congr hmap hmeas hbv hsbv (fun a ha => hfv a (Or.inr ha)) htl⟩
       cases ht : t.hyp? with
       | none =>
         cases hd : t.dhyp? with
@@ -990,7 +993,9 @@ theorem ModelsEnv.sorts_congr {κ : KEnv} {γ γ' : REnv} (hmap : γ.map = γ'.m
           obtain ⟨C, n, args, rfl⟩ : ∃ C n args, t = .data C n args r := by
             cases t <;> simp_all [Ty.dhyp?]
           simp only [ht, hd] at hhd ⊢
-          refine (Refinement.interp_congr r (by simpa using hmap) (fun _ k _ => ?_) ?_).mp hhd
+          refine (Refinement.interp_congr r (by simpa using hmap) (by simpa using hmeas) (fun _ k _ => ?_)
+            (fun k _ => ?_) ?_).mp hhd
+          · cases k <;> simp [REnv.lookup, hmap, hbv]
           · cases k <;> simp [REnv.lookup, hmap, hbv]
           · intro c hc
             exact hres c (fun a h => by
@@ -1006,7 +1011,9 @@ theorem ModelsEnv.sorts_congr {κ : KEnv} {γ γ' : REnv} (hmap : γ.map = γ'.m
         · simp only [REnv.HasBase, ← hmap]
           rw [← hres b (fun a h => by simp [h, Ty.ftv, Base.ftv])]
           exact hHB
-        · refine (Refinement.interp_congr r (by simpa using hmap) (fun _ k _ => ?_) ?_).mp hr
+        · refine (Refinement.interp_congr r (by simpa using hmap) (by simpa using hmeas) (fun _ k _ => ?_)
+            (fun k _ => ?_) ?_).mp hr
+          · cases k <;> simp [REnv.lookup, hmap, hbv]
           · cases k <;> simp [REnv.lookup, hmap, hbv]
           · intro c hc
             exact hres c (fun a h => by
@@ -1072,7 +1079,7 @@ theorem subtyp_sound {de κ Γ s t} (hde : de.wfB = true) (hsub : Subtyp de κ �
     have hδ' : (δ.set a R).WK := TyEnvSem.set_WK hδ a R (hka ▸ hR)
     have hm' : ModelsEnv κ (γ.withSorts (δ.set a R).sorts) Γ' :=
       ModelsEnv.sorts_congr (γ := γ.withSorts δ.sorts) (γ' := γ.withSorts (δ.set a R).sorts)
-        rfl rfl rfl (fun a' ha' => by
+        rfl rfl rfl rfl (fun a' ha' => by
           have : a' ≠ a := fun h => haΓ (h ▸ ha')
           show (δ.fv a').sort = ((δ.set a R).fv a').sort
           simp [TyEnvSem.set, this]) hm

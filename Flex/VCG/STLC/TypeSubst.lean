@@ -35,6 +35,8 @@ def Term.sorts : {b : Base} → Term b → List Base
   | _, .bvar b _  => [b]
   | _, .fvar b _  => [b]
   | _, .add t₁ t₂ => Term.sorts t₁ ++ Term.sorts t₂
+  | _, .mbvar _ _ => []
+  | _, .mfvar _ _ => []
   | _, .not t     => Term.sorts t
   | _, .and t₁ t₂ => Term.sorts t₁ ++ Term.sorts t₂
 
@@ -91,78 +93,95 @@ theorem BSort.forall_iff (s : BSort) (P : Val → Prop) :
   · exact ⟨fun h _ ⟨x, hx⟩ => by subst hx; exact h x, fun h x => h _ ⟨x, rfl⟩⟩
   · exact ⟨fun h _ ⟨x, hx⟩ => by subst hx; exact h x, fun h x => h _ ⟨x, rfl⟩⟩
 
-theorem Term.ival_substB (θ : BSubst) {γ γ' : REnv} (hmap : γ'.map = γ.map) :
+theorem Term.ival_substB (θ : BSubst) {γ γ' : REnv} (hmap : γ'.map = γ.map)
+    (hmeas : γ'.sorts.meas = γ.sorts.meas) :
     ∀ {b : Base} (t : Term b), (∀ c k, Term.hasBVar c k t → γ'.bv[k]? = γ.bv[k]?) →
+      (∀ k, Term.hasMBVar k t → γ'.bv[k]? = γ.bv[k]?) →
       θ.Agrees γ.sorts γ'.sorts t.sorts → Term.ival γ' (t.substB θ) = Term.ival γ t := by
   intro b t
   induction t with
   | const b c =>
-    intro _ _
+    intro _ _ _
     cases b with
     | int | bool => rfl
     | tbvar _ | tfvar _ => exact c.elim
   | bvar b k =>
-    intro hbv hA
+    intro hbv _ hA
     have hs := hA b (by simp [Term.sorts])
     simp only [Term.ival, Term.substB, Term.interp, REnv.getBV, hbv b k ⟨rfl, rfl⟩]
     rw [hs]
   | fvar b x =>
-    intro _ hA
+    intro _ _ hA
     have hs := hA b (by simp [Term.sorts])
     simp only [Term.ival, Term.substB, Term.interp, REnv.get, REnv.lookup, hmap]
     rw [hs]
+  | mbvar m k =>
+    intro _ hmbv _
+    simp [Term.ival, Term.substB, Term.interp, hmeas, hmbv k rfl, Base.substB]
+  | mfvar m x =>
+    intro _ _ _
+    simp [Term.ival, Term.substB, Term.interp, hmeas, hmap, Base.substB]
   | add t₁ t₂ ih₁ ih₂ | and t₁ t₂ ih₁ ih₂ =>
-    intro hbv hA
-    have h₁ := ih₁ (fun c k hk => hbv c k (Or.inl hk)) hA.left
-    have h₂ := ih₂ (fun c k hk => hbv c k (Or.inr hk)) hA.right
+    intro hbv hmbv hA
+    have h₁ := ih₁ (fun c k hk => hbv c k (Or.inl hk)) (fun k hk => hmbv k (Or.inl hk)) hA.left
+    have h₂ := ih₂ (fun c k hk => hbv c k (Or.inr hk)) (fun k hk => hmbv k (Or.inr hk)) hA.right
     simp only [Term.ival, Term.substB, Term.interp, Base.substB, Base.resolve, Val.inj,
       Val.iconst.injEq, Val.bconst.injEq] at h₁ h₂ ⊢
     rw [h₁, h₂]
   | not t ih =>
-    intro hbv hA
-    have h₁ := ih hbv hA
+    intro hbv hmbv hA
+    have h₁ := ih hbv hmbv hA
     simp only [Term.ival, Term.substB, Term.interp, Base.substB, Base.resolve, Val.inj,
       Val.bconst.injEq] at h₁ ⊢
     rw [h₁]
 
 /-- **Master lemma** (formulas). -/
 theorem Formula.interp_substB (θ : BSubst) (φ : Formula) :
-    ∀ {γ γ' : REnv}, γ'.map = γ.map → (∀ c k, Formula.hasBVar c k φ → γ'.bv[k]? = γ.bv[k]?) →
+    ∀ {γ γ' : REnv}, γ'.map = γ.map → γ'.sorts.meas = γ.sorts.meas →
+      (∀ c k, Formula.hasBVar c k φ → γ'.bv[k]? = γ.bv[k]?) →
+      (∀ k, Formula.hasMBVar k φ → γ'.bv[k]? = γ.bv[k]?) →
       θ.Agrees γ.sorts γ'.sorts φ.sorts →
       (Formula.interp γ' (φ.substB θ) ↔ Formula.interp γ φ) := by
   induction φ with
   | tt | ff => intros; rfl
   | eq b t₁ t₂ =>
-    intro γ γ' hmap hbv hA
-    have h₁ := Term.ival_substB θ hmap t₁ (fun c k hk => hbv c k (Or.inl hk)) hA.left
-    have h₂ := Term.ival_substB θ hmap t₂ (fun c k hk => hbv c k (Or.inr hk)) hA.right
+    intro γ γ' hmap hmeas hbv hmbv hA
+    have h₁ := Term.ival_substB θ hmap hmeas t₁ (fun c k hk => hbv c k (Or.inl hk))
+      (fun k hk => hmbv k (Or.inl hk)) hA.left
+    have h₂ := Term.ival_substB θ hmap hmeas t₂ (fun c k hk => hbv c k (Or.inr hk))
+      (fun k hk => hmbv k (Or.inr hk)) hA.right
     simp only [Formula.substB, Formula.interp]
     rw [← Val.inj_injective, ← Val.inj_injective (b.resolve γ.sorts)]
     exact Iff.of_eq (by simp only [Term.ival] at h₁ h₂; rw [h₁, h₂])
   | leq b t₁ t₂ =>
-    intro γ γ' hmap hbv hA
-    have h₁ := Term.ival_substB θ hmap t₁ (fun c k hk => hbv c k (Or.inl hk)) hA.left
-    have h₂ := Term.ival_substB θ hmap t₂ (fun c k hk => hbv c k (Or.inr hk)) hA.right
+    intro γ γ' hmap hmeas hbv hmbv hA
+    have h₁ := Term.ival_substB θ hmap hmeas t₁ (fun c k hk => hbv c k (Or.inl hk))
+      (fun k hk => hmbv k (Or.inl hk)) hA.left
+    have h₂ := Term.ival_substB θ hmap hmeas t₂ (fun c k hk => hbv c k (Or.inr hk))
+      (fun k hk => hmbv k (Or.inr hk)) hA.right
     simp only [Formula.substB, Formula.interp]
     exact BSort.le_congr h₁ h₂
   | and _ _ ih₁ ih₂ | or _ _ ih₁ ih₂ | imp _ _ ih₁ ih₂ =>
-    intro γ γ' hmap hbv hA
+    intro γ γ' hmap hmeas hbv hmbv hA
     simp only [Formula.substB, Formula.interp,
-      ih₁ hmap (fun c k hk => hbv c k (Or.inl hk)) hA.left,
-      ih₂ hmap (fun c k hk => hbv c k (Or.inr hk)) hA.right]
+      ih₁ hmap hmeas (fun c k hk => hbv c k (Or.inl hk)) (fun k hk => hmbv k (Or.inl hk)) hA.left,
+      ih₂ hmap hmeas (fun c k hk => hbv c k (Or.inr hk)) (fun k hk => hmbv k (Or.inr hk)) hA.right]
   | not _ ih =>
-    intro γ γ' hmap hbv hA
-    simp only [Formula.substB, Formula.interp, ih hmap hbv hA]
+    intro γ γ' hmap hmeas hbv hmbv hA
+    simp only [Formula.substB, Formula.interp, ih hmap hmeas hbv hmbv hA]
   | ex b φ ih | all b φ ih =>
-    intro γ γ' hmap hbv hA
+    intro γ γ' hmap hmeas hbv hmbv hA
     have hb := hA b List.mem_cons_self
     have hA' : θ.Agrees γ.sorts γ'.sorts φ.sorts := fun b' hb' => hA b' (List.mem_cons_of_mem _ hb')
     have key : ∀ w : Val, Formula.interp (γ'.push w) (φ.substB θ) ↔ Formula.interp (γ.push w) φ := by
       intro w
-      refine ih (by simpa using hmap) (fun c k hk => ?_) hA'
-      cases k with
-      | zero => rfl
-      | succ k => exact hbv c k hk
+      refine ih (by simpa using hmap) hmeas (fun c k hk => ?_) (fun k hk => ?_) hA'
+      · cases k with
+        | zero => rfl
+        | succ k => exact hbv c k hk
+      · cases k with
+        | zero => rfl
+        | succ k => exact hmbv k hk
     simp only [Formula.substB, Formula.interp]
     first
       | (rw [BSort.exists_iff _ (fun w => Formula.interp (γ'.push w) (φ.substB θ)),
@@ -174,25 +193,29 @@ theorem Formula.interp_substB (θ : BSubst) (φ : Formula) :
 
 /-- **Master lemma** (refinements). -/
 theorem Refinement.interp_substB {κ : KEnv} (θ : BSubst) (r : Refinement) :
-    ∀ {γ γ' : REnv}, γ'.map = γ.map → (∀ c k, Refinement.hasBVar c k r → γ'.bv[k]? = γ.bv[k]?) →
+    ∀ {γ γ' : REnv}, γ'.map = γ.map → γ'.sorts.meas = γ.sorts.meas →
+      (∀ c k, Refinement.hasBVar c k r → γ'.bv[k]? = γ.bv[k]?) →
+      (∀ k, Refinement.hasMBVar k r → γ'.bv[k]? = γ.bv[k]?) →
       θ.Agrees γ.sorts γ'.sorts r.sorts →
       (Refinement.interp κ (r.substB θ) γ' ↔ Refinement.interp κ r γ) := by
   induction r with
-  | fmla φ => intro γ γ' hmap hbv hA; exact Formula.interp_substB θ φ hmap hbv hA
+  | fmla φ =>
+    intro γ γ' hmap hmeas hbv hmbv hA; exact Formula.interp_substB θ φ hmap hmeas hbv hmbv hA
   | kapp kn args =>
-    intro γ γ' hmap hbv hA
+    intro γ γ' hmap hmeas hbv hmbv hA
     simp only [Refinement.substB, Refinement.interp, List.map_map]
     apply Iff.of_eq; congr 1
     apply List.map_congr_left
     intro a ha
-    have h := Term.ival_substB θ hmap a.2 (fun c k hk => hbv c k ⟨a, ha, hk⟩)
+    have h := Term.ival_substB θ hmap hmeas a.2 (fun c k hk => hbv c k ⟨a, ha, hk⟩)
+      (fun k hk => hmbv k ⟨a, ha, hk⟩)
       (fun b hb => hA b (List.mem_flatMap.mpr ⟨a, ha, hb⟩))
     exact Val.tag_congr h
   | conj _ _ ih₁ ih₂ =>
-    intro γ γ' hmap hbv hA
+    intro γ γ' hmap hmeas hbv hmbv hA
     simp only [Refinement.substB, Refinement.interp,
-      ih₁ hmap (fun c k hk => hbv c k (Or.inl hk)) hA.left,
-      ih₂ hmap (fun c k hk => hbv c k (Or.inr hk)) hA.right]
+      ih₁ hmap hmeas (fun c k hk => hbv c k (Or.inl hk)) (fun k hk => hmbv k (Or.inl hk)) hA.left,
+      ih₂ hmap hmeas (fun c k hk => hbv c k (Or.inr hk)) (fun k hk => hmbv k (Or.inr hk)) hA.right]
 
 /-! ### The identity substitution: congruence -/
 
@@ -208,6 +231,7 @@ theorem Term.substB_id : ∀ {b : Base} (t : Term b),
   | const b c => cases b <;> first | rfl | exact c.elim
   | bvar b k => cases b <;> rfl
   | fvar b x => cases b <;> rfl
+  | mbvar _ _ | mfvar _ _ => rfl
   | add t₁ t₂ ih₁ ih₂ | and t₁ t₂ ih₁ ih₂ =>
     simp only [Base.substB, Sigma.mk.injEq, heq_eq_eq, true_and] at ih₁ ih₂
     simp only [Term.substB, Base.substB, ih₁, ih₂]
@@ -247,19 +271,23 @@ theorem Refinement.substB_id (r : Refinement) : r.substB BSubst.id = r := by
 
 /-- A refinement reads only the slots and sorts it mentions. -/
 theorem Formula.interp_congr (φ : Formula) {γ γ' : REnv} (hmap : γ.map = γ'.map)
+    (hmeas : γ.sorts.meas = γ'.sorts.meas)
     (h : ∀ c k, Formula.hasBVar c k φ → γ.bv[k]? = γ'.bv[k]?)
+    (hm : ∀ k, Formula.hasMBVar k φ → γ.bv[k]? = γ'.bv[k]?)
     (hs : ∀ b ∈ φ.sorts, b.resolve γ.sorts = b.resolve γ'.sorts) :
     Formula.interp γ φ ↔ Formula.interp γ' φ := by
-  have := Formula.interp_substB BSubst.id φ (γ := γ') (γ' := γ) hmap
-    (fun c k hk => h c k hk) (fun b hb => by rw [Base.substB_id]; exact hs b hb)
+  have := Formula.interp_substB BSubst.id φ (γ := γ') (γ' := γ) hmap hmeas
+    (fun c k hk => h c k hk) hm (fun b hb => by rw [Base.substB_id]; exact hs b hb)
   rwa [Formula.substB_id] at this
 
 theorem Refinement.interp_congr {κ : KEnv} (r : Refinement) {γ γ' : REnv} (hmap : γ.map = γ'.map)
+    (hmeas : γ.sorts.meas = γ'.sorts.meas)
     (h : ∀ c k, Refinement.hasBVar c k r → γ.bv[k]? = γ'.bv[k]?)
+    (hm : ∀ k, Refinement.hasMBVar k r → γ.bv[k]? = γ'.bv[k]?)
     (hs : ∀ b ∈ r.sorts, b.resolve γ.sorts = b.resolve γ'.sorts) :
     Refinement.interp κ r γ ↔ Refinement.interp κ r γ' := by
-  have := Refinement.interp_substB (κ := κ) BSubst.id r (γ := γ') (γ' := γ) hmap
-    (fun c k hk => h c k hk) (fun b hb => by rw [Base.substB_id]; exact hs b hb)
+  have := Refinement.interp_substB (κ := κ) BSubst.id r (γ := γ') (γ' := γ) hmap hmeas
+    (fun c k hk => h c k hk) hm (fun b hb => by rw [Base.substB_id]; exact hs b hb)
   rwa [Refinement.substB_id] at this
 
 /-! ### Which sorts can occur -/
@@ -269,6 +297,7 @@ theorem Term.ftv_of_mem_sorts {a : TVar} : ∀ {b : Base} (t : Term b), .tfvar a
   induction t with
   | const b _ | bvar b _ | fvar b _ =>
     intro h; simp only [Term.sorts, List.mem_singleton] at h; subst h; simp [Term.ftv, Base.ftv]
+  | mbvar _ _ | mfvar _ _ => intro h; simp [Term.sorts] at h
   | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
     intro h; simp only [Term.sorts, List.mem_append] at h
     simp only [Term.ftv, List.mem_append]; exact h.imp ih₁ ih₂
@@ -314,6 +343,7 @@ theorem Term.sortOK_of_mem_sorts {kctx : List Kind} {ctx : List (Option Base)} :
   | const b _ =>
     intro hw c hc; simp only [Term.sorts, List.mem_singleton] at hc; subst hc
     cases c <;> simp_all [Term.wfB, Base.isTv, Base.sortOK]
+  | mbvar _ _ | mfvar _ _ => intro _ c hc; simp [Term.sorts] at hc
   | bvar b _ =>
     intro hw c hc; simp only [Term.sorts, List.mem_singleton] at hc; subst hc
     simp only [Term.wfB, Bool.and_eq_true] at hw; exact hw.2
@@ -590,7 +620,7 @@ theorem TyDenote.set_fresh_iff {κ : KEnv} {a : TVar} {R : SemTy} (t : Ty) (ha :
     intro δ k γ v
     simp only [Ty.ftv, List.mem_append, not_or] at ha
     simp only [TyDenote, BaseDen.set_fresh ha.1]
-    refine and_congr_right fun _ => Refinement.interp_congr r rfl (fun _ _ _ => rfl) ?_
+    refine and_congr_right fun _ => Refinement.interp_congr r rfl rfl (fun _ _ _ => rfl) (fun _ _ => rfl) ?_
     intro c hc
     exact Base.resolve_congr (fun _ => TyEnvSem.lookupB_set_ne (Refinement.ne_of_fresh ha.2 c hc))
   | arrow s t ihs iht =>
@@ -620,7 +650,7 @@ theorem TyDenote.set_fresh_iff {κ : KEnv} {a : TVar} {R : SemTy} (t : Ty) (ha :
     simp only [Ty.ftv, List.mem_append, List.mem_flatMap, List.mem_finRange, true_and, not_or,
       not_exists] at ha
     refine TyDenote.data_congr rfl (fun l j _ w => ih l (ha.1 l) δ j γ w) (fun l => ?_)
-      (fun v => Refinement.interp_congr r rfl (fun _ _ _ => rfl) fun c hc =>
+      (fun v => Refinement.interp_congr r rfl rfl (fun _ _ _ => rfl) (fun _ _ => rfl) fun c hc =>
         Base.resolve_congr (fun _ => TyEnvSem.lookupB_set_ne (Refinement.ne_of_fresh ha.2 c hc)))
     rw [Ty.semSort_eq, Ty.semSort_eq]
     exact Base.resolve_congr (fun _ => TyEnvSem.lookupB_set_ne (Ty.ftv_sortOf (ha.1 l)))
@@ -670,7 +700,7 @@ theorem TyDenote.openTv_iff {κ : KEnv} (a : TVar) (R : SemTy) (t : Ty) (ha : a 
     simp only [Ty.openTv, TyDenote]
     rw [BaseDen.openAt ρ ρ₀ η D a R ha.1]
     refine and_congr_right fun _ => Iff.symm ?_
-    refine Refinement.interp_substB _ r rfl (fun _ _ _ => rfl) (fun c hc => ?_)
+    refine Refinement.interp_substB _ r rfl rfl (fun _ _ _ => rfl) (fun _ _ => rfl) (fun c hc => ?_)
     exact Base.resolve_of_lookupB (fun h => BSubst.openAt_isTv h)
       (fun _ => TyEnvSem.lookupB_openAt ρ ρ₀ η D a R (Refinement.ne_of_fresh ha.2 c hc))
   | arrow s t ihs iht =>
@@ -704,7 +734,7 @@ theorem TyDenote.openTv_iff {κ : KEnv} (a : TVar) (R : SemTy) (t : Ty) (ha : a 
       not_exists] at ha
     simp only [Ty.openTv]
     refine TyDenote.data_congr rfl (fun l j _ w => ih l (ha.1 l) ρ ρ₀ η D j γ w) (fun l => ?_)
-      (fun v => Iff.symm (Refinement.interp_substB _ r rfl (fun _ _ _ => rfl) fun c hc =>
+      (fun v => Iff.symm (Refinement.interp_substB _ r rfl rfl (fun _ _ _ => rfl) (fun _ _ => rfl) fun c hc =>
         Base.resolve_of_lookupB (fun h => BSubst.openAt_isTv h)
           (fun _ => TyEnvSem.lookupB_openAt ρ ρ₀ η D a R (Refinement.ne_of_fresh ha.2 c hc))))
     rw [Ty.semSort_eq, Ty.semSort_eq, Ty.sortOf_openTv]
@@ -757,7 +787,7 @@ theorem TyDenote.closeTv_iff {κ : KEnv} (a : TVar) (R : SemTy) (t : Ty) :
     simp only [Ty.closeTv, TyDenote]
     rw [BaseDen.closeAt ρ ρ₀ η D a R]
     refine and_congr_right fun _ =>
-      Refinement.interp_substB _ r rfl (fun _ _ _ => rfl) (fun c _ => ?_)
+      Refinement.interp_substB _ r rfl rfl (fun _ _ _ => rfl) (fun _ _ => rfl) (fun c _ => ?_)
     exact Base.resolve_of_lookupB (fun h => BSubst.closeAt_isTv h)
       (fun _ => TyEnvSem.lookupB_closeAt ρ ρ₀ η D a R c)
   | arrow s t ihs iht =>
@@ -786,7 +816,7 @@ theorem TyDenote.closeTv_iff {κ : KEnv} (a : TVar) (R : SemTy) (t : Ty) :
     intro ρ ρ₀ η D k γ v
     simp only [Ty.closeTv]
     refine TyDenote.data_congr rfl (fun l j _ w => ih l ρ ρ₀ η D j γ w) (fun l => ?_)
-      (fun v => Refinement.interp_substB _ r rfl (fun _ _ _ => rfl) fun c _ =>
+      (fun v => Refinement.interp_substB _ r rfl rfl (fun _ _ _ => rfl) (fun _ _ => rfl) fun c _ =>
         Base.resolve_of_lookupB (fun h => BSubst.closeAt_isTv h)
           (fun _ => TyEnvSem.lookupB_closeAt ρ ρ₀ η D a R c))
     rw [Ty.semSort_eq, Ty.semSort_eq, Ty.sortOf_closeTv]
@@ -884,16 +914,21 @@ theorem TyDenote.congr_wf {κ : KEnv} (t : Ty) :
         have hj : j < ρ₁.length := hlen ▸ hty
         simp [BaseDen, List.getElem?_append_left hj]
       | _ => rfl
-    · apply Refinement.interp_congr r (by simpa using hmap)
-      intro c i hi
-      have := Refinement.wfB_hasBVar r hr c i hi
-      cases i with
-      | zero => rfl
-      | succ i =>
-        rcases Nat.lt_or_ge i ctx.length with hi' | hi'
-        · exact hbv i hi'
-        · rw [List.getElem?_cons_succ, List.getElem?_eq_none_iff.mpr hi'] at this
-          cases this
+    · refine Refinement.interp_congr r (by simpa using hmap) rfl ?_ ?_ ?_
+      · intro c i hi
+        have := Refinement.wfB_hasBVar r hr c i hi
+        cases i with
+        | zero => rfl
+        | succ i =>
+          rcases Nat.lt_or_ge i ctx.length with hi' | hi'
+          · exact hbv i hi'
+          · rw [List.getElem?_cons_succ, List.getElem?_eq_none_iff.mpr hi'] at this
+            cases this
+      · intro i hi
+        have := Refinement.wfB_hasMBVar r hr i hi
+        cases i with
+        | zero => rfl
+        | succ i => exact hbv i (by simpa using this)
       · intro c hc
         exact Base.resolve_append hlen (Or.inl (Refinement.sortOK_of_mem_sorts r hr c hc))
   | arrow s t ihs iht =>
@@ -937,7 +972,7 @@ theorem TyDenote.congr_wf {κ : KEnv} (t : Ty) :
       (fun v => ?_)
     · rw [Ty.semSort_eq, Ty.semSort_eq]
       exact Base.resolve_append hlen (Or.inr (Ty.sortOf_tyOK (hw.2 l)))
-    · apply Refinement.interp_congr r (by simpa using hmap)
+    · refine Refinement.interp_congr r (by simpa using hmap) rfl ?_ ?_ ?_
       · intro c i hi
         have := Refinement.wfB_hasBVar r hw.1 c i hi
         cases i with
@@ -947,6 +982,11 @@ theorem TyDenote.congr_wf {κ : KEnv} (t : Ty) :
           · exact hbv i hi'
           · rw [List.getElem?_cons_succ, List.getElem?_eq_none_iff.mpr hi'] at this
             cases this
+      · intro i hi
+        have := Refinement.wfB_hasMBVar r hw.1 i hi
+        cases i with
+        | zero => rfl
+        | succ i => exact hbv i (by simpa using this)
       · intro c hc
         exact Base.resolve_append hlen (Or.inl (Refinement.sortOK_of_mem_sorts r hw.1 c hc))
 
@@ -1091,7 +1131,7 @@ theorem TyDenote.instTy_iff {κ : KEnv} (s : Ty) (kd : Kind) (hs : s.wfB [] [] =
           ((γ.withSorts (⟨ρ ++ ρ₀, δ₀.fv, δ₀.denv⟩ : TyEnvSem).sorts).push v) ↔
         Refinement.interp κ r ((γ.withSorts (⟨ρ ++ R :: ρ₀, δ₀.fv, δ₀.denv⟩ : TyEnvSem).sorts).push v) :=
     fun r ρ ρ₀ γ v =>
-      Refinement.interp_substB _ r rfl (fun _ _ _ => rfl) (fun c _ => hres ρ ρ₀ c)
+      Refinement.interp_substB _ r rfl rfl (fun _ _ _ => rfl) (fun _ _ => rfl) (fun c _ => hres ρ ρ₀ c)
   intro t
   induction t with
   | refine b r =>
@@ -1117,9 +1157,14 @@ theorem TyDenote.instTy_iff {κ : KEnv} (s : Ty) (kd : Kind) (hs : s.wfB [] [] =
         have hown : Refinement.interp κ r' ((γ₀.withSorts δ₀.sorts).push v) ↔
             Refinement.interp κ r'
               ((γ.withSorts (⟨ρ ++ ρ₀, δ₀.fv, δ₀.denv⟩ : TyEnvSem).sorts).push v) := by
-          apply Refinement.interp_congr r' (by simpa using hmap.symm)
+          refine Refinement.interp_congr r' (by simpa using hmap.symm) rfl ?_ ?_ ?_
           · intro c i hi
             have := Refinement.wfB_hasBVar r' hr's c i hi
+            cases i with
+            | zero => rfl
+            | succ i => simp at this
+          · intro i hi
+            have := Refinement.wfB_hasMBVar r' hr's i hi
             cases i with
             | zero => rfl
             | succ i => simp at this

@@ -51,11 +51,13 @@ inductive Subtyp : DEnv → KEnv → TEnv → Ty → Ty → Prop where
 
   /-- Datatypes: the same datatype, with each type argument related according
       to the parameter's declared variance (covariant: `<:`; contravariant:
-      `:>`; invariant: both). -/
-  | data {de κ Γ C n args₁ args₂} :
+      `:>`; invariant: both), and the refinements related as in `refine`. -/
+  | data {de κ Γ C n args₁ args₂ r₁ r₂ x} :
       (∀ i : Fin n, de.var C i.val ≠ .contra → Subtyp de κ Γ (args₁ i) (args₂ i)) →
       (∀ i : Fin n, de.var C i.val ≠ .co → Subtyp de κ Γ (args₂ i) (args₁ i)) →
-      Subtyp de κ Γ (.data C n args₁) (.data C n args₂)
+      x ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ r₁.fv ++ r₂.fv →
+      Entail κ ((x, .data C n args₁ r₁) :: Γ) (fun γ => Refinement.interp κ (r₂.openBVar 0 x) γ) →
+      Subtyp de κ Γ (.data C n args₁ r₁) (.data C n args₂ r₂)
 
 /-- The result type of a comparison at sort `b`: `Bool{ν ⇔ x ≤ y}`. -/
 abbrev leqTy (b : Base) (x y : EVar) : Ty :=
@@ -198,8 +200,8 @@ mutual
 
     /-- CASE: one alternative per constructor, in declaration order; each binds
         the constructor's payload at the scrutinee's type arguments. -/
-    | case {de κ Γ e C n args m alts t} (zs : Fin m → EVar) :
-        Synth de κ Γ e (.data C n args) →
+    | case {de κ Γ e C n args r m alts t} (zs : Fin m → EVar) :
+        Synth de κ Γ e (.data C n args r) →
         de.nCtors C = some m →
         de.instOK C (List.ofFn args) = true →
         (∀ j, zs j ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ (alts j).fv ++ t.fv) →

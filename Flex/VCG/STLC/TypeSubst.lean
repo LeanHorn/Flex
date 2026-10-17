@@ -388,14 +388,16 @@ theorem SemTy.upto_congr {i : Nat} {R R' : Fin (i+1) → Val → Prop} {srt : BS
 /-- A datatype's denotation at index `k` depends on its type arguments only
     through their denotations below `k`. -/
 theorem TyDenote.data_congr {κ : KEnv} {δ δ' : TyEnvSem} {k : Nat} {C : String} {n : Nat}
-    {args args' : Fin n → Ty} {γ γ' : REnv} {v : Val}
+    {args args' : Fin n → Ty} {r r' : Refinement} {γ γ' : REnv} {v : Val}
     (hden : δ.denv = δ'.denv)
     (hargs : ∀ l, ∀ j < k, ∀ w, TyDenote κ δ j (args l) γ w ↔ TyDenote κ δ' j (args' l) γ' w)
-    (hsort : ∀ l, (args l).semSort δ = (args' l).semSort δ') :
-    TyDenote κ δ k (.data C n args) γ v ↔ TyDenote κ δ' k (.data C n args') γ' v := by
+    (hsort : ∀ l, (args l).semSort δ = (args' l).semSort δ')
+    (hr : ∀ v, Refinement.interp κ r ((γ.withSorts δ.sorts).push v) ↔
+      Refinement.interp κ r' ((γ'.withSorts δ'.sorts).push v)) :
+    TyDenote κ δ k (.data C n args r) γ v ↔ TyDenote κ δ' k (.data C n args' r') γ' v := by
   simp only [TyDenote, hden]
   refine and_congr_right fun _ => and_congr_right fun _ => and_congr_right fun _ =>
-    exists_congr fun j => exists_congr fun w => exists_congr fun P => and_congr_right fun _ =>
+    and_congr (hr v) <| exists_congr fun j => exists_congr fun w => exists_congr fun P => and_congr_right fun _ =>
       and_congr_right fun _ => forall_congr' fun i => forall_congr' fun hi => ?_
   have : (List.ofFn fun l => SemTy.upto i (fun j' w' => TyDenote κ δ j'.val (args l) γ w')
         ((args l).semSort δ)) =
@@ -613,12 +615,15 @@ theorem TyDenote.set_fresh_iff {κ : KEnv} {a : TVar} {R : SemTy} (t : Ty) (ha :
     intro δ k γ v
     simp only [Ty.ftv, List.mem_append, not_or] at ha
     exact TyDenote.prod_congr (fun w => ihs ha.1 δ k γ w) (fun w₁ w => iht ha.2 δ k _ w)
-  | data C n args ih =>
+  | data C n args r ih =>
     intro δ k γ v
-    simp only [Ty.ftv, List.mem_flatMap, List.mem_finRange, true_and, not_exists] at ha
-    refine TyDenote.data_congr rfl (fun l j _ w => ih l (ha l) δ j γ w) (fun l => ?_)
+    simp only [Ty.ftv, List.mem_append, List.mem_flatMap, List.mem_finRange, true_and, not_or,
+      not_exists] at ha
+    refine TyDenote.data_congr rfl (fun l j _ w => ih l (ha.1 l) δ j γ w) (fun l => ?_)
+      (fun v => Refinement.interp_congr r rfl (fun _ _ _ => rfl) fun c hc =>
+        Base.resolve_congr (fun _ => TyEnvSem.lookupB_set_ne (Refinement.ne_of_fresh ha.2 c hc)))
     rw [Ty.semSort_eq, Ty.semSort_eq]
-    exact Base.resolve_congr (fun _ => TyEnvSem.lookupB_set_ne (Ty.ftv_sortOf (ha l)))
+    exact Base.resolve_congr (fun _ => TyEnvSem.lookupB_set_ne (Ty.ftv_sortOf (ha.1 l)))
 
 /-! ## Opening a type binder -/
 
@@ -693,14 +698,18 @@ theorem TyDenote.openTv_iff {κ : KEnv} (a : TVar) (R : SemTy) (t : Ty) (ha : a 
     simp only [Ty.openTv]
     exact TyDenote.prod_congr (fun w => ihs ha.1 ρ ρ₀ η D k γ w)
       (fun w₁ w => iht ha.2 ρ ρ₀ η D k _ w)
-  | data C n args ih =>
+  | data C n args r ih =>
     intro ρ ρ₀ η D k γ v
-    simp only [Ty.ftv, List.mem_flatMap, List.mem_finRange, true_and, not_exists] at ha
+    simp only [Ty.ftv, List.mem_append, List.mem_flatMap, List.mem_finRange, true_and, not_or,
+      not_exists] at ha
     simp only [Ty.openTv]
-    refine TyDenote.data_congr rfl (fun l j _ w => ih l (ha l) ρ ρ₀ η D j γ w) (fun l => ?_)
+    refine TyDenote.data_congr rfl (fun l j _ w => ih l (ha.1 l) ρ ρ₀ η D j γ w) (fun l => ?_)
+      (fun v => Iff.symm (Refinement.interp_substB _ r rfl (fun _ _ _ => rfl) fun c hc =>
+        Base.resolve_of_lookupB (fun h => BSubst.openAt_isTv h)
+          (fun _ => TyEnvSem.lookupB_openAt ρ ρ₀ η D a R (Refinement.ne_of_fresh ha.2 c hc))))
     rw [Ty.semSort_eq, Ty.semSort_eq, Ty.sortOf_openTv]
     exact (Base.resolve_of_lookupB (fun h => BSubst.openAt_isTv h)
-      (fun _ => TyEnvSem.lookupB_openAt ρ ρ₀ η D a R (Ty.ftv_sortOf (ha l)))).symm
+      (fun _ => TyEnvSem.lookupB_openAt ρ ρ₀ η D a R (Ty.ftv_sortOf (ha.1 l)))).symm
 
 /-- The `∀`-instance of `openTv_iff`: entering a type binder by `R` is opening it
     with a fresh `a` interpreted by `R`. -/
@@ -773,10 +782,13 @@ theorem TyDenote.closeTv_iff {κ : KEnv} (a : TVar) (R : SemTy) (t : Ty) :
     simp only [Ty.closeTv]
     exact TyDenote.prod_congr (fun w => ihs ρ ρ₀ η D k γ w)
       (fun w₁ w => iht ρ ρ₀ η D k _ w)
-  | data C n args ih =>
+  | data C n args r ih =>
     intro ρ ρ₀ η D k γ v
     simp only [Ty.closeTv]
     refine TyDenote.data_congr rfl (fun l j _ w => ih l ρ ρ₀ η D j γ w) (fun l => ?_)
+      (fun v => Refinement.interp_substB _ r rfl (fun _ _ _ => rfl) fun c _ =>
+        Base.resolve_of_lookupB (fun h => BSubst.closeAt_isTv h)
+          (fun _ => TyEnvSem.lookupB_closeAt ρ ρ₀ η D a R c))
     rw [Ty.semSort_eq, Ty.semSort_eq, Ty.sortOf_closeTv]
     exact Base.resolve_of_lookupB (fun h => BSubst.closeAt_isTv h)
       (fun _ => TyEnvSem.lookupB_closeAt ρ ρ₀ η D a R _)
@@ -917,13 +929,26 @@ theorem TyDenote.congr_wf {κ : KEnv} (t : Ty) :
     cases i with
     | zero => rfl
     | succ i => exact hbv i (by simpa using hi)
-  | data C n args ih =>
+  | data C n args r ih =>
     intro kctx ctx ρ₁ ρ ρ' η D k γ γ' v hw hlen hmap hbv
-    simp only [Ty.wfB, List.all_eq_true, List.mem_finRange, true_implies] at hw
+    simp only [Ty.wfB, Bool.and_eq_true, List.all_eq_true, List.mem_finRange, true_implies] at hw
     refine TyDenote.data_congr rfl
-      (fun l j _ w => ih l kctx ctx ρ₁ ρ ρ' η D j γ γ' w (hw l) hlen hmap hbv) (fun l => ?_)
-    rw [Ty.semSort_eq, Ty.semSort_eq]
-    exact Base.resolve_append hlen (Or.inr (Ty.sortOf_tyOK (hw l)))
+      (fun l j _ w => ih l kctx ctx ρ₁ ρ ρ' η D j γ γ' w (hw.2 l) hlen hmap hbv) (fun l => ?_)
+      (fun v => ?_)
+    · rw [Ty.semSort_eq, Ty.semSort_eq]
+      exact Base.resolve_append hlen (Or.inr (Ty.sortOf_tyOK (hw.2 l)))
+    · apply Refinement.interp_congr r (by simpa using hmap)
+      · intro c i hi
+        have := Refinement.wfB_hasBVar r hw.1 c i hi
+        cases i with
+        | zero => rfl
+        | succ i =>
+          rcases Nat.lt_or_ge i ctx.length with hi' | hi'
+          · exact hbv i hi'
+          · rw [List.getElem?_cons_succ, List.getElem?_eq_none_iff.mpr hi'] at this
+            cases this
+      · intro c hc
+        exact Base.resolve_append hlen (Or.inl (Refinement.sortOK_of_mem_sorts r hw.1 c hc))
 
 /-! ## The substitution lemma for type application -/
 
@@ -1103,7 +1128,7 @@ theorem TyDenote.instTy_iff {κ : KEnv} (s : Ty) (kd : Kind) (hs : s.wfB [] [] =
             exact Base.resolve_closed (fun j h => by subst h; simp [Base.sortOK] at hok) _ _ rfl
         rw [hbase, hown, and_assoc]
       | .arrow _ _, hs, hk, _, _ | .forall _ _, hs, hk, _, _ | .prod _ _, hs, hk, _, _
-      | .data _ _ _, hs, hk, _, _ =>
+      | .data _ _ _ _, hs, hk, _, _ =>
         have hkd' : kd = .star := by rcases hk with h | h <;> simp_all [Ty.kindOf]
         subst hkd'
         have hstar' : (Base.tbvar ρ.length).isStarB kctx = true := by
@@ -1144,12 +1169,13 @@ theorem TyDenote.instTy_iff {κ : KEnv} (s : Ty) (kd : Kind) (hs : s.wfB [] [] =
     exact TyDenote.prod_congr (fun w => ihs ρ ρ₀ kctx ctx k γ w hR hw.1 hlen hkd hmap)
       (fun w₁ w => iht ρ ρ₀ kctx (s₁.optBase :: ctx) k (γ.push w₁) w hR hw.2 hlen hkd
         (by simpa using hmap))
-  | data C n args ih =>
+  | data C n args r ih =>
     intro ρ ρ₀ kctx ctx k γ v hR hw hlen hkd hmap
-    simp only [Ty.wfB, List.all_eq_true, List.mem_finRange, true_implies] at hw
+    simp only [Ty.wfB, Bool.and_eq_true, List.all_eq_true, List.mem_finRange, true_implies] at hw
     simp only [Ty.instTy]
     refine TyDenote.data_congr rfl (fun l j hj w =>
-      ih l ρ ρ₀ kctx ctx j γ w (fun k' hk' => hR k' (by omega)) (hw l) hlen hkd hmap) (fun l => ?_)
+      ih l ρ ρ₀ kctx ctx j γ w (fun k' hk' => hR k' (by omega)) (hw.2 l) hlen hkd hmap) (fun l => ?_)
+      (fun v => (hrefn r ρ ρ₀ γ v).symm)
     rw [Ty.semSort_eq, Ty.semSort_eq, Ty.sortOf_instTy]
     split
     · rename_i h

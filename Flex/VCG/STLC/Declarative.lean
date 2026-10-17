@@ -105,9 +105,9 @@ inductive Hastype : DEnv → KEnv → TEnv → Exp → Ty → Prop where
       de.instOK C τs = true →
       Hastype de κ Γ e (Ty.instTys τs P) →
       Hastype de κ Γ (.ctor C j τs e) (Ty.dataL C τs)
-  | case {de κ Γ e C n args m alts t} (zs : Fin m → EVar) :
+  | case {de κ Γ e C n args r m alts t} (zs : Fin m → EVar) :
       Ty.WFBVars t →
-      Hastype de κ Γ e (.data C n args) →
+      Hastype de κ Γ e (.data C n args r) →
       de.nCtors C = some m →
       de.instOK C (List.ofFn args) = true →
       (∀ j, zs j ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ (alts j).fv ++ t.fv) →
@@ -235,7 +235,7 @@ theorem Hastype.fv_subset {de κ Γ e t} (_h : Hastype de κ Γ e t) :
   | ctor _ _ _ ih =>
     simp only [Exp.fv] at zf
     exact ih zf
-  | @case Γ' e C n args m alts t zs _ _ hm _ hz _ _ ih ihs =>
+  | @case Γ' e C n args r m alts t zs _ _ hm _ hz _ _ ih ihs =>
     simp only [Exp.fv, List.mem_append, List.mem_flatMap, List.mem_finRange, true_and] at zf
     rcases zf with h | ⟨j, h⟩
     · exact ih h
@@ -303,7 +303,7 @@ theorem Ty.WFBVars_self (x : EVar) (t : Ty) (_h : Ty.WFBVars t) : Ty.WFBVars (se
   | arrow s t => simp [self, _h]
   | «forall» k t => simpa [self] using _h
   | prod s t => simpa [self] using _h
-  | data C n args => simpa [self] using _h
+  | data C n args r => simpa [self] using _h
 
 /-- WFBVars of the concrete result types for primitives. -/
 theorem Ty.WFBVars_prim (n : Int) : Ty.WFBVars (prim n) := by

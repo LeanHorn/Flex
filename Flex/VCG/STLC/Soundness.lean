@@ -24,7 +24,7 @@ theorem Ty.hyp?_eq_some {t : Ty} {b : Base} {r : Refinement}
       · simp at h
     | tbvar _ => simp at h
     | _ => simp at h; obtain ⟨rfl, rfl⟩ := h; rfl
-  | arrow _ _ | «forall» _ _ | prod _ _ | data _ _ _ => simp at h
+  | arrow _ _ | «forall» _ _ | prod _ _ | data _ _ _ _ => simp at h
 
 /-- `implyBindCstr` over a binding with hypothesis `r` at sort `b` interprets
     as a `push`-form quantified bind, provided `x` is fresh for `r`. -/
@@ -44,8 +44,25 @@ theorem implyBindCstr_interp_some {κ : KEnv} {x : EVar} {t : Ty} {b : Base} {r 
 
 /-- `implyBindCstr` over a binding with no hypothesis is the identity. -/
 theorem implyBindCstr_interp_none {κ : KEnv} {x : EVar} {t : Ty} {c : Cstr} {γ : REnv}
-    (ht : t.hyp? = none) : (implyBindCstr x t c).interp κ γ ↔ c.interp κ γ := by
-  simp only [implyBindCstr, ht]
+    (ht : t.hyp? = none) (hd : t.dhyp? = none) :
+    (implyBindCstr x t c).interp κ γ ↔ c.interp κ γ := by
+  simp only [implyBindCstr, ht, hd]
+
+/-- The refinement of a datatype binding is fresh for whatever is fresh for the type. -/
+theorem Ty.dhyp?_fv {t : Ty} {r : Refinement} {x : EVar} (hd : t.dhyp? = some r)
+    (hx : x ∉ t.fv) : x ∉ r.fv := by
+  cases t <;> simp_all [Ty.dhyp?, Ty.fv]
+
+/-- `implyBindCstr` over a datatype binding: its refinement, read at the slot
+    `x` itself, is a hypothesis. -/
+theorem implyBindCstr_interp_data {κ : KEnv} {x : EVar} {t : Ty} {r : Refinement} {c : Cstr}
+    {γ : REnv} (hd : t.dhyp? = some r) (hx : x ∉ r.fv) :
+    (implyBindCstr x t c).interp κ γ ↔
+      (Refinement.interp κ r (γ.push (γ.map x)) → c.interp κ γ) := by
+  simp only [implyBindCstr, Ty.hyp?_of_dhyp? hd, hd, Cstr.interp]
+  have := Refinement.interp_openBVar κ r γ x (γ.map x) 0 (Nat.zero_le _) hx
+  rw [REnv.write_idem, REnv.insertBV_zero] at this
+  rw [this]
 
 /-- Semantic (`push`-form) reading of a bind. -/
 def implyBindSem (κ : KEnv) (x : EVar) (t : Ty) (c : Cstr) (γ : REnv) : Prop :=
@@ -53,7 +70,10 @@ def implyBindSem (κ : KEnv) (x : EVar) (t : Ty) (c : Cstr) (γ : REnv) : Prop :
   | some (b, r) => ∀ v : b.sem γ.sorts,
                      Refinement.interp κ r (γ.push (Val.inj (b.resolve γ.sorts) v)) →
                        c.interp κ (REnv.update b γ x v)
-  | none        => c.interp κ γ
+  | none        =>
+    match t.dhyp? with
+    | some r => Refinement.interp κ r (γ.push (γ.map x)) → c.interp κ γ
+    | none   => c.interp κ γ
 
 /-- `implyBindCstr` interprets as `implyBindSem`, for *any* binding type
     (provided `x` is fresh for the binding's refinement). -/
@@ -61,7 +81,12 @@ theorem implyBindCstr_interp_gen (κ : KEnv) (x : EVar) (t : Ty) (c : Cstr)
     (γ : REnv) (hx : x ∉ t.fv) :
     (implyBindCstr x t c).interp κ γ ↔ implyBindSem κ x t c γ := by
   cases ht : t.hyp? with
-  | none => simp only [implyBindSem, ht]; exact implyBindCstr_interp_none ht
+  | none =>
+    cases hd : t.dhyp? with
+    | none => simp only [implyBindSem, ht, hd]; exact implyBindCstr_interp_none ht hd
+    | some r =>
+      simp only [implyBindSem, ht, hd]
+      exact implyBindCstr_interp_data hd (Ty.dhyp?_fv hd hx)
   | some p =>
     obtain ⟨b, r⟩ := p
     have htr := Ty.hyp?_eq_some ht
@@ -76,7 +101,11 @@ theorem implyBind_elim {κ : KEnv} {γ : REnv} {x : EVar} {t : Ty} {c : Cstr} {�
     (hm : ModelsEnv κ γ ((x, t) :: Γ)) (hx : x ∉ t.fv)
     (h : (implyBindCstr x t c).interp κ γ) : c.interp κ γ := by
   cases ht : t.hyp? with
-  | none => exact (implyBindCstr_interp_none ht).mp h
+  | none =>
+    cases hd : t.dhyp? with
+    | none => exact (implyBindCstr_interp_none ht hd).mp h
+    | some r =>
+      exact (implyBindCstr_interp_data hd (Ty.dhyp?_fv hd hx)).mp h ((ModelsEnv.cons_data hd).mp hm).1
   | some p =>
     obtain ⟨b, r⟩ := p
     have htr := Ty.hyp?_eq_some ht
@@ -194,18 +223,20 @@ theorem sub_sound {de : DEnv} (κ : KEnv) (Γ : TEnv) (s t : Ty) (c : Cstr) :
         exact Subtyp.prod (sub_sound κ Γ s1 s2 c₁ hc₁ fun γ hm => (hent γ hm).1) hfr
           (sub_sound κ ((w, s1) :: Γ) _ _ c₂ hc₂
             fun γ hm => implyBind_elim hm hws (hent γ hm.tail).2)
-  | .data C1 n1 a1, .data C2 n2 a2 =>
+  | .data C1 n1 a1 r1, .data C2 n2 a2 r2 =>
     simp only [sub] at hsub
     split at hsub
     · rename_i h
       obtain ⟨hC, hn⟩ := h
+      obtain ⟨ca, hall', hca⟩ := Option.map_eq_some_iff.mp hsub
+      subst hca
       -- the per-argument constraints, by variance
       have hall : ∀ i, (de.var C1 i.val ≠ .contra → ∃ c₁, sub de Γ (a1 i) (a2 (Fin.cast hn i)) = some c₁ ∧
-            ∀ γ, c.interp κ γ → c₁.interp κ γ) ∧
+            ∀ γ, ca.interp κ γ → c₁.interp κ γ) ∧
           (de.var C1 i.val ≠ .co → ∃ c₂, sub de Γ (a2 (Fin.cast hn i)) (a1 i) = some c₂ ∧
-            ∀ γ, c.interp κ γ → c₂.interp κ γ) := by
+            ∀ γ, ca.interp κ γ → c₂.interp κ γ) := by
         intro i
-        obtain ⟨ci, hfi, himp⟩ := Cstr.conjAll_some hsub i (List.mem_finRange i)
+        obtain ⟨ci, hfi, himp⟩ := Cstr.conjAll_some hall' i (List.mem_finRange i)
         cases hv : de.var C1 i.val with
         | co =>
           simp only [hv] at hfi
@@ -228,24 +259,30 @@ theorem sub_sound {de : DEnv} (κ : KEnv) (Γ : TEnv) (s t : Ty) (c : Cstr) :
       have hs₁ : ∀ i, de.var C1 i.val ≠ .contra → Subtyp de κ Γ (a1 i) (a2 (Fin.cast hn i)) :=
         fun i hi => by
           obtain ⟨c₁, h₁, himp⟩ := (hall i).1 hi
-          have := Ty.skel_data_lt C1 n1 a1 i
-          have := Ty.skel_data_lt C2 n2 a2 (Fin.cast hn i)
-          exact sub_sound κ Γ _ _ c₁ h₁ fun γ hm => himp γ (hent γ hm)
+          have := Ty.skel_data_lt C1 n1 a1 r1 i
+          have := Ty.skel_data_lt C2 n2 a2 r2 (Fin.cast hn i)
+          exact sub_sound κ Γ _ _ c₁ h₁ fun γ hm => himp γ (hent γ hm).1
       have hs₂ : ∀ i, de.var C1 i.val ≠ .co → Subtyp de κ Γ (a2 (Fin.cast hn i)) (a1 i) :=
         fun i hi => by
           obtain ⟨c₂, h₂, himp⟩ := (hall i).2 hi
-          have := Ty.skel_data_lt C1 n1 a1 i
-          have := Ty.skel_data_lt C2 n2 a2 (Fin.cast hn i)
-          exact sub_sound κ Γ _ _ c₂ h₂ fun γ hm => himp γ (hent γ hm)
+          have := Ty.skel_data_lt C1 n1 a1 r1 i
+          have := Ty.skel_data_lt C2 n2 a2 r2 (Fin.cast hn i)
+          exact sub_sound κ Γ _ _ c₂ h₂ fun γ hm => himp γ (hent γ hm).1
+      have hfr := EVar.fresh_not_mem (TEnv.dom Γ ++ TEnv.tyFv Γ ++ r1.fv ++ r2.fv)
+      have hx1 : EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ r1.fv ++ r2.fv) ∉ r1.fv := by
+        simp only [List.mem_append, not_or] at hfr; exact hfr.1.2
       subst hC hn
-      exact Subtyp.data (fun i hi => by simpa using hs₁ i hi) (fun i hi => by simpa using hs₂ i hi)
+      refine Subtyp.data (fun i hi => by simpa using hs₁ i hi) (fun i hi => by simpa using hs₂ i hi)
+        hfr ?_
+      intro γ hm
+      exact (implyBindCstr_interp_data rfl hx1).mp (hent γ hm.tail).2 ((ModelsEnv.cons_data rfl).mp hm).1
     · simp at hsub
   | .refine _ _, .arrow _ _ | .refine _ _, .forall _ _ | .arrow _ _, .refine _ _
   | .arrow _ _, .forall _ _ | .forall _ _, .refine _ _ | .forall _ _, .arrow _ _
-  | .refine _ _, .prod _ _ | .refine _ _, .data _ _ _ | .arrow _ _, .prod _ _ | .arrow _ _, .data _ _ _
-  | .forall _ _, .prod _ _ | .forall _ _, .data _ _ _ | .prod _ _, .refine _ _ | .prod _ _, .arrow _ _
-  | .prod _ _, .forall _ _ | .prod _ _, .data _ _ _ | .data _ _ _, .refine _ _ | .data _ _ _, .arrow _ _
-  | .data _ _ _, .forall _ _ | .data _ _ _, .prod _ _ =>
+  | .refine _ _, .prod _ _ | .refine _ _, .data _ _ _ _ | .arrow _ _, .prod _ _ | .arrow _ _, .data _ _ _ _
+  | .forall _ _, .prod _ _ | .forall _ _, .data _ _ _ _ | .prod _ _, .refine _ _ | .prod _ _, .arrow _ _
+  | .prod _ _, .forall _ _ | .prod _ _, .data _ _ _ _ | .data _ _ _ _, .refine _ _ | .data _ _ _ _, .arrow _ _
+  | .data _ _ _ _, .forall _ _ | .data _ _ _ _, .prod _ _ =>
     simp [sub] at hsub
   termination_by s.skel + t.skel
   decreasing_by
@@ -301,7 +338,7 @@ mutual
             obtain ⟨rfl, rfl⟩ := hsynth
             exact Synth.tapp (synth_sound κ Γ e₀ c' (.forall k t₀) hse hent) hk h1 h2 h3
           · simp at hsynth
-        | refine _ _ | arrow _ _ | prod _ _ | data _ _ _ => simp at hsynth
+        | refine _ _ | arrow _ _ | prod _ _ | data _ _ _ _ => simp at hsynth
     | .ctor C j τs e₀ =>
       simp only [synth] at hsynth
       cases hP : de.payload? C j with
@@ -484,7 +521,7 @@ mutual
         simpa only [implyBindSem] using hb
     | .lam e =>
       match t with
-      | .refine _ _ | .forall _ _ | .prod _ _ | .data _ _ _ =>
+      | .refine _ _ | .forall _ _ | .prod _ _ | .data _ _ _ _ =>
         simp_all [check, synth]
       | .arrow s1 t1 =>
         simp_all [check]
@@ -624,7 +661,7 @@ mutual
           subst hk
           exact Check.tabs rfl (TVar.fresh_not_mem _ _) (check_sound κ Γ _ _ c hcheck hent)
         · simp at hcheck
-      | .refine _ _ | .arrow _ _ | .prod _ _ | .data _ _ _ => simp_all [check, synth]
+      | .refine _ _ | .arrow _ _ | .prod _ _ | .data _ _ _ _ => simp_all [check, synth]
     | .tapp e₀ s₀ =>
       simp_all [check]
       obtain ⟨c₁, s, hc₁⟩ : ∃ c₁ s, synth de Γ (.tapp e₀ s₀) = some (c₁, s) := by grind
@@ -634,7 +671,7 @@ mutual
                       (sub_sound _ _ _ _ _ hc₂ fun γ hm => (hent γ hm).2)
     | .fix e =>
       match t with
-      | .refine _ _ | .forall _ _ | .prod _ _ | .data _ _ _ => simp_all [check, synth]
+      | .refine _ _ | .forall _ _ | .prod _ _ | .data _ _ _ _ => simp_all [check, synth]
       | .arrow s1 t1 =>
         simp only [check] at hcheck
         have hfF := EVar.fresh_not_mem (TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s1.fv ++ t1.fv)
@@ -718,7 +755,7 @@ mutual
             have hcγ := (hent γ hmγ.tail.tail).2
             exact implyBind_elim hmγ hyt (implyBind_elim hmγ.tail hxs hcγ)
           · simp at hcheck
-        | refine _ _ | arrow _ _ | «forall» _ _ | data _ _ _ => simp at hcheck
+        | refine _ _ | arrow _ _ | «forall» _ _ | data _ _ _ _ => simp at hcheck
     | .case e₀ m alts =>
       simp only [check] at hcheck
       cases hs : synth de Γ e₀ with

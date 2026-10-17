@@ -28,7 +28,7 @@ def STLC.Ty.hyp? : Ty → Option (Base × Refinement)
   | .arrow _ _                    => none
   | .forall _ _                   => none
   | .prod _ _                     => none
-  | .data _ _ _                   => none
+  | .data _ _ _ _                 => none
 
 @[simp] theorem Ty.hyp?_int (r : Refinement) : (Ty.refine .int r).hyp? = some (.int, r) := rfl
 @[simp] theorem Ty.hyp?_bool (r : Refinement) : (Ty.refine .bool r).hyp? = some (.bool, r) := rfl
@@ -41,8 +41,25 @@ def STLC.Ty.hyp? : Ty → Option (Base × Refinement)
 @[simp] theorem Ty.hyp?_arrow (s t : Ty) : (Ty.arrow s t).hyp? = none := rfl
 @[simp] theorem Ty.hyp?_forall (k : Kind) (t : Ty) : (Ty.forall k t).hyp? = none := rfl
 @[simp] theorem Ty.hyp?_prod (s t : Ty) : (Ty.prod s t).hyp? = none := rfl
-@[simp] theorem Ty.hyp?_data (C : String) (n : Nat) (args : Fin n → Ty) :
-    (Ty.data C n args).hyp? = none := rfl
+@[simp] theorem Ty.hyp?_data (C : String) (n : Nat) (args : Fin n → Ty) (r : Refinement) :
+    (Ty.data C n args r).hyp? = none := rfl
+
+/-- The hypothesis a datatype binding contributes: its refinement, which reads
+    the bound value only through measures (no sort, so no `HasBase`). -/
+def STLC.Ty.dhyp? : Ty → Option Refinement
+  | .data _ _ _ r => some r
+  | _             => none
+
+@[simp] theorem Ty.dhyp?_data (C : String) (n : Nat) (args : Fin n → Ty) (r : Refinement) :
+    (Ty.data C n args r).dhyp? = some r := rfl
+@[simp] theorem Ty.dhyp?_refine (b : Base) (r : Refinement) : (Ty.refine b r).dhyp? = none := rfl
+@[simp] theorem Ty.dhyp?_arrow (s t : Ty) : (Ty.arrow s t).dhyp? = none := rfl
+@[simp] theorem Ty.dhyp?_forall (k : Kind) (t : Ty) : (Ty.forall k t).dhyp? = none := rfl
+@[simp] theorem Ty.dhyp?_prod (s t : Ty) : (Ty.prod s t).dhyp? = none := rfl
+
+/-- A binding never has both kinds of hypothesis. -/
+theorem Ty.hyp?_of_dhyp? {t : Ty} {r : Refinement} (h : t.dhyp? = some r) : t.hyp? = none := by
+  cases t <;> simp_all [Ty.dhyp?]
 
 /-- A model for Γ under κ-assignment: every binding with a refined hypothesis
     stores a value of the binding's sort (`HasBase`) satisfying it. The
@@ -53,7 +70,10 @@ def ModelsEnv (κ : KEnv) : REnv → TEnv → Prop
   | γ, (x, t) :: Γ  =>
       (match t.hyp? with
        | some (b, r) => REnv.HasBase γ x b ∧ Refinement.interp κ r (γ.push (γ.lookup x))
-       | none        => True)
+       | none        =>
+         match t.dhyp? with
+         | some r => Refinement.interp κ r (γ.push (γ.lookup x))
+         | none   => True)
       ∧ ModelsEnv κ γ Γ
 
 @[simp] theorem ModelsEnv.nil (κ : KEnv) (γ : REnv) : ModelsEnv κ γ [] := trivial
@@ -66,9 +86,16 @@ theorem ModelsEnv.cons_some {κ : KEnv} {γ : REnv} {x : EVar} {t : Ty} {Γ : TE
   simp only [ModelsEnv, h]
 
 theorem ModelsEnv.cons_none {κ : KEnv} {γ : REnv} {x : EVar} {t : Ty} {Γ : TEnv}
-    (h : t.hyp? = none) :
+    (h : t.hyp? = none) (hd : t.dhyp? = none) :
     ModelsEnv κ γ ((x, t) :: Γ) ↔ ModelsEnv κ γ Γ := by
-  simp only [ModelsEnv, h, true_and]
+  simp only [ModelsEnv, h, hd, true_and]
+
+/-- Unfolding `ModelsEnv` at a datatype binding. -/
+theorem ModelsEnv.cons_data {κ : KEnv} {γ : REnv} {x : EVar} {t : Ty} {Γ : TEnv}
+    {r : Refinement} (hd : t.dhyp? = some r) :
+    ModelsEnv κ γ ((x, t) :: Γ) ↔
+      Refinement.interp κ r (γ.push (γ.lookup x)) ∧ ModelsEnv κ γ Γ := by
+  simp only [ModelsEnv, Ty.hyp?_of_dhyp? hd, hd]
 
 /-- A model of an extended context is a model of the context. -/
 theorem ModelsEnv.tail {κ : KEnv} {γ : REnv} {x : EVar} {t : Ty} {Γ : TEnv}
@@ -135,5 +162,15 @@ theorem Entail.ext {κ : KEnv} {Γ : TEnv} {x : EVar} {t : Ty} {b : Base} {r : R
 /-- ENT-EXT for a binding with no hypothesis (function, polymorphic, or
     ⋆-kinded type-variable types). -/
 theorem Entail.ext_none {κ : KEnv} {Γ : TEnv} {x : EVar} {t : Ty} {c : REnv → Prop}
-    (ht : t.hyp? = none) (h : Entail κ Γ c) : Entail κ ((x, t) :: Γ) c :=
-  fun γ hm => h γ ((ModelsEnv.cons_none ht).mp hm)
+    (ht : t.hyp? = none) (hd : t.dhyp? = none) (h : Entail κ Γ c) : Entail κ ((x, t) :: Γ) c :=
+  fun γ hm => h γ ((ModelsEnv.cons_none ht hd).mp hm)
+
+/-- ENT-EXT for a datatype binding: its refinement becomes a hypothesis about
+    the slot itself (no quantifier — the slot holds a datatype value, which has
+    no sort). -/
+theorem Entail.ext_data {κ : KEnv} {Γ : TEnv} {x : EVar} {t : Ty} {r : Refinement}
+    {c : REnv → Prop} (hd : t.dhyp? = some r)
+    (h : Entail κ Γ (fun γ => Refinement.interp κ r (γ.push (γ.lookup x)) → c γ)) :
+    Entail κ ((x, t) :: Γ) c := fun γ hm =>
+  let ⟨hr, hΓ⟩ := (ModelsEnv.cons_data hd).mp hm
+  h γ hΓ hr

@@ -73,7 +73,7 @@ theorem TyDenote.wf {κ : KEnv} {δ : TyEnvSem} {k : Nat} {t : Ty} {γ : REnv} {
     simp only [Val.lc, Val.closed, Val.fv, Val.Erased, Val.toExp, Exp.lc_at, Exp.fv,
       Exp.TypeFree, List.append_eq_nil_iff] at *
     exact ⟨⟨l₁, l₂⟩, ⟨c₁, c₂⟩, ⟨e₁, e₂⟩⟩
-  | data C n args => simp only [TyDenote] at h; exact ⟨h.1, h.2.1, h.2.2.1⟩
+  | data C n args r => simp only [TyDenote] at h; exact ⟨h.1, h.2.1, h.2.2.1⟩
 
 theorem TyDenote.closed {κ : KEnv} {δ : TyEnvSem} {k : Nat} {t : Ty} {γ : REnv} {v : Val}
     (h : TyDenote κ δ k t γ v) : Val.closed v := (TyDenote.wf h).2.1
@@ -205,10 +205,16 @@ theorem TyDenote.map_irrel {κ : KEnv} (t : Ty) : t.fv = [] →
     simp only [Ty.fv, List.append_eq_nil_iff] at h
     exact TyDenote.prod_congr (fun w => ihs h.1 δ k γ γ' w hbv)
       (fun w₁ w => iht h.2 δ k _ _ w (by simp [hbv]))
-  | data C n args ih =>
+  | data C n args r ih =>
     intro h δ k γ γ' v hbv
-    simp only [Ty.fv, List.flatMap_eq_nil_iff, List.mem_finRange, true_implies] at h
-    exact TyDenote.data_congr rfl (fun l j _ w => ih l (h l) δ j γ γ' w hbv) (fun _ => rfl)
+    simp only [Ty.fv, List.append_eq_nil_iff, List.flatMap_eq_nil_iff, List.mem_finRange,
+      true_implies] at h
+    refine TyDenote.data_congr rfl (fun l j _ w => ih l (h.1 l) δ j γ γ' w hbv) (fun _ => rfl)
+      (fun v => ?_)
+    have e : (γ'.withSorts δ.sorts).push v = { (γ.withSorts δ.sorts).push v with map := γ'.map } := by
+      apply REnv.ext <;> simp [hbv]
+    rw [e]
+    exact (Refinement.interp_nofv r _ γ'.map h.2).symm
 
 /-- A type without free type variables does not read their interpretation. -/
 theorem TyDenote.ftv_irrel {κ : KEnv} (t : Ty) : t.ftv = [] →
@@ -248,16 +254,21 @@ theorem TyDenote.ftv_irrel {κ : KEnv} (t : Ty) : t.ftv = [] →
     simp only [Ty.ftv, List.append_eq_nil_iff] at h
     exact TyDenote.prod_congr (fun w => ihs h.1 ρ η η' D k γ w)
       (fun w₁ w => iht h.2 ρ η η' D k _ w)
-  | data C n args ih =>
+  | data C n args r ih =>
     intro h ρ η η' D k γ v
-    simp only [Ty.ftv, List.flatMap_eq_nil_iff, List.mem_finRange, true_implies] at h
-    refine TyDenote.data_congr rfl (fun l j _ w => ih l (h l) ρ η η' D j γ w) (fun l => ?_)
+    simp only [Ty.ftv, List.append_eq_nil_iff, List.flatMap_eq_nil_iff, List.mem_finRange,
+      true_implies] at h
+    refine TyDenote.data_congr rfl (fun l j _ w => ih l (h.1 l) ρ η η' D j γ w) (fun l => ?_)
+      (fun v => Refinement.interp_congr r rfl (fun _ _ _ => rfl) fun c hc => by
+        cases c with
+        | tfvar a => exact absurd (Refinement.ftv_of_mem_sorts r hc) (by simp [h.2])
+        | _ => rfl)
     rw [Ty.semSort_eq, Ty.semSort_eq]
     cases hs : (args l).sortOf with
     | tfvar a =>
       cases hl : args l with
       | refine b r =>
-        have h' := h l
+        have h' := h.1 l
         rw [hl] at hs h'; simp only [Ty.sortOf] at hs; subst hs
         simp [Ty.ftv, Base.ftv] at h'
       | _ => rw [hl] at hs; simp [Ty.sortOf] at hs
@@ -357,6 +368,13 @@ theorem TyDenote.instTys_bridge {κ : KEnv} (δ : TyEnvSem) (γ : REnv) (i : Nat
   simp only [List.nil_append, List.append_nil, List.length_nil] at e1 e2 e3
   rw [e1, ← e2, e3, e4, e5]
 
+/-- A value in the denotation of a datatype binding satisfies its refinement. -/
+theorem TyDenote.toDHyp {κ : KEnv} {δ : TyEnvSem} {k : Nat} {t : Ty} {γ : REnv} {v : Val}
+    {r : Refinement} (hd : t.dhyp? = some r) (h : TyDenote κ δ k t γ v) :
+    Refinement.interp κ r ((γ.withSorts δ.sorts).push v) := by
+  cases t <;> simp [Ty.dhyp?] at hd
+  subst hd; simp only [TyDenote] at h; exact h.2.2.2.1
+
 /-! ## Closing environment
 
   `EnvCloses κ δ k Γ γ` says: `γ` assigns each Γ-binding a value in that
@@ -379,7 +397,10 @@ theorem EnvCloses.toModelsEnv {κ : KEnv} {δ : TyEnvSem} {k : Nat} (hδ : δ.WK
   | (x, t) :: Γ, γ, ⟨htd, hΓ⟩ => by
       have hrest := EnvCloses.toModelsEnv hδ hΓ
       cases ht : t.hyp? with
-      | none => exact (ModelsEnv.cons_none ht).mpr hrest
+      | none =>
+        cases hd : t.dhyp? with
+        | none => exact (ModelsEnv.cons_none ht hd).mpr hrest
+        | some r => exact (ModelsEnv.cons_data hd).mpr ⟨by simpa using TyDenote.toDHyp hd htd, hrest⟩
       | some p =>
         obtain ⟨b, r⟩ := p
         exact (ModelsEnv.cons_some ht).mpr ⟨TyDenote.toHyp hδ ht htd rfl rfl, hrest⟩
@@ -518,10 +539,16 @@ theorem TyDenote.extendBy_fresh_iff {κ : KEnv} (t : Ty) :
     refine TyDenote.prod_congr (fun w => ihs δ k γ w x va hx.1) (fun w₁ w => ?_)
     rw [REnv.push_write_comm]
     exact iht δ k (γ.push w₁) w x va hx.2
-  | data C n args ih =>
+  | data C n args r ih =>
     intro δ k γ v x va hx
-    simp only [Ty.fv, List.mem_flatMap, List.mem_finRange, true_and, not_exists] at hx
-    exact TyDenote.data_congr rfl (fun l j _ w => ih l δ j γ w x va (hx l)) (fun _ => rfl)
+    simp only [Ty.fv, List.mem_append, List.mem_flatMap, List.mem_finRange, true_and, not_or,
+      not_exists] at hx
+    refine TyDenote.data_congr rfl (fun l j _ w => ih l δ j γ w x va (hx.1 l)) (fun _ => rfl)
+      (fun v => ?_)
+    have e : ((γ.write x va).withSorts δ.sorts).push v =
+        ((γ.withSorts δ.sorts).push v).write x va := rfl
+    rw [e]
+    exact Refinement.interp_write_fresh r x va _ hx.2
 
 /-- TyDenote is monotone under writing at a variable `x` not free in `t`. -/
 theorem TyDenote.extendBy_fresh {κ : KEnv} {δ : TyEnvSem} {k : Nat} {t : Ty} {γ : REnv}
@@ -599,12 +626,20 @@ private theorem TyDenote.insertBV_openVar_aux {κ : KEnv} (t : Ty) :
     refine TyDenote.prod_congr (fun w => ihs ρ δ k x γ va w hlen hxf.1) (fun w₁ w => ?_)
     rw [REnv.push_insertBV_comm, REnv.push_write_comm]
     exact iht (s'.optBase :: ρ) δ k x (γ.push w₁) va w (Nat.succ_le_succ hlen) hxf.2
-  | data C n args ih =>
+  | data C n args r ih =>
     intro ρ δ k x γ va v hlen hxf
-    simp only [Ty.fv, List.mem_flatMap, List.mem_finRange, true_and, not_exists] at hxf
+    simp only [Ty.fv, List.mem_append, List.mem_flatMap, List.mem_finRange, true_and, not_or,
+      not_exists] at hxf
     simp only [Ty.openVar]
-    exact TyDenote.data_congr rfl (fun l j _ w => ih l ρ δ j x γ va w hlen (hxf l))
-      (fun l => by cases args l <;> rfl)
+    refine TyDenote.data_congr rfl (fun l j _ w => ih l ρ δ j x γ va w hlen (hxf.1 l))
+      (fun l => by cases args l <;> rfl) (fun v => ?_)
+    have e₁ : ((γ.insertBV ρ.length va).withSorts δ.sorts).push v =
+        ((γ.withSorts δ.sorts).push v).insertBV (ρ.length + 1) va := rfl
+    have e₂ : ((γ.write x va).withSorts δ.sorts).push v =
+        ((γ.withSorts δ.sorts).push v).write x va := rfl
+    rw [e₁, e₂]
+    exact (Refinement.interp_openBVar κ r ((γ.withSorts δ.sorts).push v) x va (ρ.length + 1)
+      (by simpa using Nat.succ_le_succ hlen) hxf.2).symm
 
 /-- `push va` in TyDenote corresponds to `openVar 0 x` with `γ.write x va`, when
     `x` is fresh for `t`. -/
@@ -801,8 +836,12 @@ theorem TyDenote.var_mono {κ : KEnv} {de : DEnv} (hde : de.wfB = true) :
     · rintro hp ⟨v₁, v₂, rfl, h₁, h₂⟩
       exact ⟨v₁, v₂, rfl, (ihs vs p inner ρ ρ' η γ v₁ hok.1 hrel).2 hp h₁,
         (iht vs p inner ρ ρ' η _ v₂ hok.2 hrel).2 hp h₂⟩
-  | data C n args _ =>
+  | data C n args r _ =>
     intro vs p inner ρ ρ' η γ v hok hrel
+    have hri : Refinement.interp κ r
+          ((γ.withSorts (⟨inner ++ ρ, η, de⟩ : TyEnvSem).sorts).push v) ↔
+        Refinement.interp κ r ((γ.withSorts (⟨inner ++ ρ', η, de⟩ : TyEnvSem).sorts).push v) :=
+      Refinement.interp_congr r rfl (fun _ _ _ => rfl) (fun c _ => RelVar.resolve hrel c)
     simp only [Ty.varOK, List.all_eq_true, List.mem_finRange, true_implies] at hok
     -- the arguments are related at every index below `k`, by their polarity
     have harg : ∀ l : Fin n, ∀ j < k, ∀ w,
@@ -831,16 +870,16 @@ theorem TyDenote.var_mono {κ : KEnv} {de : DEnv} (hde : de.wfB = true) :
       fun l => by rw [Ty.semSort_eq, Ty.semSort_eq]; exact (RelVar.resolve hrel _).symm
     simp only [TyDenote, hS]
     constructor
-    · rintro hp ⟨hlc, hcl, her, j, w, P, rfl, hP, hw⟩
-      refine ⟨hlc, hcl, her, j, w, P, rfl, hP, fun i hi => ?_⟩
+    · rintro hp ⟨hlc, hcl, her, hr, j, w, P, rfl, hP, hw⟩
+      refine ⟨hlc, hcl, her, hri.mp hr, j, w, P, rfl, hP, fun i hi => ?_⟩
       refine hpay i hi _ _ _ j P w hP (fun l => ?_) (hw i hi)
       apply Variance.Rel_upto
       · intro hv j' w' h
         exact (harg l j'.val (by have := j'.isLt; omega) w').1 (Pol.comp_ne_neg hp hv) h
       · intro hv j' w' h
         exact (harg l j'.val (by have := j'.isLt; omega) w').2 (Pol.comp_ne_pos hp hv) h
-    · rintro hp ⟨hlc, hcl, her, j, w, P, rfl, hP, hw⟩
-      refine ⟨hlc, hcl, her, j, w, P, rfl, hP, fun i hi => ?_⟩
+    · rintro hp ⟨hlc, hcl, her, hr, j, w, P, rfl, hP, hw⟩
+      refine ⟨hlc, hcl, her, hri.mpr hr, j, w, P, rfl, hP, fun i hi => ?_⟩
       refine hpay i hi _ _ _ j P w hP (fun l => ?_) (hw i hi)
       apply Variance.Rel_upto
       · intro hv j' w' h
@@ -870,7 +909,15 @@ private theorem ModelsEnv.extendBy_fresh_aux {κ : KEnv} {Γ : TEnv} {γ : REnv}
     simp only [TEnv.tyFv, List.mem_append, not_or] at hz_fv
     have htail := ih hm.tail hz_dom.2 hz_fv.2
     cases ht : t.hyp? with
-    | none => exact (ModelsEnv.cons_none ht).mpr htail
+    | none =>
+      cases hd : t.dhyp? with
+      | none => exact (ModelsEnv.cons_none ht hd).mpr htail
+      | some r =>
+        have hhead := ((ModelsEnv.cons_data hd).mp hm).1
+        have hmap : (γ.write z va).map y = γ.map y := REnv.write_other γ z va hz_dom.1
+        refine (ModelsEnv.cons_data hd).mpr ⟨?_, htail⟩
+        rw [show (γ.write z va).lookup y = γ.lookup y from hmap, REnv.push_write_comm]
+        exact (Refinement.interp_write_fresh r z va _ (Ty.dhyp?_fv hd hz_fv.1)).mp hhead
     | some p =>
       obtain ⟨b, r⟩ := p
       obtain ⟨⟨hHB, hhead⟩, _⟩ := (ModelsEnv.cons_some ht).mp hm
@@ -894,7 +941,17 @@ private theorem ModelsEnv.extendBy_cons {κ : KEnv} {δ : TyEnvSem} {Γ : TEnv} 
     ModelsEnv κ ((γ.write z va).withSorts δ.sorts) ((z, s₂) :: Γ) := by
   have htail := ModelsEnv.extendBy_fresh_aux hm z va hz_dom hz_fv
   cases ht : s₂.hyp? with
-  | none => exact (ModelsEnv.cons_none ht).mpr htail
+  | none =>
+    cases hd : s₂.dhyp? with
+    | none => exact (ModelsEnv.cons_none ht hd).mpr htail
+    | some r =>
+      refine (ModelsEnv.cons_data hd).mpr ⟨?_, htail⟩
+      have e : ((γ.write z va).withSorts δ.sorts).push (((γ.write z va).withSorts δ.sorts).lookup z) =
+          ((γ.withSorts δ.sorts).push va).write z va := by
+        apply REnv.ext <;> simp
+      rw [e]
+      exact (Refinement.interp_write_fresh r z va _ (Ty.dhyp?_fv hd hz_s2fv)).mp
+        (TyDenote.toDHyp hd htd_va)
   | some p =>
     obtain ⟨b, r⟩ := p
     obtain ⟨hHB, hr⟩ := TyDenote.toHyp (γ' := (γ.write z va).withSorts δ.sorts) hδ ht htd_va
@@ -926,7 +983,19 @@ theorem ModelsEnv.sorts_congr {κ : KEnv} {γ γ' : REnv} (hmap : γ.map = γ'.m
         | _ => rfl
       refine ⟨?_, ModelsEnv.sorts_congr hmap hbv hsbv (fun a ha => hfv a (Or.inr ha)) htl⟩
       cases ht : t.hyp? with
-      | none => simp [ht]
+      | none =>
+        cases hd : t.dhyp? with
+        | none => simp [ht, hd]
+        | some r =>
+          obtain ⟨C, n, args, rfl⟩ : ∃ C n args, t = .data C n args r := by
+            cases t <;> simp_all [Ty.dhyp?]
+          simp only [ht, hd] at hhd ⊢
+          refine (Refinement.interp_congr r (by simpa using hmap) (fun _ k _ => ?_) ?_).mp hhd
+          · cases k <;> simp [REnv.lookup, hmap, hbv]
+          · intro c hc
+            exact hres c (fun a h => by
+              subst h; simp only [Ty.ftv, List.mem_append]
+              exact Or.inr (Refinement.ftv_of_mem_sorts r hc))
       | some p =>
         obtain ⟨b, r⟩ := p
         have htr := Ty.hyp?_eq_some ht
@@ -1029,8 +1098,8 @@ theorem subtyp_sound {de κ Γ s t} (hde : de.wfB = true) (hsub : Subtyp de κ �
       ModelsEnv.extendBy_cons hδ hm s₁ x v₁ hx_Γdom hx_Γfv hx_s1fv hv₁
     exact (TyDenote.push_iff κ δ k t₂ x γ v₁ v₂ hx_t2fv).mpr
       (ih_snd hWF_t1x hWF_t2x hδ hD hm_ext ((TyDenote.push_iff κ δ k t₁ x γ v₁ v₂ hx_t1fv).mp hv₂))
-  | data h₁ h₂ ih₁ ih₂ =>
-    rename_i Γ' C n args₁ args₂
+  | data h₁ h₂ hfresh hent ih₁ ih₂ =>
+    rename_i Γ' C n args₁ args₂ r₁ r₂ x
     intro δ hδ hD k γ hm v htd
     -- related arguments have the same shape, hence are read at the same base
     have hS : ∀ l, (args₂ l).semSort δ = (args₁ l).semSort δ := by
@@ -1042,8 +1111,24 @@ theorem subtyp_sound {de κ Γ s t} (hde : de.wfB = true) (hsub : Subtyp de κ �
       cases h₁l : args₁ l <;> cases h₂l : args₂ l <;> rw [h₁l, h₂l] at hopt <;>
         simp_all [Ty.optBase, Ty.semSort]
     simp only [TyDenote, hS] at htd ⊢
-    obtain ⟨hlc, hcl, her, j, w, P, rfl, hP, hpay⟩ := htd
-    refine ⟨hlc, hcl, her, j, w, P, rfl, hP, fun i hi => ?_⟩
+    obtain ⟨hlc, hcl, her, hr, j, w, P, rfl, hP, hpay⟩ := htd
+    have hr₂ : Refinement.interp κ r₂ ((γ.withSorts δ.sorts).push (.ctor C j w)) := by
+      simp only [List.mem_append, not_or] at hfresh
+      obtain ⟨⟨⟨hx_dom, hx_tyfv⟩, hx_r₁⟩, hx_r₂⟩ := hfresh
+      have hm' : ModelsEnv κ ((γ.write x (.ctor C j w)).withSorts δ.sorts)
+          ((x, .data C n args₁ r₁) :: Γ') := by
+        refine (ModelsEnv.cons_data rfl).mpr
+          ⟨?_, ModelsEnv.extendBy_fresh_aux hm x _ hx_dom hx_tyfv⟩
+        have e : ((γ.write x (.ctor C j w)).withSorts δ.sorts).push
+              (((γ.write x (.ctor C j w)).withSorts δ.sorts).lookup x) =
+            ((γ.withSorts δ.sorts).push (.ctor C j w)).write x (.ctor C j w) := by
+          apply REnv.ext <;> simp
+        rw [e]
+        exact (Refinement.interp_write_fresh r₁ x _ _ hx_r₁).mp hr
+      have := (Refinement.interp_openBVar κ r₂ (γ.withSorts δ.sorts) x (.ctor C j w) 0
+        (Nat.zero_le _) hx_r₂).mp (hent _ hm')
+      simpa using this
+    refine ⟨hlc, hcl, her, hr₂, j, w, P, rfl, hP, fun i hi => ?_⟩
     rw [hD] at hP ⊢
     have hw := hpay i hi
     rw [hD] at hw
@@ -1057,9 +1142,9 @@ theorem subtyp_sound {de κ Γ s t} (hde : de.wfB = true) (hsub : Subtyp de κ �
         rw [← hvl]
         apply Variance.Rel_upto
         · intro hv j' w' h
-          exact ih₁ l hv (hWF_s l) (hWF_t l) hδ hD hm h
+          exact ih₁ l hv (hWF_s.2 l) (hWF_t.2 l) hδ hD hm h
         · intro hv j' w' h
-          exact ih₂ l hv (hWF_t l) (hWF_s l) hδ hD hm h)
+          exact ih₂ l hv (hWF_t.2 l) (hWF_s.2 l) hδ hD hm h)
     have := (TyDenote.var_mono (κ := κ) hde i P d.variances .pos [] _ _ (fun _ => SemTy.top)
       REnv.empty w (by simpa using hvar) hrel).1 (by simp)
     simpa using this (by simpa using hw)
@@ -1605,12 +1690,13 @@ theorem hastype_fundamental {de κ Γ e t} (hde : de.wfB = true) (h : Hastype de
         refine ⟨by simpa [Val.lc, Val.toExp, Exp.lc_at] using hlc,
           by simpa [Val.closed, Val.fv, Val.toExp, Exp.fv] using hcl,
           by simpa [Val.Erased, Val.toExp, Exp.TypeFree] using her,
+          by simp [Refinement.interp, Formula.interp],
           j, w, P, rfl, hD ▸ hP, fun i hi => ?_⟩
         have hw' : TyDenote κ δ i (Ty.instTys (List.ofFn fun l : Fin τs.length => τs[l]) P) γ w := by
           rw [hτs]; exact TyDenote.mono (Nat.le_of_lt hi) hw
         exact (TyDenote.instTys_bridge δ γ i (fun l : Fin τs.length => τs[l]) ks P hks
           (fun l => hargs l.val l.isLt) (by rw [hτs]; exact hokP) hPfv hPftv w).mp hw'
-  | @case Γ' e C n args m alts t zs hwf hhe hm hok hz hzP hcks ih ihs =>
+  | @case Γ' e C n args r m alts t zs hwf hhe hm hok hz hzP hcks ih ihs =>
       intro δ hδ hD k γ hE
       simp only [Exp.substEnv, Exp.erase]
       have hcs := Hastype.case zs hwf hhe hm hok hz hzP hcks
@@ -1620,7 +1706,7 @@ theorem hastype_fundamental {de κ Γ e t} (hde : de.wfB = true) (h : Hastype de
       | val v n₁ =>
         have hv := hres₀ v n₁ rfl
         simp only [TyDenote] at hv
-        obtain ⟨_, _, _, j, w, P, rfl, hP, hpay⟩ := hv
+        obtain ⟨_, _, _, _, j, w, P, rfl, hP, hpay⟩ := hv
         rw [hD] at hP
         have hj : j < m := DEnv.payload?_lt hm hP
         cases n₁ with

@@ -16,7 +16,12 @@ namespace STLC
 def implyBindCstr (x : EVar) (t : Ty) (c : Cstr) : Cstr :=
   match t.hyp? with
   | some (b, r) => .all x b (.imp (r.openBVar 0 x) c)
-  | none        => c
+  | none        =>
+    -- a datatype binding has no sort to quantify over: its refinement is a
+    -- hypothesis about the (top-level universally quantified) slot `x`
+    match t.dhyp? with
+    | some r => .imp (r.openBVar 0 x) c
+    | none   => c
 
 /-- Conjoin the constraints produced for every element of a list (failing if
     any element fails). -/
@@ -79,17 +84,19 @@ def sub (de : DEnv) (Γ : TEnv) : Ty → Ty → Option Cstr
       match sub de Γ s₁ s₂, sub de ((x, s₁) :: Γ) (t₁.openVar 0 x) (t₂.openVar 0 x) with
       | some c₁, some c₂ => some (.conj c₁ (implyBindCstr x s₁ c₂))
       | _, _ => none
-  | .data C₁ n₁ a₁, .data C₂ n₂ a₂ =>
+  | .data C₁ n₁ a₁ r₁, .data C₂ n₂ a₂ r₂ =>
       -- type arguments related according to the declared variances
       if h : C₁ = C₂ ∧ n₁ = n₂ then
-        Cstr.conjAll (fun i =>
+        let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ r₁.fv ++ r₂.fv)
+        (Cstr.conjAll (fun i =>
           match de.var C₁ i.val with
           | .co     => sub de Γ (a₁ i) (a₂ (Fin.cast h.2 i))
           | .contra => sub de Γ (a₂ (Fin.cast h.2 i)) (a₁ i)
           | .inv    =>
             match sub de Γ (a₁ i) (a₂ (Fin.cast h.2 i)), sub de Γ (a₂ (Fin.cast h.2 i)) (a₁ i) with
             | some c, some c' => some (.conj c c')
-            | _, _ => none) (List.finRange n₁)
+            | _, _ => none) (List.finRange n₁)).map fun c =>
+          .conj c (implyBindCstr x (.data C₁ n₁ a₁ r₁) (.head (r₂.openBVar 0 x)))
       else none
   | _, _ => none
 termination_by s t => s.skel + t.skel
@@ -98,7 +105,7 @@ decreasing_by all_goals
     | (simp_wf; simp only [Ty.skel, Ty.skel_openVar, Ty.skel_openTv]; omega)
     | (simp only [Ty.skel, Ty.skel_openVar, Ty.skel_openTv]; omega)
     | omega
-    | (have := Ty.skel_data_lt C₁ n₁ a₁ i; have := Ty.skel_data_lt C₂ n₂ a₂ (Fin.cast h.2 i); omega)
+    | (have := Ty.skel_data_lt C₁ n₁ a₁ r₁ i; have := Ty.skel_data_lt C₂ n₂ a₂ r₂ (Fin.cast h.2 i); omega)
 
 mutual
   def synth (de : DEnv) (Γ : TEnv) : Exp → Option (Cstr × Ty)
@@ -203,7 +210,7 @@ mutual
         | _ => none
     | .case e m alts, t =>
         match synth de Γ e with
-        | some (c, .data C _ args) =>
+        | some (c, .data C _ args _) =>
             if de.nCtors C = some m ∧ de.instOK C (List.ofFn args) = true then
               match Cstr.conjAll (fun (j : Fin m) =>
                   match de.payload? C j.val with

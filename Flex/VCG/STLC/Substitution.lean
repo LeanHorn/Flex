@@ -97,7 +97,7 @@ def Refinement.openBVar (k : Nat) (x : EVar)
   | _, .arrow t1 t2    => .arrow t1 t2
   | _, .forall k t     => .forall k t
   | _, .prod s t       => .prod s t
-  | _, .data C n args  => .data C n args
+  | _, .data C n args r => .data C n args r
 
 /-! ## 4. Ty operations (locally nameless)
 
@@ -111,7 +111,7 @@ def Ty.fv : Ty → List EVar
   | .arrow s t  => Ty.fv s ++ Ty.fv t
   | .forall _ t => Ty.fv t
   | .prod s t   => Ty.fv s ++ Ty.fv t
-  | .data _ n args => (List.finRange n).flatMap fun i => Ty.fv (args i)
+  | .data _ n args r => ((List.finRange n).flatMap fun i => Ty.fv (args i)) ++ r.fv
 
 /-- Open a `Ty`'s outermost binder at level `k` with free name `x`. Opens the
     refinement `BVar` at level `k+1` — the `+1` because ν occupies formula-level
@@ -122,7 +122,7 @@ def Ty.openVar (k : Nat) (x : EVar) : Ty → Ty
   | .arrow s t  => .arrow (s.openVar k x) (t.openVar (k+1) x)
   | .forall κ t => .forall κ (t.openVar k x)
   | .prod s t   => .prod (s.openVar k x) (t.openVar (k+1) x)
-  | .data C n args => .data C n (fun i => (args i).openVar k x)
+  | .data C n args r => .data C n (fun i => (args i).openVar k x) (r.openBVar (k+1) x)
 
 @[simp]
 theorem Ty.skel_openVar (k : Nat) (x : EVar) (t : Ty) :
@@ -132,7 +132,7 @@ theorem Ty.skel_openVar (k : Nat) (x : EVar) (t : Ty) :
   | arrow s t ihs iht => simp [Ty.openVar, Ty.skel, ihs, iht]
   | «forall» _ t ih => simp [Ty.openVar, Ty.skel, ih]
   | prod s t ihs iht => simp [Ty.openVar, Ty.skel, ihs, iht]
-  | data C n args ih => simp [Ty.openVar, Ty.skel, ih]
+  | data C n args r ih => simp [Ty.openVar, Ty.skel, ih]
 
 theorem Term.fv_openBVar {k : Nat} {x z : EVar} : ∀ {b : Base} (t : Term b),
     z ∈ (t.openBVar k x).fv → z ∈ t.fv ∨ z = x := by
@@ -197,13 +197,16 @@ theorem Ty.fv_openVar {x z : EVar} (t : Ty) : ∀ {k : Nat},
     · rcases ih₁ h with h | h <;> simp [h]
     · rcases ih₂ h with h | h <;> simp [h]
   | «forall» _ _ ih => intro k h; exact ih h
-  | data C n args ih =>
+  | data C n args r ih =>
     intro k
-    simp only [Ty.openVar, Ty.fv, List.mem_flatMap, List.mem_finRange, true_and]
-    rintro ⟨i, h⟩
-    rcases ih i h with h | h
-    · exact Or.inl ⟨i, h⟩
-    · exact Or.inr h
+    simp only [Ty.openVar, Ty.fv, List.mem_append, List.mem_flatMap, List.mem_finRange, true_and]
+    rintro (⟨i, h⟩ | h)
+    · rcases ih i h with h | h
+      · exact Or.inl (Or.inl ⟨i, h⟩)
+      · exact Or.inr h
+    · rcases Refinement.fv_openBVar r h with h | h
+      · exact Or.inl (Or.inr h)
+      · exact Or.inr h
 
 /-! ### Well-formedness: BVar base consistency (WFBVarCtx)
 
@@ -249,7 +252,7 @@ def Ty.optBase : Ty → Option Base
   | .arrow _ _  => none
   | .forall _ _ => none
   | .prod _ _   => none
-  | .data _ _ _ => none
+  | .data _ _ _ _ => none
 
 /-- Shift the type-variable de Bruijn indices of a sort up by one (entering a
     `Ty.forall`). -/
@@ -271,7 +274,10 @@ def Ty.WFBVarCtx : List (Option Base) → Ty → Prop
       Ty.WFBVarCtx (ctx.map (Option.map Base.shiftT)) t
   | ctx, .prod s t  =>
       Ty.WFBVarCtx ctx s ∧ Ty.WFBVarCtx (s.optBase :: ctx) t
-  | ctx, .data _ _ args => ∀ i, Ty.WFBVarCtx ctx (args i)
+  -- ν is a datatype value (no sort): only measures may observe it
+  | ctx, .data _ _ args r =>
+      (∀ (b : Base) (k : Nat), Refinement.hasBVar b k r → (none :: ctx)[k]? = some (some b)) ∧
+      ∀ i, Ty.WFBVarCtx ctx (args i)
 
 /-- Shorthand: `t` is well-formed with no outer binders. -/
 def Ty.WFBVars (t : Ty) : Prop := Ty.WFBVarCtx [] t
@@ -464,9 +470,24 @@ theorem Ty.WFBVarCtx_openVar_last (t : Ty) (ctx : List (Option Base)) (opt : Opt
     simp only [List.length_cons] at ih
     rw [Ty.optBase_openVar]
     exact ih
-  | data C n args ih =>
+  | data C n args r ih =>
     simp only [Ty.WFBVarCtx, Ty.openVar] at hWF ⊢
-    exact fun i => ih i ctx opt (hWF i)
+    refine ⟨?_, fun i => ih i ctx opt (hWF.2 i)⟩
+    intro b' k hbv
+    rcases (Refinement.hasBVar_openBVar r b' k (ctx.length + 1) y).mp hbv with
+      ⟨hlt, hbvr⟩ | ⟨hle, hbvr⟩
+    · have hWF' := hWF.1 b' k hbvr
+      cases k with
+      | zero => simpa using hWF'
+      | succ k' =>
+        have hk' : k' < ctx.length := by omega
+        simp only [List.getElem?_cons_succ] at hWF' ⊢
+        rw [List.getElem?_append_left hk'] at hWF'
+        exact hWF'
+    · exfalso
+      have hWF' := hWF.1 b' (k + 1) hbvr
+      rw [List.getElem?_eq_none_iff.mpr (by simp; omega)] at hWF'
+      exact absurd hWF' (by simp)
 
 /-! ## 4b. Type variables: sort substitution, opening, instantiation
 
@@ -569,7 +590,7 @@ def Ty.openTv (k : Nat) (a : TVar) : Ty → Ty
   | .arrow s t   => .arrow (s.openTv k a) (t.openTv k a)
   | .forall κ t  => .forall κ (t.openTv (k+1) a)
   | .prod s t    => .prod (s.openTv k a) (t.openTv k a)
-  | .data C n args => .data C n (fun i => (args i).openTv k a)
+  | .data C n args r => .data C n (fun i => (args i).openTv k a) (r.substB (BSubst.openAt k a))
 
 @[simp] theorem Ty.skel_openTv (k : Nat) (a : TVar) (t : Ty) :
     (t.openTv k a).skel = t.skel := by
@@ -602,7 +623,8 @@ def Ty.instTy (k : Nat) (s : Ty) : Ty → Ty
   | .arrow t₁ t₂ => .arrow (Ty.instTy k s t₁) (Ty.instTy k s t₂)
   | .forall κ t  => .forall κ (Ty.instTy (k+1) s t)
   | .prod t₁ t₂  => .prod (Ty.instTy k s t₁) (Ty.instTy k s t₂)
-  | .data C n args => .data C n (fun i => Ty.instTy k s (args i))
+  | .data C n args r =>
+      .data C n (fun i => Ty.instTy k s (args i)) (r.substB (BSubst.instAt k s.sortOf))
 
 /-- The kind of a type: refined `Int`/`Bool` and `B`-kinded type variables are
     base (`B`); everything else is `⋆`. -/
@@ -693,7 +715,8 @@ def Ty.wfB (kctx : List Kind) (ctx : List (Option Base)) : Ty → Bool
   | .arrow s t   => s.wfB kctx ctx && t.wfB kctx (s.optBase :: ctx)
   | .forall κ t  => t.wfB (κ :: kctx) (ctx.map (Option.map Base.shiftT))
   | .prod s t    => s.wfB kctx ctx && t.wfB kctx (s.optBase :: ctx)
-  | .data _ n args => (List.finRange n).all fun i => (args i).wfB kctx ctx
+  | .data _ n args r =>
+      r.wfB kctx (none :: ctx) && (List.finRange n).all fun i => (args i).wfB kctx ctx
 
 theorem Term.wfB_hasBVar {kctx : List Kind} {ctx : List (Option Base)} :
     ∀ {b'' : Base} (t : Term b''), t.wfB kctx ctx = true →
@@ -786,10 +809,10 @@ theorem Ty.wfB_WFBVarCtx (t : Ty) : ∀ {kctx : List Kind} {ctx : List (Option B
     intro kctx ctx hw
     simp only [Ty.wfB, Bool.and_eq_true] at hw
     exact ⟨ihs hw.1, iht hw.2⟩
-  | data C n args ih =>
+  | data C n args r ih =>
     intro kctx ctx hw
-    simp only [Ty.wfB, List.all_eq_true, List.mem_finRange, true_implies] at hw
-    exact fun i => ih i (hw i)
+    simp only [Ty.wfB, Bool.and_eq_true, List.all_eq_true, List.mem_finRange, true_implies] at hw
+    exact ⟨Refinement.wfB_hasBVar r hw.1, fun i => ih i (hw.2 i)⟩
 
 theorem Ty.wfB_WFBVars (t : Ty) (h : t.wfB [] [] = true) : Ty.WFBVars t :=
   Ty.wfB_WFBVarCtx t h
@@ -904,10 +927,15 @@ theorem Ty.WFBVarCtx_openTv (t : Ty) : ∀ (k : Nat) (a : TVar) (ctx : List (Opt
     have hopt : (s.openTv k a).optBase = s.optBase.map (Base.substB (BSubst.openAt k a)) := by
       cases s <;> rfl
     rw [hopt]; simpa using this
-  | data C n args ih =>
+  | data C n args r ih =>
     intro k a ctx h
     simp only [Ty.openTv, Ty.WFBVarCtx] at h ⊢
-    exact fun i => ih i k a ctx (h i)
+    refine ⟨?_, fun i => ih i k a ctx (h.2 i)⟩
+    intro b i hbv
+    obtain ⟨b₀, rfl, hbv₀⟩ := Refinement.hasBVar_substB _ b r i hbv
+    have := h.1 b₀ i hbv₀
+    show ((none :: ctx).map (Option.map (Base.substB (BSubst.openAt k a))))[i]? = _
+    rw [List.getElem?_map, this]; rfl
 
 theorem Ty.WFBVars_openTv (t : Ty) (k : Nat) (a : TVar) (h : Ty.WFBVars t) :
     Ty.WFBVars (t.openTv k a) := by
@@ -930,7 +958,7 @@ def Ty.closeTv (k : Nat) (a : TVar) : Ty → Ty
   | .arrow s t   => .arrow (s.closeTv k a) (t.closeTv k a)
   | .forall κ t  => .forall κ (t.closeTv (k+1) a)
   | .prod s t    => .prod (s.closeTv k a) (t.closeTv k a)
-  | .data C n args => .data C n (fun i => (args i).closeTv k a)
+  | .data C n args r => .data C n (fun i => (args i).closeTv k a) (r.substB (BSubst.closeAt k a))
 
 /-- `∀ as. t`, outermost first. -/
 @[simp] def Ty.gen : List TVar → Ty → Ty
@@ -995,10 +1023,15 @@ theorem Ty.WFBVarCtx_closeTv (t : Ty) : ∀ (k : Nat) (a : TVar) (ctx : List (Op
     have hopt : (s.closeTv k a).optBase = s.optBase.map (Base.substB (BSubst.closeAt k a)) := by
       cases s <;> rfl
     rw [hopt]; simpa using this
-  | data C n args ih =>
+  | data C n args r ih =>
     intro k a ctx h
     simp only [Ty.closeTv, Ty.WFBVarCtx] at h ⊢
-    exact fun i => ih i k a ctx (h i)
+    refine ⟨?_, fun i => ih i k a ctx (h.2 i)⟩
+    intro b i hbv
+    obtain ⟨b₀, rfl, hbv₀⟩ := Refinement.hasBVar_substB _ b r i hbv
+    have := h.1 b₀ i hbv₀
+    show ((none :: ctx).map (Option.map (Base.substB (BSubst.closeAt k a))))[i]? = _
+    rw [List.getElem?_map, this]; rfl
 
 theorem Ty.WFBVars_gen (as : List TVar) (t : Ty) (h : Ty.WFBVars t) : Ty.WFBVars (Ty.gen as t) := by
   induction as with
@@ -1042,7 +1075,7 @@ def Ty.ftv : Ty → List TVar
   | .arrow s t   => s.ftv ++ t.ftv
   | .forall _ t  => t.ftv
   | .prod s t    => s.ftv ++ t.ftv
-  | .data _ n args => (List.finRange n).flatMap fun i => (args i).ftv
+  | .data _ n args r => ((List.finRange n).flatMap fun i => (args i).ftv) ++ r.ftv
 
 /-! ## 5. Exp operations (locally nameless)
 
@@ -2213,7 +2246,7 @@ def Ty.varOK (de : DEnv) (vs : List Variance) : Nat → Pol → Ty → Bool
   | d, p, .arrow s t      => Ty.varOK de vs d p.flip s && Ty.varOK de vs d p t
   | d, p, .forall _ t     => Ty.varOK de vs (d+1) p t
   | d, p, .prod s t       => Ty.varOK de vs d p s && Ty.varOK de vs d p t
-  | d, p, .data C n args  => (List.finRange n).all fun l => Ty.varOK de vs d (p.comp (de.var C l)) (args l)
+  | d, p, .data C n args _ => (List.finRange n).all fun l => Ty.varOK de vs d (p.comp (de.var C l)) (args l)
 
 /-- Well-formed declarations: payloads have no free term or type variables, and
     respect the declared variances. -/
@@ -2267,7 +2300,7 @@ theorem DEnv.instOK_spec {de : DEnv} {C : String} {τs : List Ty} (h : de.instOK
 theorem DEnv.instOK_WFBVars {de : DEnv} {C : String} {τs : List Ty} (h : de.instOK C τs = true) :
     Ty.WFBVars (Ty.dataL C τs) := by
   obtain ⟨d, _, _, hargs, _⟩ := DEnv.instOK_spec h
-  intro i
+  refine ⟨fun b k h => by simp [Refinement.hasBVar, Formula.hasBVar] at h, fun i => ?_⟩
   obtain ⟨_, _, _, hw⟩ := hargs i.val i.isLt
   exact Ty.wfB_WFBVarCtx _ hw
 

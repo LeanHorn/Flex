@@ -259,10 +259,11 @@ inductive Ty where
   | arrow  : Ty → Ty → Ty                   -- `x:s -> t`
   | forall : Kind → Ty → Ty                 -- `∀α:k. t`; body has `tbvar 0` = α
   | prod   : Ty → Ty → Ty                   -- dependent pair `Σ x:t₁. t₂`; `t₂` has `BVar 0` = x
-  /-- A datatype applied to type arguments, `C[τ₀ … τₙ₋₁]`. Datatypes carry no
-      refinement and have no sort in the refinement logic. The arguments are a
+  /-- A refined datatype applied to type arguments, `C[τ₀ … τₙ₋₁]{ν | r}`.
+      Datatypes have no sort in the refinement logic: `r` (ν = `BVar 0`, a
+      datatype value) can only observe ν through measures. The arguments are a
       function out of `Fin n` (not a `List`) so `Ty` stays an ordinary inductive. -/
-  | data   : String → (n : Nat) → (Fin n → Ty) → Ty
+  | data   : String → (n : Nat) → (Fin n → Ty) → Refinement → Ty
 
 /-! ## Expressions — locally nameless
 
@@ -587,10 +588,11 @@ def Ty.skel : Ty → Nat
   | .arrow s t  => 1 + s.skel + t.skel
   | .forall _ t => 1 + t.skel
   | .prod s t   => 1 + s.skel + t.skel
-  | .data _ _ args => 1 + (List.ofFn fun i => (args i).skel).sum
+  | .data _ _ args _ => 1 + (List.ofFn fun i => (args i).skel).sum
 
 /-- `Ty.data` from a list of type arguments. -/
-@[simp, reducible] def Ty.dataL (C : String) (τs : List Ty) : Ty := .data C τs.length (fun i => τs[i])
+@[simp, reducible] def Ty.dataL (C : String) (τs : List Ty) (r : Refinement := .fmla .tt) : Ty :=
+  .data C τs.length (fun i => τs[i]) r
 
 /-! ## Datatype declarations
 
@@ -634,8 +636,8 @@ theorem List.le_sum_of_mem_nat : ∀ {l : List Nat} {x : Nat}, x ∈ l → x ≤
       have := List.le_sum_of_mem_nat h
       simp only [List.sum_cons]; omega
 
-theorem Ty.skel_data_lt (C : String) (n : Nat) (args : Fin n → Ty) (i : Fin n) :
-    (args i).skel < (Ty.data C n args).skel := by
+theorem Ty.skel_data_lt (C : String) (n : Nat) (args : Fin n → Ty) (r : Refinement) (i : Fin n) :
+    (args i).skel < (Ty.data C n args r).skel := by
   have := List.le_sum_of_mem_nat (List.mem_ofFn.mpr ⟨i, rfl⟩ :
     (args i).skel ∈ List.ofFn fun i => (args i).skel)
   simp only [Ty.skel]; omega

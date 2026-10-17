@@ -151,8 +151,8 @@ def BaseDen (δ : TyEnvSem) (k : Nat) : Base → Val → Prop
   type, so impredicative instantiation costs nothing here.
 
   A dependent pair holds pairs whose second component is in the second type
-  with the first component bound. A datatype `C[τ̄]` holds constructor values
-  whose payload is in the constructor's payload type, *one step later* (matching
+  with the first component bound. A datatype `C[τ̄]{r}` holds constructor values
+  satisfying `r` (with ν bound to the value), whose payload is in the constructor's payload type, *one step later* (matching
   a datatype value costs a unit of fuel), with the type parameters interpreted
   by the arguments' denotations (which close over `γ`, so a type argument may
   mention earlier fields). A payload type has no free variables, so it is read
@@ -172,8 +172,9 @@ def TyDenote : KEnv → TyEnvSem → Nat → Ty → REnv → Val → Prop
       ∀ R : SemTy, R.Fits kd → TyDenote κ (δ.push R) k t γ v
   | κ, δ, k, .prod s t, γ, v =>
       ∃ v₁ v₂, v = .pair v₁ v₂ ∧ TyDenote κ δ k s γ v₁ ∧ TyDenote κ δ k t (γ.push v₁) v₂
-  | κ, δ, k, .data C _ args, γ, v =>
+  | κ, δ, k, .data C _ args r, γ, v =>
       Val.lc v ∧ Val.closed v ∧ Val.Erased v ∧
+      Refinement.interp κ r ((γ.withSorts δ.sorts).push v) ∧
       ∃ j w P, v = .ctor C j w ∧ δ.denv.payload? C j = some P ∧
         ∀ i < k, TyDenote κ
           { bv := List.ofFn (fun l => SemTy.upto i (fun j' w' => TyDenote κ δ j'.val (args l) γ w')
@@ -219,9 +220,9 @@ theorem TyDenote.mono {κ : KEnv} {δ : TyEnvSem} {j k : Nat} {t : Ty} {γ : REn
     simp only [TyDenote] at h ⊢
     obtain ⟨v₁, v₂, rfl, h₁, h₂⟩ := h
     exact ⟨v₁, v₂, rfl, ihs h₁, iht h₂⟩
-  | data C n args =>
+  | data C n args r =>
     simp only [TyDenote] at h ⊢
-    obtain ⟨hlc, hcl, her, j, w, P, hv, hP, hpay⟩ := h
-    exact ⟨hlc, hcl, her, j, w, P, hv, hP, fun i hi => hpay i (by omega)⟩
+    obtain ⟨hlc, hcl, her, hr, j, w, P, hv, hP, hpay⟩ := h
+    exact ⟨hlc, hcl, her, hr, j, w, P, hv, hP, fun i hi => hpay i (by omega)⟩
 
 end STLC

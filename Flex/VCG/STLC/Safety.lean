@@ -1166,7 +1166,7 @@ private theorem Val.apply_isSome {f : Val} (hf : ∃ body, f = .clos body ∨ f 
 
 /-- Selfification is sound: a variable's value is in its selfified type. -/
 private theorem TyDenote.self {κ : KEnv} {δ : TyEnvSem} {k : Nat} {γ : REnv} {x : EVar} {t : Ty}
-    (hv : TyDenote κ δ k t γ (γ.map x)) : TyDenote κ δ k (self x t) γ (γ.map x) := by
+    {de : DEnv} (hv : TyDenote κ δ k t γ (γ.map x)) : TyDenote κ δ k (self de x t) γ (γ.map x) := by
   cases t with
   | refine b r =>
     have hsing : ∀ b' : Base, Refinement.interp κ
@@ -1184,7 +1184,15 @@ private theorem TyDenote.self {κ : KEnv} {δ : TyEnvSem} {k : Nat} {γ : REnv} 
     | _ =>
       change TyDenote κ δ k (.refine _ (.fmla (.eq _ (.bvar _ 0) (.fvar _ x)))) γ (γ.map x)
       simp only [TyDenote]; exact ⟨hv.1, hsing _⟩
-  | arrow _ _ | «forall» _ _ | prod _ _ | data _ _ _ => simpa only [self] using hv
+  | arrow _ _ | «forall» _ _ | prod _ _ => simpa only [self] using hv
+  | data C n args r =>
+    change TyDenote κ δ k (.data C n args (de.measEqs C x)) γ (γ.map x)
+    simp only [TyDenote] at hv ⊢
+    obtain ⟨h1, h2, h3, _, h5⟩ := hv
+    refine ⟨h1, h2, h3, ?_, h5⟩
+    simp only [DEnv.measEqs, Refinement.interp, Formula.interp_conjAll, List.mem_map]
+    rintro _ ⟨m, _, rfl⟩
+    simp [Formula.interp, Term.interp]
 
 /-- Two values of one comparable sort are compared by the runtime comparison,
     which agrees with the logic's order at that sort. For a `B`-kinded type

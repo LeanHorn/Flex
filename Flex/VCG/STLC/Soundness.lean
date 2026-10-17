@@ -822,7 +822,7 @@ mutual
     match h with
     | .var hl =>
       have htw := hΓ.lookup hl
-      exact ⟨.var hl htw, Ty.WFBVars_self _ _ htw⟩
+      exact ⟨.var hl htw, Ty.WFBVars_self _ _ _ htw⟩
     | .int_const => exact ⟨.int_const, Ty.WFBVars_prim _⟩
     | .bool_const => exact ⟨.bool_const, Ty.WFBVars_primBool _⟩
     | .ann hck =>

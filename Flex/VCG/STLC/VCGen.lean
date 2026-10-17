@@ -109,7 +109,7 @@ decreasing_by all_goals
 
 mutual
   def synth (de : DEnv) (Γ : TEnv) : Exp → Option (Cstr × Ty)
-    | .fvar x    => Γ.lookup x |>.map (fun t => (Cstr.triv, self x t))
+    | .fvar x    => Γ.lookup x |>.map (fun t => (Cstr.triv, self de x t))
     | .iconst n  => some (Cstr.triv, prim n)
     | .bconst b  => some (Cstr.triv, primBool b)
     | .ann e t =>

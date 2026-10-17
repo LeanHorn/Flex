@@ -72,7 +72,7 @@ mutual
   inductive Synth : DEnv → KEnv → TEnv → Exp → Ty → Prop where
     | var {de κ Γ x t} :
         Γ.lookup x = some t →
-        Synth de κ Γ (.fvar x) (self x t)
+        Synth de κ Γ (.fvar x) (self de x t)
 
     | int_const {de κ Γ n} :
         Synth de κ Γ (.iconst n) (prim n)

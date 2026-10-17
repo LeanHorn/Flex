@@ -9,7 +9,7 @@ inductive Hastype : DEnv → KEnv → TEnv → Exp → Ty → Prop where
   | var {de κ Γ x t} :
       Γ.lookup x = some t →
       Ty.WFBVars t →
-      Hastype de κ Γ (.fvar x) (self x t)
+      Hastype de κ Γ (.fvar x) (self de x t)
   | int_const {de κ Γ n} :
       Hastype de κ Γ (.iconst n) (prim n)
   | bool_const {de κ Γ b} :
@@ -290,7 +290,8 @@ theorem Hastype.lc_at {de κ Γ e t} (_h : Hastype de κ Γ e t) : Exp.lc_at 0 e
 
 /-- WFBVars of `self x t`: `self` is the singleton `{ν | ν = x}` (kvar-free, no
     BVars), so it is `WFBVars` outright — independent of `t`. -/
-theorem Ty.WFBVars_self (x : EVar) (t : Ty) (_h : Ty.WFBVars t) : Ty.WFBVars (self x t) := by
+theorem Ty.WFBVars_self (de : DEnv) (x : EVar) (t : Ty) (_h : Ty.WFBVars t) :
+    Ty.WFBVars (self de x t) := by
   cases t with
   | refine b r =>
     cases b with
@@ -303,7 +304,13 @@ theorem Ty.WFBVars_self (x : EVar) (t : Ty) (_h : Ty.WFBVars t) : Ty.WFBVars (se
   | arrow s t => simp [self, _h]
   | «forall» k t => simpa [self] using _h
   | prod s t => simpa [self] using _h
-  | data C n args r => simpa [self] using _h
+  | data C n args r =>
+    refine ⟨fun b k h => ?_, _h.2⟩
+    simp only [DEnv.measEqs, Refinement.hasBVar] at h
+    obtain ⟨φ, hφ, h⟩ := Formula.hasBVar_conjAll _ h
+    simp only [List.mem_map] at hφ
+    obtain ⟨m, _, rfl⟩ := hφ
+    simp [Formula.hasBVar, Term.hasBVar] at h
 
 /-- WFBVars of the concrete result types for primitives. -/
 theorem Ty.WFBVars_prim (n : Int) : Ty.WFBVars (prim n) := by
@@ -334,7 +341,7 @@ theorem Ty.WFBVars_and_result (x y : EVar) : Ty.WFBVars
 /-- Every type produced by a Hastype derivation is WFBVars. -/
 theorem Hastype.wf_bvars {de κ Γ e t} (h : Hastype de κ Γ e t) : Ty.WFBVars t := by
   induction h with
-  | var _ hwf => exact Ty.WFBVars_self _ _ hwf
+  | var _ hwf => exact Ty.WFBVars_self _ _ _ hwf
   | int_const  => exact Ty.WFBVars_prim _
   | bool_const => exact Ty.WFBVars_primBool _
   | lam _ hwf _ => grind

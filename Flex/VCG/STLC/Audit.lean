@@ -2,6 +2,7 @@ import Flex.VCG.STLC.Safety
 import Flex.VCG.STLC.Examples
 import Flex.VCG.STLC.DataExamples
 import Flex.VCG.STLC.OrdExamples
+import Flex.VCG.STLC.MeasureExamples
 
 open STLC
 
@@ -107,3 +108,15 @@ open STLC
 
 /-- info: 'ord_sortClient_safe' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms ord_sortClient_safe
+
+/-- info: 'meas_append' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms meas_append
+
+/-- info: 'meas_two_bad' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms meas_two_bad
+
+/-- info: 'meas_infer' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms meas_infer
+
+/-- info: 'meas_headClient_safe' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms meas_headClient_safe

@@ -95,14 +95,15 @@ def Refinement.openBVar (k : Nat) (x : EVar)
     refinement is recovered from the typing context, so it is not re-conjoined
     here — keeping the synthesized type kvar-free. For function types, returns
     `t` unchanged. -/
-@[simp] def self : EVar → Ty → Ty
+@[simp] def self (de : DEnv) : EVar → Ty → Ty
   -- ⋆-kinded type variables are never compared (λ_RF's `self(_, _, ⋆)`)
   | _, .refine (.tfvar (a, .star)) r => .refine (.tfvar (a, .star)) r
   | x, .refine b _     => .refine b (.fmla (.eq b (.bvar b 0) (.fvar b x)))
   | _, .arrow t1 t2    => .arrow t1 t2
   | _, .forall k t     => .forall k t
   | _, .prod s t       => .prod s t
-  | _, .data C n args r => .data C n args r
+  -- a datatype value has no equality: it has the same measures as `x`
+  | x, .data C n args _ => .data C n args (de.measEqs C x)
 
 /-! ## 4. Ty operations (locally nameless)
 

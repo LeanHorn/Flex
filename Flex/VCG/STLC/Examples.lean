@@ -103,7 +103,7 @@ attribute [simp] Refinement.openBVar Formula.openBVar Term.openBVar String.lengt
 attribute [simp] List.lookup TEnv.tyFv
 attribute [simp] DataDecl.ctors Ty.tuple DEnv.ctorRefine DEnv.nFields DEnv.fields? Exp.tupleVarsN
   DEnv.ctorFacts DEnv.ctorMeasures DataDecl.ctorMeasures DEnv.altTy Exp.var? Ty.strengthenLast
-  DEnv.caseFacts Formula.conjAll MBody.toTerm
+  DEnv.caseFacts Formula.conjAll MBody.toTerm DEnv.measEqs DEnv.measNames
 
 macro "generate" : tactic => `(tactic| (vc_generate ; vc_reify))
 

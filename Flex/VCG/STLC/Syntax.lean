@@ -723,6 +723,15 @@ def DEnv.caseFacts (de : DEnv) (C : String) (j n : Nat) (x : EVar) : Refinement 
   .fmla (Formula.conjAll ((de.ctorMeasures C j).map fun mb =>
     .eq .int (.mfvar mb.1 x) (mb.2.toTerm fun m' i => .mbvar m' (n - 1 - i))))
 
+/-- The names of the measures of `C`. -/
+def DEnv.measNames (de : DEnv) (C : String) : List String :=
+  ((de.decl? C).map fun d => d.measures.map Prod.fst).getD []
+
+/-- Selfification at a datatype (which has no equality in the logic): every
+    measure of ν equals that measure of `x`. -/
+def DEnv.measEqs (de : DEnv) (C : String) (x : EVar) : Refinement :=
+  .fmla (Formula.conjAll ((de.measNames C).map fun m => .eq .int (.mbvar m 0) (.mfvar m x)))
+
 /-- The scrutinee of a `case`, when it is a variable. -/
 def Exp.var? : Exp → Option EVar
   | .fvar x => some x

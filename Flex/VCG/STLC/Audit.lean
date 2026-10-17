@@ -124,6 +124,9 @@ open STLC
 /-- info: 'meas_consPos' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms meas_consPos
 
+/-- info: 'meas_node' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms meas_node
+
 /-- info: 'meas_sumIList' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms meas_sumIList
 

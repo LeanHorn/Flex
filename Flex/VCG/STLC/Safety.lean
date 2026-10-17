@@ -379,15 +379,6 @@ theorem TyDenote.toDHyp {κ : KEnv} {δ : TyEnvSem} {k : Nat} {t : Ty} {γ : REn
   cases t <;> simp [Ty.dhyp?] at hd
   subst hd; simp only [TyDenote] at h; exact h.2.2.2.1
 
-/-- The model's measures respect the declared bounds. -/
-theorem DEnv.boundsHold_model {de : DEnv} {δ : TyEnvSem} (hde : de.wfB = true) (hD : δ.denv = de)
-    (γ : REnv) : de.BoundsHold (γ.withSorts δ.sorts).sorts.meas := by
-  have hb : de.boundsOK = true := by
-    simp only [DEnv.wfB, Bool.and_eq_true] at hde; exact hde.2.2
-  intro mc hmc v
-  simp only [REnv.withSorts, TyEnvSem.sorts, hD]
-  exact DEnv.measEval_bounds hb v mc hmc
-
 /-! ## Closing environment
 
   `EnvCloses κ δ k Γ γ` says: `γ` assigns each Γ-binding a value in that
@@ -1044,7 +1035,7 @@ theorem subtyp_sound {de κ Γ s t} (hde : de.wfB = true) (hsub : Subtyp de κ �
       have hx_r₁' : x ∉ (Ty.refine b r₁).fv := by simpa [Ty.fv] using hx_r₁
       -- Feed the witness through the opened rule: extend the model at the fresh
       -- `x`, read off the opened `r₂`, then close ν back to push form.
-      have h := hent _ (DEnv.boundsHold_model hde hD _) (ModelsEnv.extendBy_cons hδ hΓ _ x _ hx_dom hx_tyfv hx_r₁' hs)
+      have h := hent _ (ModelsEnv.extendBy_cons hδ hΓ _ x _ hx_dom hx_tyfv hx_r₁' hs)
       simp only [TyDenote] at hs ⊢
       refine ⟨hs.1, ?_⟩
       have := (Refinement.interp_openBVar κ r₂ (γ.withSorts δ.sorts) x v 0 (Nat.zero_le _)
@@ -1144,7 +1135,7 @@ theorem subtyp_sound {de κ Γ s t} (hde : de.wfB = true) (hsub : Subtyp de κ �
         rw [e]
         exact (Refinement.interp_write_fresh r₁ x _ _ hx_r₁).mp hr
       have := (Refinement.interp_openBVar κ r₂ (γ.withSorts δ.sorts) x (.ctor C j w) 0
-        (Nat.zero_le _) hx_r₂).mp (hent _ (DEnv.boundsHold_model hde hD (γ.write x (.ctor C j w))) hm')
+        (Nat.zero_le _) hx_r₂).mp (hent _ hm')
       simpa using this
     refine ⟨hlc, hcl, her, hr₂, j, w, P, rfl, hP, fun i hi => ?_⟩
     rw [hD] at hP ⊢
@@ -1238,7 +1229,7 @@ theorem hastype_fundamental {de κ Γ e t} (hde : de.wfB = true) (h : Hastype de
   induction h with
   | unreach hent _ =>
       intro δ hδ hD k γ hE
-      exact (hent _ (DEnv.boundsHold_model hde hD _) (hE.toModelsEnv hδ)).elim
+      exact (hent _ (hE.toModelsEnv hδ)).elim
   | var hlk _ =>
       rename_i Γ x t hwf
       intro δ hδ hD k γ hE

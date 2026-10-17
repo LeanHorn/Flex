@@ -2424,22 +2424,12 @@ def DataDecl.measOK (d : DataDecl) : Bool :=
   decide (d.measures.map Prod.fst).Nodup &&
   d.measures.all fun mb => (mb.2.zip d.ctorFields).all fun bc => bc.1.idxOK bc.2.2.length
 
-/-- The declared measure bounds hold of the default value `0` and are
-    preserved by every body of a measure of that name (given the bounds of the
-    measures the body reads). -/
-def DEnv.boundsOK (de : DEnv) : Bool :=
-  de.allBounds.all fun mc => decide (mc.2 ≤ 0) &&
-    de.all fun d => (d.2.measures.filter (·.1 == mc.1)).all fun mb =>
-      mb.2.all fun body => match body.lowerBound de.allBounds with
-        | some l => decide (mc.2 ≤ l)
-        | none   => false
-
 /-- Well-formed declarations: payloads have no free term or type variables, and
-    respect the declared variances; measures are well-formed and respect their bounds. -/
+    respect the declared variances; measures are well-formed. -/
 def DEnv.wfB (de : DEnv) : Bool :=
   (de.all fun d => d.2.ctors.all fun c =>
     c.2.fv.isEmpty && c.2.ftv.isEmpty && Ty.varOK de d.2.variances 0 .pos c.2) &&
-  ((de.all fun d => d.2.measOK) && de.boundsOK)
+  de.all fun d => d.2.measOK
 
 theorem DEnv.payload?_lt {de : DEnv} {C : String} {j m : Nat} {P : Ty}
     (hm : de.nCtors C = some m) (hP : de.payload? C j = some P) : j < m := by

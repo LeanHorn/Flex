@@ -168,21 +168,36 @@ theorem meas_headClient_safe (n : Nat) :
   obtain ⟨⟨i, rfl⟩, _⟩ := this
   exact ⟨i, rfl⟩
 
-/-! ## Measure bounds: `len ≥ 0`
+/-! ## Lemmas as programs: `len ≥ 0`
 
-  With `len` uninterpreted, nothing says a length is non-negative — proving it
-  for an arbitrary list takes induction. Declaring the bound `len ≥ 0` checks
-  it once against the bodies (`0 ≥ 0`, and `1 + n ≥ 0` given `n ≥ 0`) and then
-  assumes `0 ≤ len x` for every list variable `x`. -/
+  With `len` uninterpreted, nothing says a length is non-negative — that takes
+  induction over lists. Induction is recursion: the program `nonneg` below
+  checks against `xs:list α → Int{0 ≤ len xs}`, and its verification condition
+  is exactly the inductive argument (`len xs = 0` in the `Nil` case;
+  `len xs = 1 + len t` and `0 ≤ len t`, from the recursive call, in the `Cons`
+  case). A client calls the lemma where it needs the fact: `let _ = nonneg t`
+  puts `0 ≤ len t` into the context.
 
-def natLenDecl : DataDecl := { lenListDecl with bounds := [("len", 0)] }
-def natLenEnv : DEnv := [("list", natLenDecl)]
+  This is sound under partial correctness without proving that the lemma
+  terminates: the call is executed, so if it diverged the rest of the program
+  would never run, and a non-terminating program promises nothing. (Assuming
+  the lemma's statement *without* calling it would need termination — a
+  diverging function checks against any type.) -/
 
-theorem natLenEnv_wf : natLenEnv.wfB = true := by decide
+/-- `nonneg : ∀α. xs:list α → Int{0 ≤ len xs}` -/
+abbrev nonnegTy : Ty :=
+  .forall .star (.arrow (ListT (Par 0)) (.refine .int (.fmla (.leqI (.const .int 0) (lenB 1)))))
 
-/-- A bound the bodies do not preserve is rejected: `len ≥ 1` fails at `Nil`. -/
-theorem badBound_wf : DEnv.wfB [("list", { lenListDecl with bounds := [("len", 1)] })] = false := by
-  decide
+/-- `Λα. fix go. λxs. case xs of Nil _ => 0 | Cons p => let (h, t) = p; go t` -/
+abbrev nonnegE : Exp :=
+  .tabs .star (.fix (caseL (.bvar 0)                      -- xs=0 go=1
+    [ .iconst 0
+    , .split (.bvar 0) (.app (.bvar 4) (.bvar 0)) ]))    -- t=0 h=1 p=2 xs=3 go=4: go t
+
+/-- The lemma's verification condition is the induction. -/
+theorem meas_nonneg (κ : KEnv) : topVC κ [] nonnegE nonnegTy lenEnv := by
+  simp [topVC, nonnegE, nonnegTy, lenEnv, lenListDecl, listDecl]
+  intro γ; constructor <;> intros <;> omega
 
 /-- `cons : ∀α. α → t:list α → list α{0 < len ν}` -/
 abbrev consPosTy : Ty :=
@@ -192,12 +207,18 @@ abbrev consPosTy : Ty :=
 /-- `Λα. λh. λt. Cons(h, t)` -/
 abbrev consPosE : Exp := .tabs .star (.lam (.lam (consE (Par 0) (.bvar 1) (.bvar 0))))
 
-/-- With the bound: `len ν = 1 + len t` and `0 ≤ len t` give `0 < len ν`. -/
-theorem meas_consPos (κ : KEnv) : topVC κ [] consPosE consPosTy natLenEnv := by
-  simp [topVC, consPosE, consPosTy, natLenEnv, natLenDecl, lenListDecl, listDecl]
-  intros; omega
+/-- `Λα. λh. λt. let _ = nonneg[α] t; Cons(h, t)` -/
+abbrev consPosLemmaE : Exp :=
+  .tabs .star (.lam (.lam                                               -- t=0 h=1
+    (.letin (.app (.tapp (.ann nonnegE nonnegTy) (Par 0)) (.bvar 0))    -- _ = nonneg[α] t
+      (consE (Par 0) (.bvar 2) (.bvar 1)))))                            -- Cons(h, t)
 
-/-- Without it, `t` might have negative length. -/
+/-- With the lemma: `len ν = 1 + len t` and `0 ≤ len t` give `0 < len ν`. -/
+theorem meas_consPos (κ : KEnv) : topVC κ [] consPosLemmaE consPosTy lenEnv := by
+  simp [topVC, consPosLemmaE, nonnegE, nonnegTy, consPosTy, lenEnv, lenListDecl, listDecl]
+  intro γ; refine ⟨⟨?_, ?_⟩, ?_⟩ <;> intros <;> omega
+
+/-- Without the lemma, `t` might have negative length. -/
 theorem meas_consPos_bad (κ : KEnv) : ¬ topVC κ [] consPosE consPosTy lenEnv := by
   simp [topVC, consPosE, consPosTy, lenEnv, lenListDecl, listDecl]
   -- `t` of length -1 makes `Cons(h, t)` have length 0
@@ -231,16 +252,15 @@ theorem meas_sumIList (κ : KEnv) : topVC κ [] sumIListE sumIListTy ilistEnv :=
   simp [topVC, sumIListE, sumIListTy, ilistEnv, ilistDecl]
   intro γ; constructor <;> intros <;> omega
 
-/-! ## Trees: `size`, with the bound `size ≥ 0` -/
+/-! ## Trees: `size` -/
 
 /-- `tree α = Leaf | Node (tree α, α, tree α)`, `size Leaf = 0`,
-    `size (Node l x r) = 1 + size l + size r`, and `size ≥ 0`. -/
+    `size (Node l x r) = 1 + size l + size r`. -/
 def treeDecl : DataDecl :=
   { params := [.star],
     ctorFields := [("Leaf", []), ("Node", [.dataL "tree" [Par 0], Par 0, .dataL "tree" [Par 0]])],
     variances := [.co],
-    measures := [("size", [.const 0, .add (.const 1) (.add (.meas "size" 0) (.meas "size" 2))])],
-    bounds := [("size", 0)] }
+    measures := [("size", [.const 0, .add (.const 1) (.add (.meas "size" 0) (.meas "size" 2))])] }
 def treeEnv : DEnv := [("tree", treeDecl)]
 
 theorem treeEnv_wf : treeEnv.wfB = true := by decide
@@ -266,19 +286,40 @@ abbrev mirrorE : Exp :=
 
 theorem meas_mirror (κ : KEnv) : topVC κ [] mirrorE mirrorTy treeEnv := by
   simp [topVC, mirrorE, mirrorTy, treeEnv, treeDecl]
-  intro γ _; constructor <;> intros <;> omega
+  intro γ; constructor <;> intros <;> omega
 
-/-- `node : ∀α. l:tree α → x:α → r:tree α → tree α{size l < size ν}` needs the
-    bound (`size r ≥ 0`). -/
+/-- The lemma `sizeNonneg : ∀α. t:tree α → Int{0 ≤ size t}`: the recursion
+    makes one call per subtree (two induction hypotheses).
+    `Λα. fix go. λt. case t of Leaf _ => 0
+                     | Node p => let (l, q) = p; let (x, r) = q; let a = go l; go r` -/
+abbrev sizeNonnegTy : Ty :=
+  .forall .star (.arrow (TreeT (Par 0)) (.refine .int (.fmla (.leqI (.const .int 0) (sizeB 1)))))
+abbrev sizeNonnegE : Exp :=
+  .tabs .star (.fix (caseL (.bvar 0)                                  -- t=0 go=1
+    [ .iconst 0
+    , .split (.bvar 0)                                                -- q=0 l=1 p=2 t=3 go=4
+        (.split (.bvar 0)                                             -- r=0 x=1 q=2 l=3 … go=6
+          (.letin (.app (.bvar 6) (.bvar 3))                          -- a = go l
+          (.app (.bvar 7) (.bvar 1)))) ]))                            -- go r   (a=0 r=1)
+
+theorem meas_sizeNonneg (κ : KEnv) : topVC κ [] sizeNonnegE sizeNonnegTy treeEnv := by
+  simp [topVC, sizeNonnegE, sizeNonnegTy, treeEnv, treeDecl]
+  intro γ; constructor <;> intros <;> omega
+
+/-- `node : ∀α. l:tree α → x:α → r:tree α → tree α{size l < size ν}` needs
+    `size r ≥ 0`, which the lemma provides:
+    `Λα. λl. λx. λr. let _ = sizeNonneg[α] r; Node(l, x, r)` -/
 abbrev nodeTy : Ty :=
   .forall .star (.arrow (TreeT (Par 0)) (.arrow (Par 0) (.arrow (TreeT (Par 0))
     (TreeT (Par 0) (.fmla (.not (.leqI (sizeB 0) (sizeB 3))))))))
 abbrev nodeE : Exp :=
-  .tabs .star (.lam (.lam (.lam (.ctor "tree" 1 [Par 0] (.pair (.bvar 2) (.pair (.bvar 1) (.bvar 0)))))))
+  .tabs .star (.lam (.lam (.lam                                               -- r=0 x=1 l=2
+    (.letin (.app (.tapp (.ann sizeNonnegE sizeNonnegTy) (Par 0)) (.bvar 0))  -- _ = sizeNonneg[α] r
+      (.ctor "tree" 1 [Par 0] (.pair (.bvar 3) (.pair (.bvar 2) (.bvar 1))))))))
 
 theorem meas_node (κ : KEnv) : topVC κ [] nodeE nodeTy treeEnv := by
-  simp [topVC, nodeE, nodeTy, treeEnv, treeDecl]
-  intros; omega
+  simp [topVC, nodeE, nodeTy, sizeNonnegE, sizeNonnegTy, treeEnv, treeDecl]
+  intro γ; refine ⟨⟨?_, ?_⟩, ?_⟩ <;> intros <;> omega
 
 /-! ## `filterGe` shrinks: `len ν ≤ len xs`
 

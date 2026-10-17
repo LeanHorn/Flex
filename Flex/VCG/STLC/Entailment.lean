@@ -102,11 +102,10 @@ theorem ModelsEnv.tail {κ : KEnv} {γ : REnv} {x : EVar} {t : Ty} {Γ : TEnv}
     (h : ModelsEnv κ γ ((x, t) :: Γ)) : ModelsEnv κ γ Γ := h.2
 
 /-- `κ; Γ ⊢ c`: `c` (as a Lean predicate over `REnv`) holds in every model of
-    Γ under κ whose measure interpretation respects the declared bounds.
-    VCGen-produced constraints use this. -/
+    Γ under κ. VCGen-produced constraints use this. -/
 @[simp]
-def Entail (de : DEnv) (κ : KEnv) (Γ : TEnv) (c : REnv → Prop) : Prop :=
-  ∀ γ, de.BoundsHold γ.sorts.meas → ModelsEnv κ γ Γ → c γ
+def Entail (κ : KEnv) (Γ : TEnv) (c : REnv → Prop) : Prop :=
+  ∀ γ, ModelsEnv κ γ Γ → c γ
 
 /-- Under `HasBase`, the raw stored `Val` *is* the injected base-`b` read:
     `γ.lookup x = Val.inj b (get b γ x)`. Bridges `ModelsEnv`'s `push (γ.lookup x)`
@@ -140,39 +139,38 @@ theorem REnv.update_self (b : Base) (γ : REnv) (x : EVar) (hb : γ.HasBase x b)
 
 /-- ENT-EMP: `∀ γ, c γ ⟹ κ; ∅ ⊢ c`. -/
 @[simp]
-theorem Entail.emp {de : DEnv} {κ : KEnv} {c : REnv → Prop} (h : ∀ γ, c γ) :
-    Entail de κ [] c := by
-  intro γ _ _; exact h γ
+theorem Entail.emp {κ : KEnv} {c : REnv → Prop} (h : ∀ γ, c γ) :
+    Entail κ [] c := by
+  intro γ _; exact h γ
 
 /-- ENT-EXT (predicate form): `κ; Γ ⊢ ∀v:b. r v → c[x↦v]  ⟹  κ; Γ, x:t ⊢ c`
     for a binding whose hypothesis is `r` at sort `b`.
     Instantiate with `REnv.get b γ x`, then close by `REnv.update_self`. -/
-theorem Entail.ext {de : DEnv} {κ : KEnv} {Γ : TEnv} {x : EVar} {t : Ty} {b : Base}
-    {r : Refinement} {c : REnv → Prop} (ht : t.hyp? = some (b, r))
-    (h : Entail de κ Γ (fun γ => ∀ v : b.sem γ.sorts,
+theorem Entail.ext {κ : KEnv} {Γ : TEnv} {x : EVar} {t : Ty} {b : Base} {r : Refinement}
+    {c : REnv → Prop} (ht : t.hyp? = some (b, r))
+    (h : Entail κ Γ (fun γ => ∀ v : b.sem γ.sorts,
               Refinement.interp κ r (γ.push (Val.inj (b.resolve γ.sorts) v)) →
                 c (REnv.update b γ x v))) :
-    Entail de κ ((x, t) :: Γ) c := by
-  intro γ hB hm
+    Entail κ ((x, t) :: Γ) c := by
+  intro γ hm
   obtain ⟨⟨hb, hr⟩, hΓ⟩ := (ModelsEnv.cons_some ht).mp hm
   rw [REnv.lookup_eq_inj_get b γ x hb] at hr
-  have key := h γ hB hΓ (REnv.get b γ x) hr
+  have key := h γ hΓ (REnv.get b γ x) hr
   rw [REnv.update_self b γ x hb] at key
   exact key
 
 /-- ENT-EXT for a binding with no hypothesis (function, polymorphic, or
     ⋆-kinded type-variable types). -/
-theorem Entail.ext_none {de : DEnv} {κ : KEnv} {Γ : TEnv} {x : EVar} {t : Ty} {c : REnv → Prop}
-    (ht : t.hyp? = none) (hd : t.dhyp? = none) (h : Entail de κ Γ c) :
-    Entail de κ ((x, t) :: Γ) c :=
-  fun γ hB hm => h γ hB ((ModelsEnv.cons_none ht hd).mp hm)
+theorem Entail.ext_none {κ : KEnv} {Γ : TEnv} {x : EVar} {t : Ty} {c : REnv → Prop}
+    (ht : t.hyp? = none) (hd : t.dhyp? = none) (h : Entail κ Γ c) : Entail κ ((x, t) :: Γ) c :=
+  fun γ hm => h γ ((ModelsEnv.cons_none ht hd).mp hm)
 
 /-- ENT-EXT for a datatype binding: its refinement becomes a hypothesis about
     the slot itself (no quantifier — the slot holds a datatype value, which has
     no sort). -/
-theorem Entail.ext_data {de : DEnv} {κ : KEnv} {Γ : TEnv} {x : EVar} {t : Ty} {r : Refinement}
+theorem Entail.ext_data {κ : KEnv} {Γ : TEnv} {x : EVar} {t : Ty} {r : Refinement}
     {c : REnv → Prop} (hd : t.dhyp? = some r)
-    (h : Entail de κ Γ (fun γ => Refinement.interp κ r (γ.push (γ.lookup x)) → c γ)) :
-    Entail de κ ((x, t) :: Γ) c := fun γ hB hm =>
+    (h : Entail κ Γ (fun γ => Refinement.interp κ r (γ.push (γ.lookup x)) → c γ)) :
+    Entail κ ((x, t) :: Γ) c := fun γ hm =>
   let ⟨hr, hΓ⟩ := (ModelsEnv.cons_data hd).mp hm
-  h γ hB hΓ hr
+  h γ hΓ hr

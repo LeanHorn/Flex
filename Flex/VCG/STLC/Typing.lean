@@ -24,7 +24,7 @@ open STLC
 inductive Subtyp : DEnv → KEnv → TEnv → Ty → Ty → Prop where
   | refine {de κ Γ b r₁ r₂ x} :
       x ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ r₁.fv ++ r₂.fv →
-      Entail de κ ((x, .refine b r₁) :: Γ) (fun γ => Refinement.interp κ (r₂.openBVar 0 x) γ) →
+      Entail κ ((x, .refine b r₁) :: Γ) (fun γ => Refinement.interp κ (r₂.openBVar 0 x) γ) →
       Subtyp de κ Γ (.refine b r₁) (.refine b r₂)
 
   /-- SUB-FUN (explicit witness): contravariant input, covariant output. -/
@@ -56,7 +56,7 @@ inductive Subtyp : DEnv → KEnv → TEnv → Ty → Ty → Prop where
       (∀ i : Fin n, de.var C i.val ≠ .contra → Subtyp de κ Γ (args₁ i) (args₂ i)) →
       (∀ i : Fin n, de.var C i.val ≠ .co → Subtyp de κ Γ (args₂ i) (args₁ i)) →
       x ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ r₁.fv ++ r₂.fv →
-      Entail de κ ((x, .data C n args₁ r₁) :: Γ) (fun γ => Refinement.interp κ (r₂.openBVar 0 x) γ) →
+      Entail κ ((x, .data C n args₁ r₁) :: Γ) (fun γ => Refinement.interp κ (r₂.openBVar 0 x) γ) →
       Subtyp de κ Γ (.data C n args₁ r₁) (.data C n args₂ r₂)
 
 /-- The result type of a comparison at sort `b`: `Bool{ν ⇔ x ≤ y}`. -/
@@ -141,7 +141,7 @@ mutual
         context is provably contradictory (no model of `Γ` exists). It is not
         a value and has no `BigStep` rule — it can only appear in dead code. -/
     | unreach {de κ Γ t} :
-        Entail de κ Γ (fun _ => False) →
+        Entail κ Γ (fun _ => False) →
         Check de κ Γ .unreach t
 
     | lam {de κ Γ e s₁ s₂ x} :

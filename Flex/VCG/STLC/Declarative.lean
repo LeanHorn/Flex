@@ -104,7 +104,7 @@ inductive Hastype : DEnv → KEnv → TEnv → Exp → Ty → Prop where
       de.payload? C j = some P →
       de.instOK C τs = true →
       Hastype de κ Γ e (Ty.instTys τs P) →
-      Hastype de κ Γ (.ctor C j τs e) (Ty.dataL C τs)
+      Hastype de κ Γ (.ctor C j τs e) (Ty.dataL C τs (de.ctorRefine C j e))
   | case {de κ Γ e C n args r m alts t} (zs : Fin m → EVar) :
       Ty.WFBVars t →
       Hastype de κ Γ e (.data C n args r) →
@@ -112,9 +112,9 @@ inductive Hastype : DEnv → KEnv → TEnv → Exp → Ty → Prop where
       de.instOK C (List.ofFn args) = true →
       (∀ j, zs j ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ (alts j).fv ++ t.fv) →
       (∀ (j : Fin m) P, de.payload? C j.val = some P →
-        zs j ∉ (Ty.instTys (List.ofFn args) P).fv) →
+        zs j ∉ (de.altTy C j.val e.var? (Ty.instTys (List.ofFn args) P)).fv) →
       (∀ (j : Fin m) P, de.payload? C j.val = some P →
-        Hastype de κ ((zs j, Ty.instTys (List.ofFn args) P) :: Γ)
+        Hastype de κ ((zs j, de.altTy C j.val e.var? (Ty.instTys (List.ofFn args) P)) :: Γ)
           ((alts j).openVar 0 (zs j)) t) →
       Hastype de κ Γ (.case e m alts) t
 
@@ -356,5 +356,5 @@ theorem Hastype.wf_bvars {de κ Γ e t} (h : Hastype de κ Γ e t) : Ty.WFBVars 
   | tapp _ _ _ _ hres _ => exact Ty.wfB_WFBVars _ hres
   | pair hwf _ _ _ _ _ => exact hwf
   | split hwf _ _ _ _ _ _ => exact hwf
-  | ctor _ hok _ _ => exact DEnv.instOK_WFBVars hok
+  | ctor _ hok _ _ => exact DEnv.instOK_WFBVars hok (DEnv.ctorRefine_noBVar _ _ _ _)
   | case _ hwf _ _ _ _ _ _ _ _ => exact hwf

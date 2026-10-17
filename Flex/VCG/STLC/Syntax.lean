@@ -606,9 +606,49 @@ def Ty.skel : Ty → Nat
 /-! ## Datatype declarations
 
   A program is a list of datatype declarations (`DEnv`) followed by an
-  expression. A declaration lists the kinds of its type parameters and its
-  constructors, each with a single payload type. In a payload type, `tbvar i`
-  is parameter `i`; a payload has no free term or type variables. -/
+  expression. A declaration lists the kinds of its type parameters, its
+  constructors — each with a telescope of field types — and its measures. In a
+  field type, `tbvar i` is parameter `i`, and `BVar` levels refer to earlier
+  fields; field types have no free term or type variables.
+
+  At runtime a constructor carries a single payload: a unit for no fields, the
+  field itself for one, and nested pairs `(f₀, (f₁, … fₙ₋₁))` for more. Its type
+  is the telescope `Σ f₀:t₀. … tₙ₋₁`; the last field's type — under all the
+  others — is where pattern matching records the measure equations. -/
+
+/-- The payload type of a constructor with fields `ts`. -/
+def Ty.tuple : List Ty → Ty
+  | []      => .refine .int (.fmla .tt)
+  | [t]     => t
+  | t :: ts => .prod t (Ty.tuple ts)
+
+/-- A measure's body for one constructor, over that constructor's fields:
+    an integer built from literals and measures of fields. -/
+inductive MBody where
+  | const : Int → MBody
+  | meas  : String → Nat → MBody      -- measure `m` of field `i`
+  | add   : MBody → MBody → MBody
+  deriving Repr
+
+/-- A measure body as a refinement term, given terms for the fields' measures. -/
+def MBody.toTerm (msr : String → Nat → Term .int) : MBody → Term .int
+  | .const n  => .const .int n
+  | .meas m i => msr m i
+  | .add a b  => .add (a.toTerm msr) (b.toTerm msr)
+
+/-- Every field a body reads is one of the `n` fields. -/
+def MBody.idxOK (n : Nat) : MBody → Bool
+  | .const _  => true
+  | .meas _ i => decide (i < n)
+  | .add a b  => a.idxOK n && b.idxOK n
+
+/-- Conjoin `r` into the refinement of the last component of a payload type
+    with `n + 1` components (types without a refinement are left alone). -/
+def Ty.strengthenLast : Nat → Ty → Refinement → Ty
+  | 0,     .refine b r',     r => .refine b (.conj r' r)
+  | 0,     .data C k a r',   r => .data C k a (.conj r' r)
+  | n + 1, .prod s t,        r => .prod s (Ty.strengthenLast n t r)
+  | _,     t,                _ => t
 
 /-- The variance of a datatype parameter: how subtyping on the datatype
     follows subtyping on the argument. -/
@@ -620,10 +660,25 @@ inductive Variance where
 
 structure DataDecl where
   params : List Kind
-  ctors  : List (String × Ty)
+  /-- The constructors, each with its field types. -/
+  ctorFields : List (String × List Ty)
   /-- Declared variances of the parameters (checked against the payloads);
       a parameter without one is invariant. -/
   variances : List Variance := []
+  /-- The measures, each with one body per constructor (in order). -/
+  measures : List (String × List MBody) := []
+
+/-- The constructors with their payload types. -/
+def DataDecl.ctors (d : DataDecl) : List (String × Ty) :=
+  d.ctorFields.map fun c => (c.1, Ty.tuple c.2)
+
+/-- The measures of constructor `j`, with their bodies for it. -/
+def DataDecl.ctorMeasures (d : DataDecl) (j : Nat) : List (String × MBody) :=
+  d.measures.filterMap fun mb => (mb.2[j]?).map fun b => (mb.1, b)
+
+/-- The body of measure `m` for constructor `j`. -/
+def DataDecl.measBody? (d : DataDecl) (m : String) (j : Nat) : Option MBody :=
+  (d.measures.lookup m).bind fun bs => bs[j]?
 
 abbrev DEnv := List (String × DataDecl)
 
@@ -637,6 +692,119 @@ def DEnv.var (de : DEnv) (C : String) (i : Nat) : Variance :=
 /-- The payload type of constructor `j` of `C`. -/
 def DEnv.payload? (de : DEnv) (C : String) (j : Nat) : Option Ty :=
   (de.decl? C).bind fun d => (d.ctors[j]?).map Prod.snd
+
+/-- The field types of constructor `j` of `C`. -/
+def DEnv.fields? (de : DEnv) (C : String) (j : Nat) : Option (List Ty) :=
+  (de.decl? C).bind fun d => (d.ctorFields[j]?).map Prod.snd
+
+/-- The measures of constructor `j` of `C`, with their bodies for it. -/
+def DEnv.ctorMeasures (de : DEnv) (C : String) (j : Nat) : List (String × MBody) :=
+  ((de.decl? C).map fun d => d.ctorMeasures j).getD []
+
+/-- A conjunction of formulas. -/
+def Formula.conjAll : List Formula → Formula
+  | []      => .tt
+  | φ :: φs => .and φ (Formula.conjAll φs)
+
+/-- The number of fields of constructor `j` of `C`. -/
+def DEnv.nFields (de : DEnv) (C : String) (j : Nat) : Nat := ((de.fields? C j).map List.length).getD 0
+
+/-- What constructing `C j` from the fields `as` reveals about the result ν
+    (`BVar 0`): each measure equals its body for this constructor. -/
+def DEnv.ctorFacts (de : DEnv) (C : String) (j : Nat) (as : List EVar) : Refinement :=
+  .fmla (Formula.conjAll ((de.ctorMeasures C j).map fun mb =>
+    .eq .int (.mbvar mb.1 0)
+      (mb.2.toTerm fun m' i => if i < as.length then .mfvar m' (as.getD i "") else .const .int 0)))
+
+/-- What matching `x` against `C j` (with `n` fields) reveals, read at the
+    payload's last field — where field `i` is `BVar (n - 1 - i)` — : each
+    measure of `x` equals its body for this constructor. -/
+def DEnv.caseFacts (de : DEnv) (C : String) (j n : Nat) (x : EVar) : Refinement :=
+  .fmla (Formula.conjAll ((de.ctorMeasures C j).map fun mb =>
+    .eq .int (.mfvar mb.1 x) (mb.2.toTerm fun m' i => .mbvar m' (n - 1 - i))))
+
+/-- The scrutinee of a `case`, when it is a variable. -/
+def Exp.var? : Exp → Option EVar
+  | .fvar x => some x
+  | _       => none
+
+/-- The fields of a payload of a constructor with `n` fields, written out as
+    variables: `x` for one field, `(x₀, (x₁, … xₙ₋₁))` for more (none for none). -/
+def Exp.tupleVarsN : Nat → Exp → Option (List EVar)
+  | 0,     _                 => some []
+  | 1,     .fvar x           => some [x]
+  | n + 2, .pair (.fvar x) e => (Exp.tupleVarsN (n + 1) e).map (x :: ·)
+  | _,     _                 => none
+
+/-- The refinement a constructor application synthesizes: the measure facts,
+    when its fields are given as variables. -/
+def DEnv.ctorRefine (de : DEnv) (C : String) (j : Nat) (e : Exp) : Refinement :=
+  match e.tupleVarsN (de.nFields C j) with
+  | some as => de.ctorFacts C j as
+  | none    => .fmla .tt
+
+/-- The type an alternative of a match on `C` binds its payload at (`tz`, the
+    payload at the scrutinee's type arguments): when the scrutinee is a
+    variable `x`, the last field records the measure facts about `x`. -/
+def DEnv.altTy (de : DEnv) (C : String) (j : Nat) (x? : Option EVar) (tz : Ty) : Ty :=
+  match x? with
+  | some x => tz.strengthenLast (de.nFields C j - 1) (de.caseFacts C j (de.nFields C j) x)
+  | none   => tz
+
+/-! ## Measure semantics
+
+  A measure is the structurally recursive function its bodies define, on
+  runtime values: on `C j w` it is the body for `j`, read on the fields of the
+  payload `w`; on anything else it is `0`. -/
+
+/-- The fields of a payload of a constructor with `n` fields. -/
+def Val.fieldsN : Nat → Val → List Val
+  | 0,     _          => []
+  | 1,     w          => [w]
+  | n + 2, .pair a r  => a :: Val.fieldsN (n + 1) r
+  | _ + 2, _          => []
+
+theorem Val.sizeOf_le_of_mem_fieldsN : ∀ {n : Nat} {w f : Val}, f ∈ w.fieldsN n → sizeOf f ≤ sizeOf w
+  | 0, _, _, h => by simp [Val.fieldsN] at h
+  | 1, w, f, h => by simp only [Val.fieldsN, List.mem_singleton] at h; subst h; exact Nat.le_refl _
+  | n + 2, .pair a r, f, h => by
+    simp only [Val.fieldsN, List.mem_cons] at h
+    rcases h with rfl | h
+    · simp; omega
+    · have := Val.sizeOf_le_of_mem_fieldsN h
+      simp; omega
+  | _ + 2, .iconst _, _, h | _ + 2, .bconst _, _, h | _ + 2, .clos _, _, h
+  | _ + 2, .fclos _, _, h | _ + 2, .ctor _ _ _, _, h => by simp [Val.fieldsN] at h
+
+/-- Evaluate a measure body, given the measures of the fields. -/
+def MBody.eval (fm : Nat → String → Int) : MBody → Int
+  | .const n  => n
+  | .meas m i => fm i m
+  | .add a b  => a.eval fm + b.eval fm
+
+/-- The value of measure `m` on `v`. -/
+def DEnv.measEval (de : DEnv) (m : String) : Val → Int
+  | .ctor C j w =>
+    match (de.decl? C).bind fun d => d.measBody? m j with
+    | some body =>
+      body.eval fun i m' =>
+        if h : i < (w.fieldsN (de.nFields C j)).length then
+          DEnv.measEval de m' (w.fieldsN (de.nFields C j))[i] else 0
+    | none => 0
+  | _ => 0
+termination_by v => sizeOf v
+decreasing_by
+  have := Val.sizeOf_le_of_mem_fieldsN (List.getElem_mem h)
+  simp; omega
+
+theorem DEnv.measEval_ctor (de : DEnv) (m : String) (C : String) (j : Nat) (w : Val) :
+    de.measEval m (.ctor C j w) =
+      match (de.decl? C).bind fun d => d.measBody? m j with
+      | some body => body.eval fun i m' =>
+          if h : i < (w.fieldsN (de.nFields C j)).length then
+            de.measEval m' (w.fieldsN (de.nFields C j))[i] else 0
+      | none => 0 := by
+  rw [DEnv.measEval]
 
 /-- Every element of a list of naturals is at most its sum. -/
 theorem List.le_sum_of_mem_nat : ∀ {l : List Nat} {x : Nat}, x ∈ l → x ≤ l.sum

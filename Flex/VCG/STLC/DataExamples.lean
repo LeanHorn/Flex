@@ -32,7 +32,7 @@ abbrev NatT : Ty := .refine .int (.fmla (.leqI (.const .int 0) (.bvar .int 0)))
 
 /-! ## `option α = None | Some α` -/
 
-def optionDecl : DataDecl := { params := [.star], ctors := [("None", UnitT), ("Some", Par 0)] }
+def optionDecl : DataDecl := { params := [.star], ctorFields := [("None", []), ("Some", [Par 0])] }
 def optionEnv : DEnv := [("option", optionDecl)]
 
 /-- `fromSome : d:Nat → o:option(Nat) → Nat` -/
@@ -50,7 +50,8 @@ theorem data_fromSome (κ : KEnv) : topVC κ [] fromSomeE fromSomeTy optionEnv :
 /-- `Σ x:Int. Int{x ≤ ν}` (`x` is `BVar 1` inside the second component). -/
 abbrev ordPayload : Ty :=
   .prod TT (.refine .int (.fmla (.leqI (.bvar .int 1) (.bvar .int 0))))
-def ordDecl : DataDecl := { params := [], ctors := [("MkOrd", ordPayload)] }
+def ordDecl : DataDecl :=
+  { params := [], ctorFields := [("MkOrd", [TT, .refine .int (.fmla (.leqI (.bvar .int 1) (.bvar .int 0)))])] }
 def ordEnv : DEnv := [("ord", ordDecl)]
 abbrev OrdT : Ty := .dataL "ord" []
 
@@ -80,7 +81,7 @@ theorem data_mkOrd_bad (κ : KEnv) : ¬ topVC κ []
 /-- `list` applied to one type argument. -/
 abbrev ListT (τ : Ty) : Ty := .dataL "list" [τ]
 def listDecl : DataDecl :=
-  { params := [.star], ctors := [("Nil", UnitT), ("Cons", .prod (Par 0) (ListT (Par 0)))],
+  { params := [.star], ctorFields := [("Nil", []), ("Cons", [Par 0, ListT (Par 0)])],
     variances := [.co] }
 def listEnv : DEnv := [("list", listDecl)]
 
@@ -196,7 +197,7 @@ theorem data_sumList_pos (κ : KEnv) : topVC κ [] (.lam (.app (.ann sumListE su
 
 /-- A contravariant datatype: predicates `pred α = Pred (α → Bool)`. -/
 def predDecl : DataDecl :=
-  { params := [.star], ctors := [("Pred", .arrow (Par 0) (.refine .bool ttR))],
+  { params := [.star], ctorFields := [("Pred", [.arrow (Par 0) (.refine .bool ttR)])],
     variances := [.contra] }
 def predEnv : DEnv := [("pred", predDecl)]
 

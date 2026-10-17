@@ -110,9 +110,10 @@ structure TyEnvSem where
 def TyEnvSem.empty (de : DEnv := []) : TyEnvSem :=
   { bv := [], fv := fun a => match a.2 with | .B => SemTy.ints | .star => SemTy.top, denv := de }
 
-/-- The bases the type variables stand for under `δ`. -/
+/-- The bases the type variables stand for under `δ` — and the measures, as
+    the declarations define them. -/
 def TyEnvSem.sorts (δ : TyEnvSem) : SortEnv :=
-  { bv := δ.bv.map SemTy.sort, fv := fun a => (δ.fv a).sort }
+  { bv := δ.bv.map SemTy.sort, fv := fun a => (δ.fv a).sort, meas := δ.denv.measEval }
 
 /-- The base a refined type's values have under `δ` (`int`, arbitrarily, for
     other types). -/

@@ -2383,11 +2383,18 @@ def Ty.varOK (de : DEnv) (vs : List Variance) : Nat → Pol → Ty → Bool
   | d, p, .prod s t       => Ty.varOK de vs d p s && Ty.varOK de vs d p t
   | d, p, .data C n args _ => (List.finRange n).all fun l => Ty.varOK de vs d (p.comp (de.var C l)) (args l)
 
+/-- Well-formed measures: distinct names, and every body reads only fields of
+    its constructor. -/
+def DataDecl.measOK (d : DataDecl) : Bool :=
+  decide (d.measures.map Prod.fst).Nodup &&
+  d.measures.all fun mb => (mb.2.zip d.ctorFields).all fun bc => bc.1.idxOK bc.2.2.length
+
 /-- Well-formed declarations: payloads have no free term or type variables, and
-    respect the declared variances. -/
+    respect the declared variances; measures are well-formed. -/
 def DEnv.wfB (de : DEnv) : Bool :=
-  de.all fun d => d.2.ctors.all fun c =>
-    c.2.fv.isEmpty && c.2.ftv.isEmpty && Ty.varOK de d.2.variances 0 .pos c.2
+  (de.all fun d => d.2.ctors.all fun c =>
+    c.2.fv.isEmpty && c.2.ftv.isEmpty && Ty.varOK de d.2.variances 0 .pos c.2) &&
+  de.all fun d => d.2.measOK
 
 theorem DEnv.payload?_lt {de : DEnv} {C : String} {j m : Nat} {P : Ty}
     (hm : de.nCtors C = some m) (hP : de.payload? C j = some P) : j < m := by
@@ -2432,10 +2439,84 @@ theorem DEnv.instOK_spec {de : DEnv} {C : String} {τs : List Ty} (h : de.instOK
     exact ⟨_, List.getElem?_eq_getElem (by omega), this⟩
 
 /-- The type arguments of a legal instance are well-formed. -/
-theorem DEnv.instOK_WFBVars {de : DEnv} {C : String} {τs : List Ty} (h : de.instOK C τs = true) :
-    Ty.WFBVars (Ty.dataL C τs) := by
+theorem Formula.hasBVar_conjAll {b : Base} {k : Nat} : ∀ (φs : List Formula),
+    Formula.hasBVar b k (Formula.conjAll φs) → ∃ φ ∈ φs, Formula.hasBVar b k φ
+  | [], h => by simp [Formula.conjAll, Formula.hasBVar] at h
+  | φ :: φs, h => by
+    simp only [Formula.conjAll, Formula.hasBVar] at h
+    rcases h with h | h
+    · exact ⟨φ, List.mem_cons_self, h⟩
+    · obtain ⟨ψ, hψ, h⟩ := Formula.hasBVar_conjAll φs h
+      exact ⟨ψ, List.mem_cons_of_mem _ hψ, h⟩
+
+theorem MBody.toTerm_noBVar {msr : String → Nat → Term .int}
+    (hm : ∀ m i b k, ¬ Term.hasBVar b k (msr m i)) :
+    ∀ (body : MBody) b k, ¬ Term.hasBVar b k (body.toTerm msr)
+  | .const _, b, k => by simp [MBody.toTerm, Term.hasBVar]
+  | .meas m i, b, k => hm m i b k
+  | .add x y, b, k => by
+    simp only [MBody.toTerm, Term.hasBVar, not_or]
+    exact ⟨MBody.toTerm_noBVar hm x b k, MBody.toTerm_noBVar hm y b k⟩
+
+/-- A constructor's measure facts mention no sorted bound variable (they read
+    ν and the fields only through measures). -/
+theorem DEnv.ctorRefine_noBVar (de : DEnv) (C : String) (j : Nat) (e : Exp) :
+    ∀ b k, ¬ (de.ctorRefine C j e).hasBVar b k := by
+  intro b k h
+  unfold DEnv.ctorRefine at h
+  split at h
+  · simp only [DEnv.ctorFacts, Refinement.hasBVar] at h
+    obtain ⟨φ, hφ, h⟩ := Formula.hasBVar_conjAll _ h
+    simp only [List.mem_map] at hφ
+    obtain ⟨mb, _, rfl⟩ := hφ
+    simp only [Formula.hasBVar, Term.hasBVar, false_or] at h
+    exact MBody.toTerm_noBVar (fun _ _ _ _ h => by split at h <;> simp [Term.hasBVar] at h) _ _ _ h
+  · simp [Refinement.hasBVar, Formula.hasBVar] at h
+
+theorem DEnv.caseFacts_noBVar (de : DEnv) (C : String) (j n : Nat) (x : EVar) :
+    ∀ b k, ¬ (de.caseFacts C j n x).hasBVar b k := by
+  intro b k h
+  simp only [DEnv.caseFacts, Refinement.hasBVar] at h
+  obtain ⟨φ, hφ, h⟩ := Formula.hasBVar_conjAll _ h
+  simp only [List.mem_map] at hφ
+  obtain ⟨mb, _, rfl⟩ := hφ
+  simp only [Formula.hasBVar, Term.hasBVar, false_or] at h
+  exact MBody.toTerm_noBVar (fun _ _ _ _ h => by simp [Term.hasBVar] at h) _ _ _ h
+
+theorem Ty.WFBVarCtx_strengthenLast {r : Refinement} (hr : ∀ b k, ¬ r.hasBVar b k) :
+    ∀ (n : Nat) (t : Ty) (ctx : List (Option Base)), Ty.WFBVarCtx ctx t →
+      Ty.WFBVarCtx ctx (t.strengthenLast n r)
+  | 0, .refine b r', ctx, h => by
+    simp only [Ty.strengthenLast, Ty.WFBVarCtx, Refinement.hasBVar] at h ⊢
+    rintro b' k (hk | hk)
+    · exact h b' k hk
+    · exact absurd hk (hr b' k)
+  | 0, .data C k a r', ctx, h => by
+    simp only [Ty.strengthenLast, Ty.WFBVarCtx, Refinement.hasBVar] at h ⊢
+    refine ⟨?_, h.2⟩
+    rintro b' i (hk | hk)
+    · exact h.1 b' i hk
+    · exact absurd hk (hr b' i)
+  | n + 1, .prod s t, ctx, h => by
+    simp only [Ty.strengthenLast, Ty.WFBVarCtx] at h ⊢
+    exact ⟨h.1, Ty.WFBVarCtx_strengthenLast hr n t _ h.2⟩
+  | 0, .arrow _ _, _, h | 0, .forall _ _, _, h | 0, .prod _ _, _, h => by
+    simpa [Ty.strengthenLast] using h
+  | _ + 1, .refine _ _, _, h | _ + 1, .arrow _ _, _, h | _ + 1, .forall _ _, _, h
+  | _ + 1, .data _ _ _ _, _, h => by
+    simpa [Ty.strengthenLast] using h
+
+theorem DEnv.altTy_WFBVars (de : DEnv) (C : String) (j : Nat) (x? : Option EVar) {tz : Ty}
+    (h : Ty.WFBVars tz) : Ty.WFBVars (de.altTy C j x? tz) := by
+  cases x? with
+  | none => exact h
+  | some x => exact Ty.WFBVarCtx_strengthenLast (DEnv.caseFacts_noBVar _ _ _ _ _) _ tz [] h
+
+theorem DEnv.instOK_WFBVars {de : DEnv} {C : String} {τs : List Ty} {r : Refinement}
+    (h : de.instOK C τs = true) (hr : ∀ b k, ¬ r.hasBVar b k) :
+    Ty.WFBVars (Ty.dataL C τs r) := by
   obtain ⟨d, _, _, hargs, _⟩ := DEnv.instOK_spec h
-  refine ⟨fun b k h => by simp [Refinement.hasBVar, Formula.hasBVar] at h, fun i => ?_⟩
+  refine ⟨fun b k h => absurd h (hr b k), fun i => ?_⟩
   obtain ⟨_, _, _, hw⟩ := hargs i.val i.isLt
   exact Ty.wfB_WFBVarCtx _ hw
 
@@ -2483,8 +2564,8 @@ theorem DEnv.wfB_payload_all {de : DEnv} (h : de.wfB = true) {C : String} {j : N
     (hP : de.payload? C j = some P) :
     ∃ d, de.decl? C = some d ∧ P.fv = [] ∧ P.ftv = [] ∧ Ty.varOK de d.variances 0 .pos P = true := by
   obtain ⟨d, c, hd, hmem, hc, rfl⟩ := DEnv.payload?_mem hP
-  simp only [DEnv.wfB, List.all_eq_true] at h
-  have := h (C, d) hmem c hc
+  simp only [DEnv.wfB, Bool.and_eq_true, List.all_eq_true] at h
+  have := h.1 (C, d) hmem c hc
   simp only [Bool.and_eq_true, List.isEmpty_iff] at this
   exact ⟨d, hd, this.1.1, this.1.2, this.2⟩
 

@@ -3,6 +3,7 @@ import Flex.VCG.STLC.Declarative
 import Flex.VCG.STLC.Soundness
 import Flex.VCG.STLC.Model
 import Flex.VCG.STLC.TypeSubst
+import Flex.VCG.STLC.Measures
 
 open STLC
 
@@ -1693,11 +1694,21 @@ theorem hastype_fundamental {de κ Γ e t} (hde : de.wfB = true) (h : Hastype de
         obtain ⟨ks, hks, hargs, hokP⟩ := DEnv.instOK_payload_ok hok hP
         obtain ⟨hPfv, hPftv⟩ := DEnv.wfB_payload hde hP
         have hτs : List.ofFn (fun l : Fin τs.length => τs[l]) = τs := List.ofFn_getElem
+        -- the measure facts hold of the constructed value
+        have hfacts : Refinement.interp κ (de.ctorRefine C j e)
+            ((γ.withSorts δ.sorts).push (.ctor C j w)) := by
+          refine DEnv.ctorRefine_sound (by simp [TyEnvSem.sorts, hD])
+            (fun d hd => (DEnv.wfB_meas hde hd).1) ?_
+          intro as has
+          have herased : ∀ a ∈ as, Val.Erased (γ.map a) := fun a ha => by
+            obtain ⟨t', hat⟩ := hhe.fv_subset a (Exp.tupleVarsN_fv has a ha)
+            exact EnvCloses.mem_erased hE (mem_TEnv_dom hat)
+          exact Exp.tupleVarsN_eval has herased hev
         simp only [Ty.dataL, TyDenote]
         refine ⟨by simpa [Val.lc, Val.toExp, Exp.lc_at] using hlc,
           by simpa [Val.closed, Val.fv, Val.toExp, Exp.fv] using hcl,
           by simpa [Val.Erased, Val.toExp, Exp.TypeFree] using her,
-          by simp [Refinement.interp, Formula.interp],
+          hfacts,
           j, w, P, rfl, hD ▸ hP, fun i hi => ?_⟩
         have hw' : TyDenote κ δ i (Ty.instTys (List.ofFn fun l : Fin τs.length => τs[l]) P) γ w := by
           rw [hτs]; exact TyDenote.mono (Nat.le_of_lt hi) hw
@@ -1727,15 +1738,48 @@ theorem hastype_fundamental {de κ Γ e t} (hde : de.wfB = true) (h : Hastype de
                 obtain ⟨kd, h1, h2, h3⟩ := hargs l.val (by simp)
                 exact ⟨kd, h1, by simpa using h2, by simpa using h3⟩)
               hokP hPfv hPftv w).mpr (hpay i (Nat.lt_succ_self i))
+          -- matching a variable records the measure facts about it
+          have hw' : TyDenote κ δ i (de.altTy C j e.var? (Ty.instTys (List.ofFn args) P)) γ w := by
+            cases hxv? : e.var? with
+            | none => simpa [DEnv.altTy] using hw
+            | some x =>
+              have he : e = .fvar x := by cases e <;> simp_all [Exp.var?]
+              subst he
+              have hxdom : x ∈ TEnv.dom Γ' := by
+                obtain ⟨t', hxΓ⟩ := hhe.fv_subset x (by simp [Exp.fv])
+                exact mem_TEnv_dom hxΓ
+              have hxv : γ.map x = .ctor C j w := by
+                have h0 := hev₀
+                rw [Exp.substEnv_fvar, Exp.erase_of_typeFree _ (EnvCloses.mem_erased hE hxdom)] at h0
+                have := Eval.toExp_inv h0
+                injection this with h1 _
+                exact h1.symm
+              obtain ⟨d, c, hd, hc, hPc, hnf⟩ := DEnv.payload?_fields hP
+              simp only [DEnv.altTy]
+              refine TyDenote.strengthenLast _ _ _ γ w hw fun hl => ?_
+              refine DEnv.caseFacts_sound (w := w) (by simp [REnv.pushAll_sorts, TyEnvSem.sorts, hD])
+                (by simp [REnv.pushAll_map, hxv]) (fun i hi => ?_)
+                (fun d' hd' => (DEnv.wfB_meas hde hd').1) (fun mb hmb => ?_)
+              · have hn : de.nFields C j - 1 + 1 = de.nFields C j := by omega
+                rw [hn] at hl ⊢
+                refine ⟨by omega, ?_⟩
+                have e : de.nFields C j - 1 - i = (w.fieldsN (de.nFields C j)).length - 1 - i := by
+                  omega
+                rw [e]
+                exact REnv.pushAll_field _ _ i _
+              · simp only [DEnv.ctorMeasures, hd, Option.map_some, Option.getD_some] at hmb
+                rw [hnf]
+                exact (DEnv.wfB_meas hde hd).2 j mb c hmb hc
           have hzj := hz ⟨j, hj⟩
           simp only [List.mem_append, not_or] at hzj
           obtain ⟨⟨⟨hzΓ, hzΓfv⟩, hzalt⟩, hzt⟩ := hzj
           have hzP' := hzP ⟨j, hj⟩ P hP
           have hn := Eval.fuel_le hev₀
-          have hE' : EnvCloses κ δ i ((zs ⟨j, hj⟩, Ty.instTys (List.ofFn args) P) :: Γ')
+          have hE' : EnvCloses κ δ i
+              ((zs ⟨j, hj⟩, de.altTy C j e.var? (Ty.instTys (List.ofFn args) P)) :: Γ')
               (γ.write (zs ⟨j, hj⟩) w) :=
             EnvCloses.extend (hE.mono (by omega)) _ _ w hzΓ hzΓfv
-              (TyDenote.extendBy_fresh _ w hzP' hw)
+              (TyDenote.extendBy_fresh _ w hzP' hw')
           obtain ⟨o, hev, hres⟩ := ihs ⟨j, hj⟩ P hP hδ hD hE'
           have halt_dom : ∀ w' ∈ (alts ⟨j, hj⟩).fv, w' ∈ TEnv.dom Γ' := by
             intro w' hw'
@@ -1802,12 +1846,14 @@ theorem vcgen_partial_correct {κ : KEnv} {e : Exp} {b : Base} {r : Refinement} 
     (hde : de.wfB = true)
     (hE : Exp.WFBVars e) (ht : Ty.WFBVars (.refine b r)) (h : topVC κ [] e (.refine b r) de)
     {n m : Nat} {v : Val} (hev : Run n e (.val v m)) :
-    BaseDen (TyEnvSem.empty de) m b v ∧ Refinement.interp κ r (REnv.empty.push v) := by
+    BaseDen (TyEnvSem.empty de) m b v ∧
+      Refinement.interp κ r ({ REnv.empty with sorts := { meas := de.measEval } }.push v) := by
   obtain ⟨o, hev', hres⟩ := vcgen_safety hde hE ht h n
   cases Eval.det hev hev'
-  have e : REnv.empty.withSorts (TyEnvSem.empty de).sorts = REnv.empty := by
+  have e : REnv.empty.withSorts (TyEnvSem.empty de).sorts =
+      { REnv.empty with sorts := { meas := de.measEval } } := by
     apply REnv.ext <;> try rfl
-    simp only [REnv.withSorts, REnv.empty, TyEnvSem.sorts, TyEnvSem.empty]
+    simp only [REnv.empty, TyEnvSem.sorts, TyEnvSem.empty]
     congr 1
     funext a
     rcases a with ⟨_, _ | _⟩ <;> rfl

@@ -123,12 +123,13 @@ mutual
         Synth de κ Γ (.tapp e s) (Ty.instTy 0 s t)
 
     /-- CTOR: check the payload against the constructor's payload type at the
-        given type arguments. -/
+        given type arguments. When the fields are variables, the result records
+        the measure facts (`ctorRefine`). -/
     | ctor {de κ Γ C j τs e P} :
         de.payload? C j = some P →
         de.instOK C τs = true →
         Check de κ Γ e (Ty.instTys τs P) →
-        Synth de κ Γ (.ctor C j τs e) (Ty.dataL C τs)
+        Synth de κ Γ (.ctor C j τs e) (Ty.dataL C τs (de.ctorRefine C j e))
 
   inductive Check : DEnv → KEnv → TEnv → Exp → Ty → Prop where
     | sub {de κ Γ e s t} :
@@ -199,16 +200,17 @@ mutual
         Check de κ Γ (.split e body) t'
 
     /-- CASE: one alternative per constructor, in declaration order; each binds
-        the constructor's payload at the scrutinee's type arguments. -/
+        the constructor's payload at the scrutinee's type arguments — recording,
+        when the scrutinee is a variable, the measure facts about it (`altTy`). -/
     | case {de κ Γ e C n args r m alts t} (zs : Fin m → EVar) :
         Synth de κ Γ e (.data C n args r) →
         de.nCtors C = some m →
         de.instOK C (List.ofFn args) = true →
         (∀ j, zs j ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ (alts j).fv ++ t.fv) →
         (∀ (j : Fin m) P, de.payload? C j.val = some P →
-          zs j ∉ (Ty.instTys (List.ofFn args) P).fv) →
+          zs j ∉ (de.altTy C j.val e.var? (Ty.instTys (List.ofFn args) P)).fv) →
         (∀ (j : Fin m) P, de.payload? C j.val = some P →
-          Check de κ ((zs j, Ty.instTys (List.ofFn args) P) :: Γ)
+          Check de κ ((zs j, de.altTy C j.val e.var? (Ty.instTys (List.ofFn args) P)) :: Γ)
             ((alts j).openVar 0 (zs j)) t) →
         Check de κ Γ (.case e m alts) t
 end

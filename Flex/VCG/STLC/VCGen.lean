@@ -158,7 +158,7 @@ mutual
         | some P =>
             if de.instOK C τs then
               match check de Γ e (Ty.instTys τs P) with
-              | some c => some (c, Ty.dataL C τs)
+              | some c => some (c, Ty.dataL C τs (de.ctorRefine C j e))
               | none   => none
             else none
         | none => none
@@ -215,7 +215,7 @@ mutual
               match Cstr.conjAll (fun (j : Fin m) =>
                   match de.payload? C j.val with
                   | some P =>
-                      let tz := Ty.instTys (List.ofFn args) P
+                      let tz := de.altTy C j.val e.var? (Ty.instTys (List.ofFn args) P)
                       let z := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ (alts j).fv ++ t.fv ++ tz.fv)
                       match check de ((z, tz) :: Γ) ((alts j).openVar 0 z) t with
                       | some cj => some (implyBindCstr z tz cj)

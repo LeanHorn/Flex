@@ -81,7 +81,7 @@ abbrev OListT (τ : Ty) : Ty := .dataL "olist" [τ]
     and covariant. -/
 def olistDecl : DataDecl :=
   { params := [.B],
-    ctors := [("ONil", UnitT), ("OCons", .prod (Par 0) (OListT (Par 0 (geR (.tbvar 0) 1))))],
+    ctorFields := [("ONil", []), ("OCons", [Par 0, OListT (Par 0 (geR (.tbvar 0) 1))])],
     variances := [.co] }
 def olistEnv : DEnv := [("olist", olistDecl)]
 

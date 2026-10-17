@@ -775,11 +775,11 @@ mutual
               let zs : Fin m → EVar := fun j =>
                 match de.payload? C j.val with
                 | some P => EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ (alts j).fv ++ t.fv ++
-                    (Ty.instTys (List.ofFn args) P).fv)
+                    (de.altTy C j.val e₀.var? (Ty.instTys (List.ofFn args) P)).fv)
                 | none => ""
               have hzs : ∀ (j : Fin m) P, de.payload? C j.val = some P →
                   zs j = EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ (alts j).fv ++ t.fv ++
-                    (Ty.instTys (List.ofFn args) P).fv) := fun j P hP => by
+                    (de.altTy C j.val e₀.var? (Ty.instTys (List.ofFn args) P)).fv) := fun j P hP => by
                 simp only [zs, hP]
               refine Check.case zs
                 (synth_sound κ Γ e₀ c₀ _ hs fun γ hm => (hent γ hm).1) hcond.1 hcond.2
@@ -798,7 +798,7 @@ mutual
               · rename_i cj' hcj
                 injection hfj with hfj
                 subst hfj
-                have hzt : zs j ∉ (Ty.instTys (List.ofFn args) P).fv := by
+                have hzt : zs j ∉ (de.altTy C j.val e₀.var? (Ty.instTys (List.ofFn args) P)).fv := by
                   rw [hzs j P hP]
                   intro hmem
                   exact EVar.fresh_not_mem _ (List.mem_append_right _ hmem)
@@ -854,7 +854,7 @@ mutual
       simp only [Exp.WFBVars] at hE
       have hht := check_to_hastype hΓ hE
         (Ty.wfB_WFBVars _ (DEnv.instOK_payload_wfB hok hP)) hck
-      exact ⟨.ctor hP hok hht, DEnv.instOK_WFBVars hok⟩
+      exact ⟨.ctor hP hok hht, DEnv.instOK_WFBVars hok (DEnv.ctorRefine_noBVar _ _ _ _)⟩
 
   theorem check_to_hastype {de κ Γ e t}
       (hΓ : TEnv.WFBVars Γ) (hE : Exp.WFBVars e) (ht : Ty.WFBVars t)
@@ -941,7 +941,8 @@ mutual
       simp only [Exp.WFBVars] at hE
       have ⟨hht, _⟩ := synth_to_hastype hΓ hE.1 hsy
       exact .case zs ht hht hm hok hz hzP fun j P hP =>
-        check_to_hastype (hΓ.cons (Ty.wfB_WFBVars _ (DEnv.instOK_payload_wfB hok hP)))
+        check_to_hastype (hΓ.cons (DEnv.altTy_WFBVars _ _ _ _
+            (Ty.wfB_WFBVars _ (DEnv.instOK_payload_wfB hok hP))))
           ((Exp.WFBVars_openVar _ _ _).mpr (hE.2 j)) ht (hcks j P hP)
 end
 

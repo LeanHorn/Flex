@@ -101,6 +101,9 @@ attribute [simp] Cstr.interp Cstr.triv Refinement.openBVar Formula.openBVar Term
 attribute [simp] Term.interp REnv.get Exp.openVar Ty.openVar Exp.fv Refinement.fv Formula.fv Term.fv Ty.fv
 attribute [simp] Refinement.openBVar Formula.openBVar Term.openBVar String.length EVar.maxLen
 attribute [simp] List.lookup TEnv.tyFv
+attribute [simp] DataDecl.ctors Ty.tuple DEnv.ctorRefine DEnv.nFields DEnv.fields? Exp.tupleVarsN
+  DEnv.ctorFacts DEnv.ctorMeasures DataDecl.ctorMeasures DEnv.altTy Exp.var? Ty.strengthenLast
+  DEnv.caseFacts Formula.conjAll MBody.toTerm
 
 macro "generate" : tactic => `(tactic| (vc_generate ; vc_reify))
 

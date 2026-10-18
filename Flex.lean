@@ -32,4 +32,5 @@ import Flex.VCG.STLC.Examples
 import Flex.VCG.STLC.DataExamples
 import Flex.VCG.STLC.OrdExamples
 import Flex.VCG.STLC.MeasureExamples
+import Flex.VCG.STLC.MeasureInference
 import Flex.VCG.STLC.Audit

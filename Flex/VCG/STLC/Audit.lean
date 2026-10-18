@@ -3,6 +3,7 @@ import Flex.VCG.STLC.Examples
 import Flex.VCG.STLC.DataExamples
 import Flex.VCG.STLC.OrdExamples
 import Flex.VCG.STLC.MeasureExamples
+import Flex.VCG.STLC.MeasureInference
 
 open STLC
 
@@ -150,3 +151,18 @@ open STLC
 
 /-- info: 'meas_oneTrue' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms meas_oneTrue
+
+/-- info: 'infer_length' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms infer_length
+
+/-- info: 'infer_map' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms infer_map
+
+/-- info: 'infer_append' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms infer_append
+
+/-- info: 'infer_nonneg' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms infer_nonneg
+
+/-- info: 'infer_mirror' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms infer_mirror

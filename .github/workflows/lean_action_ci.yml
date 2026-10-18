@@ -14,9 +14,22 @@ jobs:
       - name: Install solver dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang z3 libc++-dev libc++abi-dev
+          sudo apt-get install -y clang lld z3 libc++-dev libc++abi-dev
+      - name: Configure Lean C compiler
+        # cvc5 needs the runner's glibc; keep Lean's bundled C++ and runtime libraries.
+        run: |
+          cat > "$RUNNER_TEMP/flex-clang" <<'EOF'
+          #!/bin/sh
+          set -eu
+          lean_prefix="$(lean --print-prefix)"
+          exec /usr/bin/clang -fuse-ld=lld -L "$lean_prefix/lib" "$@"
+          EOF
+          chmod +x "$RUNNER_TEMP/flex-clang"
+          echo "LEAN_CC=$RUNNER_TEMP/flex-clang" >> "$GITHUB_ENV"
       - uses: leanprover/lean-action@v1.6.2
         with:
           # lean-smt declares Mathlib, but Flex's imports do not use it.
           use-mathlib-cache: "false"
           build-args: "Flex Demo flex"
+      - name: Run CLI
+        run: .lake/build/bin/flex

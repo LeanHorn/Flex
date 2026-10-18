@@ -53,7 +53,7 @@ import Flex
 
 This includes all core types, tactics, elaboration, and the solver.
 
-Plain `fix` uses a fixed [standard qualifier bank](Flex/PA/StandardQualifiers.lean),
+Plain `fix` uses a fixed [standard qualifier bank](Flex/PA/Qualifier.lean),
 without scraping or per-example declarations:
 
 | Type | Templates |

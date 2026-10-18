@@ -3,7 +3,7 @@ import Flex.Tactic.Utils
 import Flex.PA.Fixpoint
 import Flex.PA.Cert
 import Flex.PA.Scrape
-import Flex.PA.StandardQualifiers
+import Flex.PA.Qualifier
 
 open Lean Elab Meta Tactic
 

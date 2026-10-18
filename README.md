@@ -1,127 +1,70 @@
 # Flex
 
-A Lean 4 library for a constraint-solving framework for Constrained Horn Clauses (CHCs).
-
----
+A Lean 4 library for solving Constrained Horn Clauses (CHCs).
 
 ## Using as a Dependency
 
-### Prerequisites
-
-- [Lean 4](https://leanprover.github.io/lean4/doc/quickstart.html) installed via `elan`
-
-### Step 1 — Add to your `lakefile.toml`
+Use Lean **v4.34.0** via `elan`. Add to your `lakefile.toml`:
 
 ```toml
 [[require]]
 name = "Flex"
-git = "https://github.com/jam-khan/Flex"
+git = "https://github.com/LeanHorn/Flex"
 rev = "main"
 ```
 
-### Step 2 — Fetch the dependency
+Fetch and build:
 
 ```bash
 MATHLIB_NO_CACHE_ON_UPDATE=1 lake update
-```
-
-This clones the repo into `.lake/packages/Flex/` using your local Git credentials.
-
-### Step 3 — Build
-
-```bash
 lake build
 ```
 
-> **Note:** Flex depends on `aesop`, pinned `lean-auto`, and pinned `lean-smt`.
-> Its modules do not import Mathlib, but the pinned lean-smt package declares
-> Mathlib as a transitive dependency. `flex_auto` needs `z3` on `PATH`;
-> lean-smt downloads its own cvc5 native library during the first build.
-> `MATHLIB_NO_CACHE_ON_UPDATE=1 lake update` avoids fetching
-> unused Mathlib build caches. Lean and the pinned dependencies use `v4.34.0`,
-> the newest common release supported by the pinned lean-smt revision.
+Flex depends on `aesop`, `lean-auto`, and `lean-smt`. The update command skips
+unused Mathlib caches from lean-smt's transitive dependency. lean-smt downloads
+cvc5 automatically; `flex_auto` requires `z3` on `PATH`. For Linux native
+dependencies and linker setup, see the [CI workflow](.github/workflows/lean_action_ci.yml).
 
----
+## Usage
 
-## Importing
-
-A single import gives you the core API, Lean tactics, and lean-auto/lean-smt wrappers:
+`zap` eliminates acyclic predicates. `fix` synthesizes invariants by predicate
+abstraction and leaves any unproved residual obligations as Lean goals.
 
 ```lean4
 import Flex
+
+example : ∃ k : Int → Prop,
+    k 5
+    ∧ (∀ i, k i → 1 ≤ i → k (i - 1))
+    ∧ (∀ i, k i → 0 ≤ i) := by
+  fix
 ```
 
-This includes all core types, tactics, elaboration, and the solver.
+By default, `fix` uses a [standard qualifier bank](Flex/PA/Qualifier.lean) for
+`Int`, `Nat`, and `Bool`, together with definitions tagged `@[qualif]`.
 
-Plain `fix` uses a fixed [standard qualifier bank](Flex/PA/Qualifier.lean),
-without scraping or per-example declarations:
+## Scraping and SMT Oracles
 
-| Type | Templates |
-| --- | --- |
-| `Int` | `x = 0`, `0 < x`, `0 ≤ x`, `x < 0`, `x ≤ 0`; `x = y`, `x > y`, `x ≥ y`, `x < y`, `x ≤ y`, `x ≤ y - 1` |
-| `Nat` | `x = 0`, `0 < x`; `x = y`, `x < y`, `x ≤ y` |
-| `Bool` | `x = true`, `x = false`, `x = y` |
-
-Templates instantiate over distinct κ parameters of matching types. Registered
-`@[qualif]` templates and scraped templates take priority over the standard bank;
-duplicate instantiated predicates are removed. Use
-`set_option flex.standardQualifiers false` to disable only the standard bank.
-The bank contains no function-specific templates or nonzero literal bounds.
-For `m` integer parameters it proposes at most `5m + 6m(m - 1)` instances before
-deduplication; slot assignments are injective, so repeated slots are excluded.
-
-Scraping is opt-in:
+Scraping adds qualifier candidates from the goal and definitions:
 
 | Option | Candidates collected |
 | --- | --- |
-| `(scrape := basic)` | Goal heads and explicitly selected definitions. |
-| `(scrape := standard)` | Also premises, Boolean observations, and equations of relevant definitions found in the goal. |
-| `(scrape := deep)` | Also bounded helper exploration and numeric template generalization. |
+| `fix (scrape := basic)` | Clause conclusions and explicitly selected definitions. |
+| `fix (scrape := standard)` | Also premises, Boolean observations, and relevant definitions discovered automatically. |
+| `fix (scrape := deep)` | Also explores helper definitions and generalizes numeric templates, within search limits. |
 
-`(defs := [fib])` explicitly selects definitions, including those excluded from
-automatic discovery. With no `scrape` option, `defs` scrapes only those definitions.
-`deep` retains exact candidates in its pool and proposes non-strict bounds from
-strict comparisons and parameterized bounds from numeric literals. All candidates
-still go through PA and certificate construction; scraping assumes no new facts.
+Scraping is off by default. Add `(defs := [fib])` to select definitions explicitly.
+Use `set_option flex.reportQualifiers true` to inspect scraped candidates in the Infoview.
 
-Limits can be overridden per invocation:
+Optional SMT backends can be selected separately for synthesis and proofs:
 
 ```lean4
-fix (scrape := deep)
-  (scrapeConfig := { maxQualifiers := 256, maxCandidatesPerKappa := 1024 })
+fix (synth := flex_auto [*]) (proof := flex_smt [*])
 ```
 
-Defaults are 3 data parameters per template, 128 selected templates, 20,000
-traversal visits, traversal depth 64, 16 definition specializations, and helper
-depth 2 in `deep` (`standard` inspects only directly discovered definitions).
-With scraping enabled, per κ at most 8,192 compatible slot assignments are processed and 2,048 distinct
-candidates retained. Truncation produces a warning. These limits bound search
-components, not total solver time; larger modes need not solve more goals under
-fixed budgets. Abstract type parameters and dependent qualifier slots remain
-unsupported; concrete applications such as `List.length` on `List Int` are supported.
+These options try the selected backend before Lean automation. `flex_auto` uses
+a trusted SMT axiom; `flex_smt` reconstructs Lean proofs. Synthesis proof terms
+are discarded; only proof-phase evidence enters the final certificate.
 
-Enable `set_option flex.reportQualifiers true` to show candidates and their
-origins in the Infoview. `set_option trace.flex.scrape true` gives discovery details.
-Reporting is off by default and does not affect scraping.
-
-[Demo/Fix.lean](Demo/Fix.lean) progresses from unary and relational loops to
-mixed types, mutually recursive predicates, literal-bound scraping, generalized
-sum bounds, and Fibonacci. The first four use plain `fix`. The mixed acyclic/cyclic
-examples use `zap` followed by `fix`; the last three add scraping.
-Oracle variants reuse the unary countdown.
-
-### Example
-
-```lean4
-import Flex
-
-def ex1 : Prop :=
-  ∃ κ : Int → Prop,
-    ∀ x : Int,
-      0 ≤ x →
-      (∀ ν : Int, ν = x - 1 → κ ν)
-    ∧ (∀ y : Int, κ y →
-        ∀ ν : Int, ν = y + 1 → 0 ≤ ν)
-```
-
-See the [`Demo/`](./Demo/Basic.lean) folder for more worked examples.
+See [Demo/Basic.lean](Demo/Basic.lean) for elimination examples and
+[Demo/Fix.lean](Demo/Fix.lean) for invariants, scraping, and SMT oracles.

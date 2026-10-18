@@ -4,6 +4,7 @@ import Flex.VCG.STLC.DataExamples
 import Flex.VCG.STLC.OrdExamples
 import Flex.VCG.STLC.MeasureExamples
 import Flex.VCG.STLC.MeasureInference
+import Flex.VCG.STLC.FlexExamples
 
 open STLC
 
@@ -184,3 +185,15 @@ open STLC
 
 /-- info: 'infer_insert' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms infer_insert
+
+/-- info: 'flex_poly_nest' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms flex_poly_nest
+
+/-- info: 'flex_data_append' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms flex_data_append
+
+/-- info: 'flex_ord_insert' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms flex_ord_insert
+
+/-- info: 'flex_ord_isort' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms flex_ord_isort

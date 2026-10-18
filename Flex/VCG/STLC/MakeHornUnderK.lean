@@ -151,8 +151,8 @@ macro "vc_generate" : tactic =>
   `(tactic|
     under_exists =>
       apply check_sound
-      simp ; rfl
-      simp)
+      (simp; try rfl)
+      all_goals (try simp))
 
 /-- `vc_reify` — reify the single `KEnv` into typed per-κ unknowns (arities
     inferred automatically) and normalize the environment lookups, leaving a

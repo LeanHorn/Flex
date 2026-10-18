@@ -105,7 +105,7 @@ attribute [simp] DataDecl.ctors Ty.tuple DEnv.ctorRefine DEnv.nFields DEnv.field
   DEnv.ctorFacts DEnv.ctorMeasures DataDecl.ctorMeasures DEnv.altTy Exp.var? Ty.strengthenLast
   DEnv.caseFacts Formula.conjAll MBody.toTerm DEnv.measEqs DEnv.measNames
 
-macro "generate" : tactic => `(tactic| (vc_generate ; vc_reify))
+macro "generate" : tactic => `(tactic| (vc_generate ; all_goals vc_reify))
 
 @[qualif]
 def Ge1 (i : Int) : Prop := 1 ≤ i

@@ -156,7 +156,17 @@ open Lean Meta Elab Tactic in
   setGoals [bodyMVar.mvarId!]
   evalTactic tacs
   let remaining ← getGoals
-  if remaining.isEmpty then return
+  if remaining.isEmpty then
+    -- Every goal was closed without fixing some witness: any value works, so
+    -- use the type's default (otherwise the proof would keep a metavariable).
+    for w in wits do
+      let w ← instantiateMVars w
+      if w.isMVar then
+        let α ← inferType w
+        let d ← try mkAppOptM ``Inhabited.default #[α, none]
+          catch _ => throwError "under_exists: unconstrained witness of type {α} has no default"
+        w.mvarId!.assign d
+    return
   -- Check which witnesses are still undetermined
   let witExprs ← wits.mapM instantiateMVars
   if witExprs.all (fun w => !w.isMVar) then

@@ -126,10 +126,10 @@ inductive Term : Base → Type where
   | ibvar : Nat → Term .int
   | not   : Term .bool → Term .bool
   | and   : Term .bool → Term .bool → Term .bool
--- NOTE: no cross-base constructors (e.g. `leq : Term .int → Term .int → Term .bool`).
--- Keeping each `Term` homogeneous in its base means an `REnv` update at one base
--- can never affect a term of another base. Cross-base relations go in
--- `Formula` (e.g. `Formula.leq`).
+  /-- Integer comparison, as a boolean term (a condition for `ite`). -/
+  | leqI  : Term .int → Term .int → Term .bool
+  /-- `if c then t else e`, at any sort. -/
+  | ite   : (b : Base) → Term .bool → Term b → Term b → Term b
 
 /-- First-order formulas over `Term`s.
 

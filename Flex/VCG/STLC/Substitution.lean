@@ -16,6 +16,8 @@ def Term.fv : {b : Base} → Term b → List EVar
   | _, .ibvar _     => []
   | _, .not t       => Term.fv t
   | _, .and t₁ t₂   => Term.fv t₁ ++ Term.fv t₂
+  | _, .leqI t₁ t₂  => Term.fv t₁ ++ Term.fv t₂
+  | _, .ite _ c t e => Term.fv c ++ Term.fv t ++ Term.fv e
 
 /-- Open the `BVar` at level `k` with a free var `x`, and
     *shift every deeper de Bruijn index down by one* (proper LN binder
@@ -33,6 +35,8 @@ def Term.openBVar (k : Nat) (x : EVar) : {b : Base} → Term b → Term b
       if j = k then .fvar .int x else if k < j then .ibvar (j - 1) else .ibvar j
   | _, .not t        => .not (Term.openBVar k x t)
   | _, .and t₁ t₂    => .and (Term.openBVar k x t₁) (Term.openBVar k x t₂)
+  | _, .leqI t₁ t₂   => .leqI (Term.openBVar k x t₁) (Term.openBVar k x t₂)
+  | _, .ite b c t e  => .ite b (Term.openBVar k x c) (Term.openBVar k x t) (Term.openBVar k x e)
 
 /-! ## 2. Formula operations -/
 
@@ -165,11 +169,17 @@ theorem Term.fv_openBVar {k : Nat} {x z : EVar} : ∀ {b : Base} (t : Term b),
     split
     · simp [Term.fv]
     · split <;> simp [Term.fv]
-  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
+  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ | leqI _ _ ih₁ ih₂ =>
     simp only [Term.openBVar, Term.fv, List.mem_append]
     rintro (h | h)
     · rcases ih₁ h with h | h <;> simp [h]
     · rcases ih₂ h with h | h <;> simp [h]
+  | ite _ c t e ihc iht ihe =>
+    simp only [Term.openBVar, Term.fv, List.mem_append]
+    rintro ((h | h) | h)
+    · rcases ihc h with h | h <;> simp [h]
+    · rcases iht h with h | h <;> simp [h]
+    · rcases ihe h with h | h <;> simp [h]
   | not _ ih => simpa [Term.openBVar, Term.fv] using ih
 
 theorem Formula.fv_openBVar {x z : EVar} (φ : Formula) : ∀ {k : Nat},
@@ -248,6 +258,8 @@ def Term.hasBVar (b : Base) (k : Nat) : {b' : Base} → Term b' → Prop
   | _, .ibvar _    => False
   | _, .not t      => Term.hasBVar b k t
   | _, .and t₁ t₂  => Term.hasBVar b k t₁ ∨ Term.hasBVar b k t₂
+  | _, .leqI t₁ t₂ => Term.hasBVar b k t₁ ∨ Term.hasBVar b k t₂
+  | _, .ite _ c t e => Term.hasBVar b k c ∨ Term.hasBVar b k t ∨ Term.hasBVar b k e
 
 /-- `Formula.hasBVar b k φ`: φ contains at least one `Term.bvar b k`. -/
 def Formula.hasBVar (b : Base) (k : Nat) : Formula → Prop
@@ -281,6 +293,8 @@ def Term.hasMBVar (k : Nat) : {b' : Base} → Term b' → Prop
   | _, .ibvar j    => k = j
   | _, .not t      => Term.hasMBVar k t
   | _, .and t₁ t₂  => Term.hasMBVar k t₁ ∨ Term.hasMBVar k t₂
+  | _, .leqI t₁ t₂ => Term.hasMBVar k t₁ ∨ Term.hasMBVar k t₂
+  | _, .ite _ c t e => Term.hasMBVar k c ∨ Term.hasMBVar k t ∨ Term.hasMBVar k e
 
 def Formula.hasMBVar (k : Nat) : Formula → Prop
   | .tt | .ff => False
@@ -420,6 +434,8 @@ theorem Term.hasBVar_openBVar {b'' : Base} (t : Term b'') (b : Base) (i k : Nat)
   | mfvar _ _ => simp [Term.openBVar, Term.hasBVar]
   | ibvar j => simp only [Term.openBVar]; split <;> (try split) <;> simp [Term.hasBVar]
   | add t₁ t₂ ih1 ih2 => simp only [Term.openBVar, Term.hasBVar, ih1, ih2]; grind
+  | leqI t₁ t₂ ih1 ih2 => simp only [Term.openBVar, Term.hasBVar, ih1, ih2]; grind
+  | ite _ c t e ihc iht ihe => simp only [Term.openBVar, Term.hasBVar, ihc, iht, ihe]; grind
   | not t ih  => simp only [Term.openBVar, Term.hasBVar, ih]
   | and t₁ t₂ ih1 ih2 => simp only [Term.openBVar, Term.hasBVar, ih1, ih2]; grind
 
@@ -578,6 +594,8 @@ def Term.substB (σ : BSubst) : {b : Base} → Term b → Term (b.substB σ)
   | _, .ibvar k   => .ibvar k
   | _, .not t     => .not (Term.substB σ t)
   | _, .and t₁ t₂ => .and (Term.substB σ t₁) (Term.substB σ t₂)
+  | _, .leqI t₁ t₂ => .leqI (Term.substB σ t₁) (Term.substB σ t₂)
+  | _, .ite _ c t e => .ite _ (Term.substB σ c) (Term.substB σ t) (Term.substB σ e)
 
 def Formula.substB (σ : BSubst) : Formula → Formula
   | .tt           => .tt
@@ -607,8 +625,11 @@ theorem Val.inj_injective (s : BSort) {v w : s.ty} : Val.inj s v = Val.inj s w �
   intro b t
   induction t with
   | const _ _ | bvar _ _ | fvar _ _ | mbvar _ _ | mfvar _ _ | ibvar _ => rfl
-  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
+  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ | leqI _ _ ih₁ ih₂ =>
     simp only [Term.substB, Term.fv]; exact congr (congrArg (· ++ ·) ih₁) ih₂
+  | ite _ c t e ihc iht ihe =>
+    simp only [Term.substB, Term.fv, iht, ihe]
+    exact congrArg (· ++ Term.fv t ++ Term.fv e) ihc
   | not _ ih => simp only [Term.substB, Term.fv]; exact ih
 
 @[simp] theorem Formula.fv_substB (σ : BSubst) (φ : Formula) : (φ.substB σ).fv = φ.fv := by
@@ -744,6 +765,8 @@ def Term.wfB (kctx : List Kind) (ctx : List (Option Base)) : {b : Base} → Term
   | _, .ibvar i   => decide (i < ctx.length)
   | _, .not t     => Term.wfB kctx ctx t
   | _, .and t₁ t₂ => Term.wfB kctx ctx t₁ && Term.wfB kctx ctx t₂
+  | _, .leqI t₁ t₂ => Term.wfB kctx ctx t₁ && Term.wfB kctx ctx t₂
+  | _, .ite _ c t e => Term.wfB kctx ctx c && Term.wfB kctx ctx t && Term.wfB kctx ctx e
 
 def Formula.wfB (kctx : List Kind) (ctx : List (Option Base)) : Formula → Bool
   | .tt | .ff       => true
@@ -788,13 +811,21 @@ theorem Term.wfB_hasBVar {kctx : List Kind} {ctx : List (Option Base)} :
     obtain ⟨rfl, rfl⟩ := h
     simp only [Term.wfB, Bool.and_eq_true, beq_iff_eq] at hw
     exact hw.1
-  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
+  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ | leqI _ _ ih₁ ih₂ =>
     intro hw b k h
     simp only [Term.wfB, Bool.and_eq_true] at hw
     simp only [Term.hasBVar] at h
     rcases h with h | h
     · exact ih₁ hw.1 b k h
     · exact ih₂ hw.2 b k h
+  | ite _ c t e ihc iht ihe =>
+    intro hw b k h
+    simp only [Term.wfB, Bool.and_eq_true] at hw
+    simp only [Term.hasBVar] at h
+    rcases h with h | h | h
+    · exact ihc hw.1.1 b k h
+    · exact iht hw.1.2 b k h
+    · exact ihe hw.2 b k h
   | not _ ih =>
     intro hw b k h
     simp only [Term.wfB] at hw
@@ -860,13 +891,21 @@ theorem Term.wfB_hasMBVar {kctx : List Kind} {ctx : List (Option Base)} :
     intro hw k h
     simp only [Term.hasMBVar] at h; subst h
     simpa [Term.wfB] using hw
-  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
+  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ | leqI _ _ ih₁ ih₂ =>
     intro hw k h
     simp only [Term.wfB, Bool.and_eq_true] at hw
     simp only [Term.hasMBVar] at h
     rcases h with h | h
     · exact ih₁ hw.1 k h
     · exact ih₂ hw.2 k h
+  | ite _ c t e ihc iht ihe =>
+    intro hw k h
+    simp only [Term.wfB, Bool.and_eq_true] at hw
+    simp only [Term.hasMBVar] at h
+    rcases h with h | h | h
+    · exact ihc hw.1.1 k h
+    · exact iht hw.1.2 k h
+    · exact ihe hw.2 k h
   | not _ ih => intro hw k h; exact ih hw k h
 
 theorem Formula.wfB_hasMBVar (φ : Formula) : ∀ {kctx : List Kind} {ctx : List (Option Base)},
@@ -956,12 +995,19 @@ theorem Term.hasBVar_substB (σ : BSubst) (b : Base) (k : Nat) :
     intro h
     simp only [Term.substB, Term.hasBVar] at h
     exact ⟨b', h.1, rfl, h.2⟩
-  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
+  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ | leqI _ _ ih₁ ih₂ =>
     intro h
     simp only [Term.substB, Term.hasBVar] at h
     rcases h with h | h
     · obtain ⟨b₀, hb, h⟩ := ih₁ h; exact ⟨b₀, hb, Or.inl h⟩
     · obtain ⟨b₀, hb, h⟩ := ih₂ h; exact ⟨b₀, hb, Or.inr h⟩
+  | ite _ c t e ihc iht ihe =>
+    intro h
+    simp only [Term.substB, Term.hasBVar] at h
+    rcases h with h | h | h
+    · obtain ⟨b₀, hb, h⟩ := ihc h; exact ⟨b₀, hb, Or.inl h⟩
+    · obtain ⟨b₀, hb, h⟩ := iht h; exact ⟨b₀, hb, Or.inr (Or.inl h)⟩
+    · obtain ⟨b₀, hb, h⟩ := ihe h; exact ⟨b₀, hb, Or.inr (Or.inr h)⟩
   | not _ ih => intro h; simp only [Term.substB, Term.hasBVar] at h; exact ih h
 
 theorem Formula.hasBVar_substB (σ : BSubst) (b : Base) (φ : Formula) :
@@ -1186,6 +1232,8 @@ def Term.ftv : {b : Base} → Term b → List TVar
   | _, .ibvar _    => []
   | _, .not t      => Term.ftv t
   | _, .and t₁ t₂  => Term.ftv t₁ ++ Term.ftv t₂
+  | _, .leqI t₁ t₂ => Term.ftv t₁ ++ Term.ftv t₂
+  | _, .ite _ c t e => Term.ftv c ++ Term.ftv t ++ Term.ftv e
 
 def Formula.ftv : Formula → List TVar
   | .tt | .ff     => []
@@ -2112,6 +2160,12 @@ theorem Term.interp_write_fresh {b : Base} (t : Term b)
   | add t₁ t₂ ih₁ ih₂ =>
     simp only [Term.fv, List.mem_append, not_or] at h
     simp only [Term.interp, ih₁ h.1, ih₂ h.2]
+  | leqI t₁ t₂ ih₁ ih₂ =>
+    simp only [Term.fv, List.mem_append, not_or] at h
+    simp only [Term.interp, ih₁ h.1, ih₂ h.2]
+  | ite _ c t e ihc iht ihe =>
+    simp only [Term.fv, List.mem_append, not_or] at h
+    simp only [Term.interp, ihc h.1.1, iht h.1.2, ihe h.2]
   | not t ih => simp only [Term.interp, ih h]
   | and t₁ t₂ ih₁ ih₂ =>
     simp only [Term.fv, List.mem_append, not_or] at h
@@ -2234,6 +2288,16 @@ theorem Term.interp_openBVar {b : Base} (x : EVar) (w : Val) :
       intro γ k hk hx
       simp only [Term.fv, List.mem_append, not_or] at hx
       simp only [Term.openBVar, Term.interp, ih₁ γ k hk hx.1, ih₂ γ k hk hx.2]
+  | leqI t₁ t₂ ih₁ ih₂ =>
+      intro γ k hk hx
+      simp only [Term.fv, List.mem_append, not_or] at hx
+      simp only [Term.openBVar, Term.interp, ih₁ γ k hk hx.1, ih₂ γ k hk hx.2]
+  | ite _ c t e ihc iht ihe =>
+      intro γ k hk hx
+      simp only [Term.fv, List.mem_append, not_or] at hx
+      simp only [Term.openBVar, Term.interp, ihc γ k hk hx.1.1, iht γ k hk hx.1.2,
+        ihe γ k hk hx.2]
+      rfl
   | not t ih =>
       intro γ k hk hx
       simp only [Term.fv] at hx

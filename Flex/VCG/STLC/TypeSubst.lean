@@ -40,6 +40,8 @@ def Term.sorts : {b : Base} → Term b → List Base
   | _, .ibvar _   => []
   | _, .not t     => Term.sorts t
   | _, .and t₁ t₂ => Term.sorts t₁ ++ Term.sorts t₂
+  | _, .leqI t₁ t₂ => Term.sorts t₁ ++ Term.sorts t₂
+  | _, .ite _ c t e => Term.sorts c ++ Term.sorts t ++ Term.sorts e
 
 /-- The sorts a formula reads at (its terms' leaves and quantifier domains). -/
 def Formula.sorts : Formula → List Base
@@ -125,13 +127,27 @@ theorem Term.ival_substB (θ : BSubst) {γ γ' : REnv} (hmap : γ'.map = γ.map)
   | ibvar k =>
     intro _ hmbv _
     simp [Term.ival, Term.substB, Term.interp, hmbv k rfl, Base.substB]
-  | add t₁ t₂ ih₁ ih₂ | and t₁ t₂ ih₁ ih₂ =>
+  | add t₁ t₂ ih₁ ih₂ | and t₁ t₂ ih₁ ih₂ | leqI t₁ t₂ ih₁ ih₂ =>
     intro hbv hmbv hA
     have h₁ := ih₁ (fun c k hk => hbv c k (Or.inl hk)) (fun k hk => hmbv k (Or.inl hk)) hA.left
     have h₂ := ih₂ (fun c k hk => hbv c k (Or.inr hk)) (fun k hk => hmbv k (Or.inr hk)) hA.right
     simp only [Term.ival, Term.substB, Term.interp, Base.substB, Base.resolve, Val.inj,
       Val.iconst.injEq, Val.bconst.injEq] at h₁ h₂ ⊢
     rw [h₁, h₂]
+  | ite b c t e ihc iht ihe =>
+    intro hbv hmbv hA
+    have hc := ihc (fun c' k hk => hbv c' k (Or.inl hk)) (fun k hk => hmbv k (Or.inl hk))
+      hA.left.left
+    have ht := iht (fun c' k hk => hbv c' k (Or.inr (Or.inl hk)))
+      (fun k hk => hmbv k (Or.inr (Or.inl hk))) hA.left.right
+    have he := ihe (fun c' k hk => hbv c' k (Or.inr (Or.inr hk)))
+      (fun k hk => hmbv k (Or.inr (Or.inr hk))) hA.right
+    simp only [Term.ival, Term.substB, Base.substB, Base.resolve, Val.inj, Val.bconst.injEq] at hc
+    simp only [Term.ival, Term.substB, Term.interp] at ht he ⊢
+    rw [hc]
+    by_cases hcv : Term.interp γ c = true
+    · simp only [hcv, if_true]; exact ht
+    · simp only [hcv, if_false, Bool.false_eq_true]; exact he
   | not t ih =>
     intro hbv hmbv hA
     have h₁ := ih hbv hmbv hA
@@ -236,9 +252,19 @@ theorem Term.substB_id : ∀ {b : Base} (t : Term b),
   | bvar b k => cases b <;> rfl
   | fvar b x => cases b <;> rfl
   | mbvar _ _ | mfvar _ _ | ibvar _ => rfl
-  | add t₁ t₂ ih₁ ih₂ | and t₁ t₂ ih₁ ih₂ =>
+  | add t₁ t₂ ih₁ ih₂ | and t₁ t₂ ih₁ ih₂ | leqI t₁ t₂ ih₁ ih₂ =>
     simp only [Base.substB, Sigma.mk.injEq, heq_eq_eq, true_and] at ih₁ ih₂
     simp only [Term.substB, Base.substB, ih₁, ih₂]
+  | ite b c t e ihc iht ihe =>
+    simp only [Base.substB, Sigma.mk.injEq, heq_eq_eq, true_and] at ihc
+    simp only [Term.substB, ihc]
+    generalize t.substB BSubst.id = u₁ at iht
+    generalize e.substB BSubst.id = u₂ at ihe
+    revert u₁ u₂
+    rw [Base.substB_id]
+    intro u₁ h₁ u₂ h₂
+    simp only [Sigma.mk.injEq, heq_eq_eq, true_and] at h₁ h₂
+    rw [h₁, h₂]
   | not t ih =>
     simp only [Base.substB, Sigma.mk.injEq, heq_eq_eq, true_and] at ih
     simp only [Term.substB, Base.substB, ih]
@@ -302,9 +328,16 @@ theorem Term.ftv_of_mem_sorts {a : TVar} : ∀ {b : Base} (t : Term b), .tfvar a
   | const b _ | bvar b _ | fvar b _ =>
     intro h; simp only [Term.sorts, List.mem_singleton] at h; subst h; simp [Term.ftv, Base.ftv]
   | mbvar _ _ | mfvar _ _ | ibvar _ => intro h; simp [Term.sorts] at h
-  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
+  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ | leqI _ _ ih₁ ih₂ =>
     intro h; simp only [Term.sorts, List.mem_append] at h
     simp only [Term.ftv, List.mem_append]; exact h.imp ih₁ ih₂
+  | ite _ c t e ihc iht ihe =>
+    intro h; simp only [Term.sorts, List.mem_append] at h
+    simp only [Term.ftv, List.mem_append]
+    rcases h with (h | h) | h
+    · exact Or.inl (Or.inl (ihc h))
+    · exact Or.inl (Or.inr (iht h))
+    · exact Or.inr (ihe h)
   | not _ ih => intro h; exact ih h
 
 theorem Formula.ftv_of_mem_sorts {a : TVar} (φ : Formula) : .tfvar a ∈ φ.sorts → a ∈ φ.ftv := by
@@ -356,13 +389,21 @@ theorem Term.sortOK_of_mem_sorts {kctx : List Kind} {ctx : List (Option Base)} :
     cases c with
     | tfvar a => obtain ⟨_, k⟩ := a; simpa [Term.wfB, Base.fvOK, Base.sortOK] using hw
     | _ => simp_all [Term.wfB, Base.fvOK, Base.sortOK]
-  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
+  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ | leqI _ _ ih₁ ih₂ =>
     intro hw c hc
     simp only [Term.wfB, Bool.and_eq_true] at hw
     simp only [Term.sorts, List.mem_append] at hc
     rcases hc with hc | hc
     · exact ih₁ hw.1 c hc
     · exact ih₂ hw.2 c hc
+  | ite _ c t e ihc iht ihe =>
+    intro hw c' hc
+    simp only [Term.wfB, Bool.and_eq_true] at hw
+    simp only [Term.sorts, List.mem_append] at hc
+    rcases hc with (hc | hc) | hc
+    · exact ihc hw.1.1 c' hc
+    · exact iht hw.1.2 c' hc
+    · exact ihe hw.2 c' hc
   | not _ ih => intro hw c hc; exact ih hw c hc
 
 theorem Formula.sortOK_of_mem_sorts (φ : Formula) : ∀ {kctx : List Kind} {ctx : List (Option Base)},

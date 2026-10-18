@@ -17,6 +17,8 @@ def Term.interp (γ : REnv) : {b : Base} → Term b → b.sem γ.sorts
   | _, .ibvar k     => Val.proj .int (γ.bv[k]?.getD (.iconst 0))
   | _, .not t       => !Term.interp γ t
   | _, .and t₁ t₂   => Term.interp γ t₁ && Term.interp γ t₂
+  | _, .leqI t₁ t₂  => decide (Term.interp γ t₁ ≤ Term.interp γ t₂)
+  | _, .ite _ c t e => if Term.interp γ c then Term.interp γ t else Term.interp γ e
 
 /-- Interpret a (now κ-free) formula under `γ`. Each quantifier binds `BVar 0`,
     so it `push`es its witness value as the new innermost de Bruijn slot of `γ`

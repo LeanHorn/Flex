@@ -133,9 +133,12 @@ theorem Term.interp_nofv (γ : REnv) (m : EVar → Val) :
   | mbvar _ _ => intro _; rfl
   | ibvar _ => intro _; rfl
   | mfvar _ _ => intro h; simp [Term.fv] at h
-  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ =>
+  | add _ _ ih₁ ih₂ | and _ _ ih₁ ih₂ | leqI _ _ ih₁ ih₂ =>
     intro h; simp only [Term.fv, List.append_eq_nil_iff] at h
     simp only [Term.interp, ih₁ h.1, ih₂ h.2]
+  | ite _ c t e ihc iht ihe =>
+    intro h; simp only [Term.fv, List.append_eq_nil_iff] at h
+    simp only [Term.interp, ihc h.1.1, iht h.1.2, ihe h.2]
   | not _ ih => intro h; simp only [Term.fv] at h; simp only [Term.interp, ih h]
 
 theorem Formula.interp_nofv (φ : Formula) : ∀ (γ : REnv) (m : EVar → Val), φ.fv = [] →

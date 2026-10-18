@@ -61,24 +61,30 @@ theorem Formula.interp_conjAll (γ : REnv) : ∀ (φs : List Formula),
   | [] => by simp [Formula.conjAll, Formula.interp]
   | φ :: φs => by simp [Formula.conjAll, Formula.interp, Formula.interp_conjAll γ φs]
 
-theorem MBody.interp_toTerm (γ : REnv) (fld : Nat → Term .int) (msr : String → Nat → Term .int) :
+theorem MBody.interp_toTerm (γ : REnv) (fld : Nat → Term .int) (fldB : Nat → Term .bool)
+    (msr : String → Nat → Term .int) :
     ∀ (b : MBody),
-      Term.interp γ (b.toTerm fld msr) =
-        b.eval (fun i => Term.interp γ (fld i)) (fun i m => Term.interp γ (msr m i))
+      Term.interp γ (b.toTerm fld fldB msr) =
+        b.eval (fun i => Term.interp γ (fld i)) (fun i => Term.interp γ (fldB i))
+          (fun i m => Term.interp γ (msr m i))
   | .const _ => rfl
   | .field _ => rfl
   | .meas _ _ => rfl
   | .add x y => by
-    simp only [MBody.toTerm, MBody.eval, Term.interp, MBody.interp_toTerm γ fld msr x,
-      MBody.interp_toTerm γ fld msr y]
+    simp only [MBody.toTerm, MBody.eval, Term.interp, MBody.interp_toTerm γ fld fldB msr x,
+      MBody.interp_toTerm γ fld fldB msr y]
   | .iteLe x y t e => by
-    simp only [MBody.toTerm, MBody.eval, Term.interp, MBody.interp_toTerm γ fld msr x,
-      MBody.interp_toTerm γ fld msr y, MBody.interp_toTerm γ fld msr t,
-      MBody.interp_toTerm γ fld msr e, decide_eq_true_eq]
+    simp only [MBody.toTerm, MBody.eval, Term.interp, MBody.interp_toTerm γ fld fldB msr x,
+      MBody.interp_toTerm γ fld fldB msr y, MBody.interp_toTerm γ fld fldB msr t,
+      MBody.interp_toTerm γ fld fldB msr e, decide_eq_true_eq]
+  | .iteB i t e => by
+    simp only [MBody.toTerm, MBody.eval, Term.interp, MBody.interp_toTerm γ fld fldB msr t,
+      MBody.interp_toTerm γ fld fldB msr e]
 
-theorem MBody.eval_congr {n : Nat} {fv gv : Nat → Int} {f g : Nat → String → Int}
-    (hv : ∀ i < n, fv i = gv i) (hfg : ∀ i < n, ∀ m, f i m = g i m) :
-    ∀ (b : MBody), b.idxOK n = true → b.eval fv f = b.eval gv g
+theorem MBody.eval_congr {n : Nat} {fv gv : Nat → Int} {fb gb : Nat → Bool}
+    {f g : Nat → String → Int}
+    (hv : ∀ i < n, fv i = gv i) (hb : ∀ i < n, fb i = gb i) (hfg : ∀ i < n, ∀ m, f i m = g i m) :
+    ∀ (b : MBody), b.idxOK n = true → b.eval fv fb f = b.eval gv gb g
   | .const _, _ => rfl
   | .field i, h => by
     simp only [MBody.idxOK, decide_eq_true_eq] at h
@@ -88,11 +94,15 @@ theorem MBody.eval_congr {n : Nat} {fv gv : Nat → Int} {f g : Nat → String �
     exact hfg i h m
   | .add x y, h => by
     simp only [MBody.idxOK, Bool.and_eq_true] at h
-    simp only [MBody.eval, MBody.eval_congr hv hfg x h.1, MBody.eval_congr hv hfg y h.2]
+    simp only [MBody.eval, MBody.eval_congr hv hb hfg x h.1, MBody.eval_congr hv hb hfg y h.2]
   | .iteLe x y t e, h => by
     simp only [MBody.idxOK, Bool.and_eq_true] at h
-    simp only [MBody.eval, MBody.eval_congr hv hfg x h.1.1.1, MBody.eval_congr hv hfg y h.1.1.2,
-      MBody.eval_congr hv hfg t h.1.2, MBody.eval_congr hv hfg e h.2]
+    simp only [MBody.eval, MBody.eval_congr hv hb hfg x h.1.1.1, MBody.eval_congr hv hb hfg y h.1.1.2,
+      MBody.eval_congr hv hb hfg t h.1.2, MBody.eval_congr hv hb hfg e h.2]
+  | .iteB i t e, h => by
+    simp only [MBody.idxOK, Bool.and_eq_true, decide_eq_true_eq] at h
+    simp only [MBody.eval, hb i h.1.1, MBody.eval_congr hv hb hfg t h.1.2,
+      MBody.eval_congr hv hb hfg e h.2]
 
 /-! ## Payloads -/
 
@@ -205,6 +215,13 @@ theorem DEnv.ctorRefine_sound {κ : KEnv} {de : DEnv} {C : String} {j : Nat} {e 
           simp [Term.interp]
         · have hi' : ¬ i < (w.fieldsN (de.nFields C j)).length := by simp [hf, hi]
           simp [hi, hi', Term.interp]
+      · funext i
+        by_cases hi : i < as.length
+        · have hi' : i < (w.fieldsN (de.nFields C j)).length := by simp [hf, hi]
+          simp [hi, hi', hf, List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi]
+          simp [Term.interp]
+        · have hi' : ¬ i < (w.fieldsN (de.nFields C j)).length := by simp [hf, hi]
+          simp [hi, hi', Term.interp]
       · funext i m'
         by_cases hi : i < as.length
         · have hi' : i < (w.fieldsN (de.nFields C j)).length := by simp [hf, hi]
@@ -236,7 +253,10 @@ theorem DEnv.caseFacts_sound {κ : KEnv} {de : DEnv} {C : String} {j : Nat} {x :
     simp only [Term.interp, hx, hmeas]
     rw [DEnv.measEval_ctor]
     simp only [hd, Option.bind_some, DataDecl.measBody?_of_mem (hnd d hd) hmb]
-    apply MBody.eval_congr ?_ ?_ mb.2 hidx'
+    apply MBody.eval_congr ?_ ?_ ?_ mb.2 hidx'
+    · intro i hi
+      obtain ⟨h, hb⟩ := hbv i hi
+      simp only [dif_pos h, hb, Option.getD_some]
     · intro i hi
       obtain ⟨h, hb⟩ := hbv i hi
       simp only [dif_pos h, hb, Option.getD_some]

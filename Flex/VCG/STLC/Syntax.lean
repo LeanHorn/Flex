@@ -124,6 +124,9 @@ inductive Term : Base → Type where
   /-- The value bound at de Bruijn index `k`, read as an integer whatever the
       binder's sort (a payload field, in a measure equation). -/
   | ibvar : Nat → Term .int
+  /-- The value bound at de Bruijn index `k`, read as a boolean whatever the
+      binder's sort (a payload field, in a measure equation). -/
+  | bbvar : Nat → Term .bool
   | not   : Term .bool → Term .bool
   | and   : Term .bool → Term .bool → Term .bool
   /-- Integer comparison, as a boolean term (a condition for `ite`). -/
@@ -627,27 +630,32 @@ def Ty.tuple : List Ty → Ty
 
 /-- A measure's body for one constructor, over that constructor's fields:
     an integer built from literals, `Int` fields, measures of fields, `+`, and
-    conditionals on comparisons. -/
+    conditionals — on a comparison, or on a `Bool` field (`and`/`or`/`not` of
+    fields by nesting). -/
 inductive MBody where
   | const : Int → MBody
   | field : Nat → MBody               -- the (`Int`) field `i`
   | meas  : String → Nat → MBody      -- measure `m` of field `i`
   | add   : MBody → MBody → MBody
   | iteLe : MBody → MBody → MBody → MBody → MBody   -- `if a ≤ b then t else e`
+  | iteB  : Nat → MBody → MBody → MBody              -- `if (Bool field i) then t else e`
   deriving Repr
 
 /-- `max a b`, as a conditional. -/
 @[reducible] def MBody.max (a b : MBody) : MBody := .iteLe a b b a
 
-/-- A measure body as a refinement term, given terms for the fields and for
-    the fields' measures. -/
-def MBody.toTerm (fld : Nat → Term .int) (msr : String → Nat → Term .int) : MBody → Term .int
+/-- A measure body as a refinement term, given terms for the (`Int` and
+    `Bool`) fields and for the fields' measures. -/
+def MBody.toTerm (fld : Nat → Term .int) (fldB : Nat → Term .bool) (msr : String → Nat → Term .int) :
+    MBody → Term .int
   | .const n  => .const .int n
   | .field i  => fld i
   | .meas m i => msr m i
-  | .add a b  => .add (a.toTerm fld msr) (b.toTerm fld msr)
+  | .add a b  => .add (a.toTerm fld fldB msr) (b.toTerm fld fldB msr)
   | .iteLe a b t e =>
-      .ite .int (.leqI (a.toTerm fld msr) (b.toTerm fld msr)) (t.toTerm fld msr) (e.toTerm fld msr)
+      .ite .int (.leqI (a.toTerm fld fldB msr) (b.toTerm fld fldB msr))
+        (t.toTerm fld fldB msr) (e.toTerm fld fldB msr)
+  | .iteB i t e => .ite .int (fldB i) (t.toTerm fld fldB msr) (e.toTerm fld fldB msr)
 
 /-- Every field a body reads is one of the `n` fields. -/
 def MBody.idxOK (n : Nat) : MBody → Bool
@@ -656,6 +664,7 @@ def MBody.idxOK (n : Nat) : MBody → Bool
   | .meas _ i => decide (i < n)
   | .add a b  => a.idxOK n && b.idxOK n
   | .iteLe a b t e => a.idxOK n && b.idxOK n && t.idxOK n && e.idxOK n
+  | .iteB i t e => decide (i < n) && t.idxOK n && e.idxOK n
 
 /-- Conjoin `r` into the refinement of the last component of a payload type
     with `n + 1` components (types without a refinement are left alone). -/
@@ -730,6 +739,7 @@ def DEnv.ctorFacts (de : DEnv) (C : String) (j : Nat) (as : List EVar) : Refinem
   .fmla (Formula.conjAll ((de.ctorMeasures C j).map fun mb =>
     .eq .int (.mbvar mb.1 0)
       (mb.2.toTerm (fun i => if i < as.length then .fvar .int (as.getD i "") else .const .int 0)
+        (fun i => if i < as.length then .fvar .bool (as.getD i "") else .const .bool false)
         (fun m' i => if i < as.length then .mfvar m' (as.getD i "") else .const .int 0))))
 
 /-- What matching `x` against `C j` (with `n` fields) reveals, read at the
@@ -738,7 +748,8 @@ def DEnv.ctorFacts (de : DEnv) (C : String) (j : Nat) (as : List EVar) : Refinem
 def DEnv.caseFacts (de : DEnv) (C : String) (j n : Nat) (x : EVar) : Refinement :=
   .fmla (Formula.conjAll ((de.ctorMeasures C j).map fun mb =>
     .eq .int (.mfvar mb.1 x)
-      (mb.2.toTerm (fun i => .ibvar (n - 1 - i)) (fun m' i => .mbvar m' (n - 1 - i)))))
+      (mb.2.toTerm (fun i => .ibvar (n - 1 - i)) (fun i => .bbvar (n - 1 - i))
+        (fun m' i => .mbvar m' (n - 1 - i)))))
 
 /-- The names of the measures of `C`. -/
 def DEnv.measNames (de : DEnv) (C : String) : List String :=
@@ -802,13 +813,15 @@ theorem Val.sizeOf_le_of_mem_fieldsN : ∀ {n : Nat} {w f : Val}, f ∈ w.fields
   | _ + 2, .iconst _, _, h | _ + 2, .bconst _, _, h | _ + 2, .clos _, _, h
   | _ + 2, .fclos _, _, h | _ + 2, .ctor _ _ _, _, h => by simp [Val.fieldsN] at h
 
-/-- Evaluate a measure body, given the (integer) fields and their measures. -/
-def MBody.eval (fv : Nat → Int) (fm : Nat → String → Int) : MBody → Int
+/-- Evaluate a measure body, given the (integer and boolean) fields and their
+    measures. -/
+def MBody.eval (fv : Nat → Int) (fb : Nat → Bool) (fm : Nat → String → Int) : MBody → Int
   | .const n  => n
   | .field i  => fv i
   | .meas m i => fm i m
-  | .add a b  => a.eval fv fm + b.eval fv fm
-  | .iteLe a b t e => if a.eval fv fm ≤ b.eval fv fm then t.eval fv fm else e.eval fv fm
+  | .add a b  => a.eval fv fb fm + b.eval fv fb fm
+  | .iteLe a b t e => if a.eval fv fb fm ≤ b.eval fv fb fm then t.eval fv fb fm else e.eval fv fb fm
+  | .iteB i t e => if fb i then t.eval fv fb fm else e.eval fv fb fm
 
 /-- The value of measure `m` on `v`. -/
 def DEnv.measEval (de : DEnv) (m : String) : Val → Int
@@ -818,6 +831,8 @@ def DEnv.measEval (de : DEnv) (m : String) : Val → Int
       body.eval
         (fun i => if h : i < (w.fieldsN (de.nFields C j)).length then
           Val.proj .int (w.fieldsN (de.nFields C j))[i] else 0)
+        (fun i => if h : i < (w.fieldsN (de.nFields C j)).length then
+          Val.proj .bool (w.fieldsN (de.nFields C j))[i] else false)
         (fun i m' => if h : i < (w.fieldsN (de.nFields C j)).length then
           DEnv.measEval de m' (w.fieldsN (de.nFields C j))[i] else 0)
     | none => 0
@@ -833,6 +848,8 @@ theorem DEnv.measEval_ctor (de : DEnv) (m : String) (C : String) (j : Nat) (w : 
       | some body => body.eval
           (fun i => if h : i < (w.fieldsN (de.nFields C j)).length then
             Val.proj .int (w.fieldsN (de.nFields C j))[i] else 0)
+          (fun i => if h : i < (w.fieldsN (de.nFields C j)).length then
+            Val.proj .bool (w.fieldsN (de.nFields C j))[i] else false)
           (fun i m' => if h : i < (w.fieldsN (de.nFields C j)).length then
             de.measEval m' (w.fieldsN (de.nFields C j))[i] else 0)
       | none => 0 := by

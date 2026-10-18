@@ -393,3 +393,53 @@ abbrev heightLeSizeTy : Ty :=
 theorem meas_heightLeSize (κ : KEnv) : topVC κ [] sizeNonnegE heightLeSizeTy htreeEnv := by
   simp [topVC, sizeNonnegE, heightLeSizeTy, htreeEnv, htreeDecl, treeDecl]
   grind
+
+/-! ## Reading `Bool` fields: `countTrue`
+
+  `iteB i t e` branches on the `Bool` field `i` (`and`/`or`/`not` of fields by
+  nesting); it becomes an `ite` on that field in the logic. -/
+
+/-- `blist = BNil | BCons (Bool, blist)` with `countTrue BNil = 0`,
+    `countTrue (BCons b t) = (if b then 1 else 0) + countTrue t`. -/
+def blistDecl : DataDecl :=
+  { params := [], ctorFields := [("BNil", []), ("BCons", [.refine .bool ttR, .dataL "blist" []])],
+    measures := [("countTrue",
+      [.const 0, .iteB 0 (.add (.const 1) (.meas "countTrue" 1)) (.meas "countTrue" 1)])] }
+def blistEnv : DEnv := [("blist", blistDecl)]
+
+theorem blistEnv_wf : blistEnv.wfB = true := by decide
+
+abbrev countB (i : Nat) : Term .int := .mbvar "countTrue" i
+
+/-- `count : xs:blist → Int{ν = countTrue xs}`:
+    `fix go. λxs. case xs of BNil _ => 0
+                  | BCons p => let (b, t) = p; let r = go t; if b then 1 + r else r` -/
+abbrev countTy : Ty :=
+  .arrow (.dataL "blist" []) (.refine .int (.fmla (.eq .int (.bvar .int 0) (countB 1))))
+abbrev countE : Exp :=
+  .fix (caseL (.bvar 0)                                   -- xs=0 go=1
+    [ .iconst 0
+    , .split (.bvar 0)                                    -- t=0 b=1 p=2 xs=3 go=4
+        (.letin (.app (.bvar 4) (.bvar 0))                -- r = go t     (r=0 t=1 b=2)
+        (.ite (.bvar 2)
+          (.letin (.iconst 1) (.add (.bvar 0) (.bvar 1))) -- 1 + r
+          (.bvar 0))) ])                                  -- r
+
+/-- The match records `countTrue xs = (if b then 1 + countTrue t else countTrue t)`;
+    the branch on `b` picks the matching side. -/
+theorem meas_count (κ : KEnv) : topVC κ [] countE countTy blistEnv := by
+  simp [topVC, countE, countTy, blistEnv, blistDecl]
+  grind
+
+/-- `let tt = true; let ff = false; let n = BNil; let l = BCons(ff, n); BCons(tt, l)`
+    has exactly one `true`. -/
+abbrev oneTrueE : Exp :=
+  .letin (.bconst true) (.letin (.bconst false)           -- ff=0 tt=1
+  (.letin (.ctor "blist" 0 [] unitE)                      -- n
+  (.letin (.ctor "blist" 1 [] (.pair (.bvar 1) (.bvar 0)))  -- l = BCons(ff, n)
+  (.ctor "blist" 1 [] (.pair (.bvar 3) (.bvar 0))))))       -- BCons(tt, l)
+
+theorem meas_oneTrue (κ : KEnv) :
+    topVC κ [] oneTrueE (.dataL "blist" [] (.fmla (.eq .int (countB 0) (.const .int 1)))) blistEnv := by
+  simp [topVC, oneTrueE, blistEnv, blistDecl]
+  grind

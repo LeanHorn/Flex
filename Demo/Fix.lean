@@ -1,17 +1,6 @@
 import Flex
 
-/-!
-  # Demo — `pa_cert`, the certifying Predicate Abstraction tactic (paper §5)
-
-  `pa_cert` solves a cut-only constraint `∃κ̄. c` by weakening to the greatest
-  inductive fixpoint and then EMITTING the §5 `bridge` proof term: each cyclic
-  κ-head is discharged by an `And.intro` over per-survivor oracle proofs, which
-  the Lean kernel re-checks. It then LEAVES the κ-free residual `c′` as goals,
-  so each proof closes the residual queries afterwards (here with `grind`).
-
-  Contrast `solve_fixpoint`, which throws the whole residual at `grind` without
-  building a structured certificate for the κ-heads.
--/
+/-! Predicate abstraction and certificate construction with `fix`. -/
 
 -- ─── cyc0: simplest cyclic κ — single self-loop, no acyclic κ ──────────────
 -- Seeded from x (0 ≤ x), loop decrements by 1, check 0 ≤ result.
@@ -26,9 +15,8 @@ def cyc0 : Prop :=
     ∧ (∀ i : Int, κ i x ∧ 1 ≤ i → ∀ ν : Int, ν = i - 1 → κ ν x)  -- loop (cyclic)
     ∧ (∀ i : Int, κ i x → 0 ≤ i)                                  -- check
 
-theorem cyc0_pa_cert : cyc0 := by
-  pa_cert
-  all_goals grind
+theorem cyc0_fix : cyc0 := by
+  fix
 
 -- ─── fibFastVC: the paper's flagship — cyclic κ with `fib` in the contract ──
 -- The contract requires the return value to equal `fib n`, where `fib` is an
@@ -57,11 +45,10 @@ def fibFastVC : Prop :=
           ∧ ((i < n) → k (i + 1) curr (prev + curr) n)))
     ∧ ((n ≤ 1) → 1 = fib_spec n)
 
-theorem fibFastVC_pa_cert : fibFastVC := by
-  pa_cert
-  all_goals grind
+theorem fibFastVC_fix : fibFastVC := by
+  fix
 
 -- The certifying bridge is kernel-re-checked: no `sorryAx`, only the standard
 -- axioms (`propext`/`Classical.choice`/`Quot.sound`) that `grind`/`Int` pull in.
-#print axioms cyc0_pa_cert
-#print axioms fibFastVC_pa_cert
+#print axioms cyc0_fix
+#print axioms fibFastVC_fix

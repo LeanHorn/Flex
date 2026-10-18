@@ -108,7 +108,7 @@ private partial def definitionExpr (cfg : PAScrapeConfig) (e : Expr) : ScrapeM U
 
 end PAScrape
 
-/-- Per-invocation candidates, merged with `@[qualif]` by `pa_cert`/`fix`.
+/-- Per-invocation candidates, merged with `@[qualif]` by `fix`.
     Scraping never registers declarations or marks candidates as proven facts. -/
 def scrapePAQualifiers (body : Expr) (cfg : PAScrapeConfig) : MetaM (Array Expr) := do
   let body ← instantiateMVars body

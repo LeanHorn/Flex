@@ -7,24 +7,25 @@ import Flex.PA.Scrape
 open Lean Elab Meta Tactic
 
 register_option flex.reportQualifiers : Bool := {
-  defValue := true
-  descr := "Show scraped qualifier templates in the Infoview before predicate abstraction."
+  defValue  := false
+  descr     := "Show scraped qualifier templates in the Infoview before predicate abstraction."
 }
 
-private def reportScrapedQualifiers (cfg : PAScrapeConfig) (qs : Array Expr) : TacticM Unit := do
-  unless flex.reportQualifiers.get (← getOptions) do return
-  if cfg.mode == .no && cfg.defs.isEmpty then return
+/-- Wall time includes external solver work, unlike Lean heartbeats. -/
+register_option flex.benchOracles : Bool := {
+  defValue  := false
+  descr     :=
+    "Emit fix phase wall times and candidate counts for oracle benchmarks."
+}
+
+/-- Report scraped qualifiers. -/
+private def reportScrapedQualifiers (qs : Array Expr) : TacticM Unit := do
   withOptions (·.setBool `pp.funBinderTypes true) do
     let header := m!"fix: scraped qualifiers ({qs.size})"
     let entries := qs.toList.mapIdx fun i q => m!"  {i + 1}. {q}"
     logInfo (MessageData.joinSep (header :: entries) "\n")
 
-/-- Wall time includes external solver work, unlike Lean heartbeats. -/
-register_option flex.benchOracles : Bool := {
-  defValue := false
-  descr := "Emit fix phase wall times and candidate counts for oracle benchmarks."
-}
-
+/-- Report a phase's elapsed wall time when benchmarking is enabled. -/
 private def benchFixPhase (phase : String) (act : TacticM α) : TacticM α := do
   unless flex.benchOracles.get (← getOptions) do return ← act
   let start ← IO.monoNanosNow
@@ -33,10 +34,11 @@ private def benchFixPhase (phase : String) (act : TacticM α) : TacticM α := do
   IO.println s!"FIX_PHASE {phase} ns={stop - start}"
   return result
 
-/-- Synthesize predicates and certify their heads, leaving κ-free goals.
-    Uses `proofOracle` for certification when supplied, otherwise `oracle`. -/
-def paCertImpl (oracle : PAOracle := proveLeaf) (scrape : PAScrapeConfig := {})
-    (proofOracle : Option PAOracle := none)
+/-- Run predicate abstraction and build its certificate, leaving residual goals. -/
+def fixImpl
+  (oracle : PAOracle := proveLeaf)
+  (scrape : PAScrapeConfig := {})
+  (proofOracle : Option PAOracle := none)
     : TacticM Unit := withMainContext do
   let (kctx, kvarsInOrder) ← peelKVars
 
@@ -45,13 +47,18 @@ def paCertImpl (oracle : PAOracle := proveLeaf) (scrape : PAScrapeConfig := {})
     let bodyGoal ← getMainGoal
     -- Scrape before `reduce` erases surface predicates and unfolds definitions.
     let rawBody ← bodyGoal.getType
-    let extraQualifiers ← scrapePAQualifiers rawBody scrape
-    reportScrapedQualifiers scrape extraQualifiers
+    let extraQualifiers ←
+      if scrape.mode != .no || !scrape.defs.isEmpty then do
+        let qs ← scrapePAQualifiers rawBody scrape
+        if flex.reportQualifiers.get (← getOptions) then
+          reportScrapedQualifiers qs
+        pure qs
+      else pure #[]
     let body ← reduce rawBody
 
     let (acyclic, _) ← (exprPartitionKVars body).run kctx
     unless acyclic.isEmpty do
-      logWarning m!"pa_cert: {acyclic.length} acyclic κ(s) present \
+      logWarning m!"fix: {acyclic.length} acyclic κ(s) present \
         ({acyclic.map (·.name)}) — run `fusion` first. Treating all κ as cut."
     let flatCs  ← (exprFlat body).run kctx
     let initial ← buildInitialAssignment kvarsInOrder extraQualifiers
@@ -73,15 +80,15 @@ def paCertImpl (oracle : PAOracle := proveLeaf) (scrape : PAScrapeConfig := {})
 
     let residual := (← residualOut.get).toList
     setGoals residual
-    logInfo m!"pa_cert: bridge built and assigned; \
+    logInfo m!"fix: bridge built and assigned; \
       {residual.length} κ-free residual goal(s) left as c′."
 
-syntax "pa_cert" : tactic
-elab_rules : tactic
-  | `(tactic| pa_cert) => paCertImpl
-
-/-- `oracle` runs after Lean; `synth` and `proof` override it and run before Lean.
-    Synthesis proofs are discarded; certificate proofs use the proof oracle. -/
+/-- Solve existential predicates by PA, leaving any unproved residual goals.
+    `scrape`: collect qualifiers from heads (`head`) or heads and premises (`both`).
+    `defs`: also scrape the listed definitions. Scraping is off by default.
+    `oracle`: fallback after default Lean automation, shared by both phases.
+    `synth` / `proof`: override that phase with a tactic tried before Lean.
+    Only proof-phase evidence enters the certificate. -/
 syntax "fix" (atomic("(" &"scrape" ":=") ident ")")?
   (atomic("(" &"defs" ":=") "[" ident,* "]" ")")?
   (atomic("(" &"oracle" ":=") tacticSeq ")")?
@@ -92,6 +99,7 @@ elab_rules : tactic
   | `(tactic| fix $[(scrape := $mode:ident)]? $[(defs := [$defs:ident,*])]?
       $[(oracle := $fallback:tacticSeq)]? $[(synth := $synth:tacticSeq)]?
       $[(proof := $proof:tacticSeq)]?) => do
+    -- Parse scraping options and resolve definition names.
     let mode ← match mode.map (·.getId) with
       | none | some `no => pure PAScrapeMode.no
       | some `head => pure PAScrapeMode.head
@@ -101,20 +109,26 @@ elab_rules : tactic
       | none => pure #[]
       | some names => names.getElems.mapM fun name =>
         realizeGlobalConstNoOverloadWithInfo name
-    let oracle ← match fallback with
+
+    -- Each phase inherits the shared oracle unless explicitly overridden.
+    let defaultOracle ← match fallback with
       | none => pure proveLeaf
       | some tac => pure (withPAFallback (← `(tactic| ($tac:tacticSeq))))
     let synthOracle ← match synth with
-      | none => pure oracle
+      | none => pure defaultOracle
       | some tac => pure (withPAPriority (← `(tactic| ($tac:tacticSeq))))
     let proofOracle ← match proof with
-      | none => pure oracle
+      | none => pure defaultOracle
       | some tac => pure (withPAPriority (← `(tactic| ($tac:tacticSeq))))
-    paCertImpl synthOracle { mode, defs } (some proofOracle)
+    fixImpl synthOracle { mode, defs } (some proofOracle)
+
+    -- Use the proof oracle on residual goals; keep those it cannot close.
     benchFixPhase "residual" do
       let remaining ← (← getGoals).filterM fun goal =>
         goal.withContext do
           match ← proofOracle (← instantiateMVars (← goal.getType)) with
-          | some proof => goal.assign proof; pure false
+          | some proof =>
+            goal.assign proof
+            pure false
           | none => pure true
       setGoals remaining

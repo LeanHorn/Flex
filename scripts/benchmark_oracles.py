@@ -30,7 +30,7 @@ def source_prefix(path, marker):
 def cases():
     return {
         "countdown": {
-            "source": source_prefix("Demo/PaCert.lean", "theorem cyc0_pa_cert"),
+            "source": source_prefix("Demo/Fix.lean", "theorem cyc0_fix"),
             "target": "cyc0", "options": "", "auto": "[*]", "smt": "[*]",
         },
         "loop01": {

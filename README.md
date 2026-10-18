@@ -53,10 +53,10 @@ import Flex
 
 This includes all core types, tactics, elaboration, and the solver.
 
-With `(scrape := head)`, `(scrape := both)`, or `(defs := [...])`, `fix` shows
-the scraped qualifier count and typed templates in the Infoview. These are
-candidates before predicate abstraction. Hide this report with
-`set_option flex.reportQualifiers false`.
+Use `(scrape := head)`, `(scrape := both)`, or `(defs := [...])` to request
+qualifier scraping. To show the count and typed templates in the Infoview,
+enable `set_option flex.reportQualifiers true`. These are candidates before
+predicate abstraction; reporting is off by default.
 
 ### Example
 

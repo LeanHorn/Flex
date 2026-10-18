@@ -117,7 +117,7 @@ def reduceToZero : Cmd :=
 theorem reduceToZero_correct :
     {| ⊤ |} reduceToZero {| x = 0 |} := by
   generate
-  pa_cert
+  fix
 
 @[qualif]
 def sumEq (i1 i2 i3 : Int) : Prop :=

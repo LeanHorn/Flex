@@ -76,7 +76,7 @@ def emitPALeaf
     match ← oracle φ with
     | some p => pure (φ, p)
     | none   =>
-      throwError "pa_cert: oracle failed to prove survivor{indentExpr φ}\n\
+      throwError "fix: oracle failed to prove survivor{indentExpr φ}\n\
         at head κ '{κ.name}' — weakening fixpoint and glue oracle disagree."
   return conjProofs pairs
 
@@ -104,7 +104,7 @@ partial def walkPAProof
     return ← emitPALeaf κ survivors args oracle
   -- A κ-mvar head not under PA (non-cut) — abort with guidance.
   if goal.getAppFn.isMVar then
-    throwError "pa_cert: head metavariable{indentExpr goal.getAppFn}\nis not a \
+    throwError "fix: head metavariable{indentExpr goal.getAppFn}\nis not a \
       cut variable handled by PA. Eliminate acyclic κ's with `fusion` first."
   -- (b) ∀ (value binder or Prop guard) — intro, recurse, λ-wrap.
   if goal.isForall then

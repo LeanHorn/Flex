@@ -22,15 +22,19 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def source_prefix(path, marker):
-    text = (ROOT / path).read_text().split(marker)[0]
+def source_prefix(path, marker, start=None):
+    text = (ROOT / path).read_text()
+    if start is not None:
+        text = text[text.index(start):]
+    text = text[:text.index(marker)]
     return re.sub(r"^import .*\n", "", text, flags=re.MULTILINE)
 
 
 def cases():
     return {
         "countdown": {
-            "source": source_prefix("Demo/Fix.lean", "theorem cyc0_fix"),
+            "source": source_prefix("Demo/Fix.lean", "theorem cyc0_fix",
+                                    start="def cyc0 : Prop :="),
             "target": "cyc0", "options": "", "auto": "[*]", "smt": "[*]",
         },
         "loop01": {
@@ -52,7 +56,7 @@ def memoVC : Prop := ∃ k : Int → Int → Prop,
   (∀ n a b, ¬ n ≤ 1 → k (n - 1) a → k (n - 2) b → k n (a + b)) ∧
   (∀ n v, k n v → v = fib n)
 """,
-            "target": "memoVC", "options": "(scrape := head) (defs := [fib])",
+            "target": "memoVC", "options": "(scrape := basic) (defs := [fib])",
             "auto": "[*] d[fib]", "smt": "[*, fib]",
         },
     }

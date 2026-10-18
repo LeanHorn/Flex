@@ -7,21 +7,42 @@ import Flex.PA.Weaken
 
 open Lean Meta Elab Term Tactic
 
-/-- Build the initial Houdini assignment from `@[qualif]` definitions and any
-    per-call scraped lambdas, each instantiated over every type-compatible
-    ordered slot-tuple of `κ.paramTypes`.
+private structure InitialCandidates where
+  entries : Array (Expr × List Nat) := #[]
+  seen : ExprSet := {}
+  instances : Nat := 0
+  truncated : Bool := false
+  instancesTruncated : Bool := false
 
-    For 4-arg `k0` with 4 tagged qualifiers, this produces on the order of
-    4 + 12 + 12 + 12 = 40 candidates. -/
+/-- Instantiate tagged qualifiers, then the supplied extras, deduplicating predicates.
+    Per-κ limits bound unique candidates and visited slot assignments. -/
 def buildInitialAssignment (cyclicKs : List KVar) (extraQualifiers : Array Expr := #[])
+    (maxCandidates : Option Nat := none)
+    (maxInstances : Option Nat := none)
     : MetaM (List (KVar × List (Expr × List Nat))) := do
   let qs := (← getQualifiers) ++ extraQualifiers
   cyclicKs.mapM fun κ => do
-    let mut cands : List (Expr × List Nat) := []
+    let params := (κ.params.map fun n => Expr.fvar (FVarId.mk n)).toArray
+    let mut state : InitialCandidates := {}
     for q in qs do
-      let instantiations ← instantiateQualifier q κ.paramTypes
-      cands := cands ++ instantiations.toList
-    return (κ, cands)
+      state ← foldQualifierInstances q κ.paramTypes state fun state slots => do
+        if maxInstances.any (state.instances >= ·) then
+          return ({ state with instancesTruncated := true }, false)
+        let state := { state with instances := state.instances + 1 }
+        let args := (slots.map fun i => params[i]!).toArray
+        let body ← Expr.instQualifier q args
+        if state.seen.contains body then return (state, true)
+        if maxCandidates.any (state.entries.size >= ·) then
+          return ({ state with truncated := true }, false)
+        return ({ state with
+          entries := state.entries.push (q, slots)
+          seen := state.seen.insert body }, true)
+      if state.truncated || state.instancesTruncated then break
+    if state.truncated then
+      logWarning m!"fix: candidate limit ({state.entries.size}) reached for {κ.name}; additional candidates omitted"
+    if state.instancesTruncated then
+      logWarning m!"fix: instance limit ({state.instances}) reached for {κ.name}; further slot assignments omitted"
+    return (κ, state.entries.toList)
 
 /-- Iterate `weakenOnce` until the total candidate count across all κ's stops
     shrinking. Monotone: the total count is strictly decreasing per iteration

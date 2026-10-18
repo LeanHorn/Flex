@@ -34,24 +34,29 @@ def proveLeafWith
   : TermElabM (Option Expr) := do
     withSilencedMessages <| withNewMCtxDepth do
       let saved ← saveState
-      -- create a new meta-variable where will do the proof
-      let mvar ← mkFreshExprMVar (some goal) (kind := .syntheticOpaque)
-      let remainingGoals ← Tactic.run mvar.mvarId! do
-        -- intro binders
-        evalTactic (← `(tactic| intros))
-        evalTactic tac
-      -- check if remaining goals are fully done
-      -- if not, consider failure
-      if !remainingGoals.isEmpty then
+      try
+        -- create a new meta-variable where will do the proof
+        let mvar ← mkFreshExprMVar (some goal) (kind := .syntheticOpaque)
+        let remainingGoals ← Tactic.run mvar.mvarId! do
+          -- intro binders
+          evalTactic (← `(tactic| intros))
+          evalTactic tac
+        -- check if remaining goals are fully done
+        -- if not, consider failure
+        if !remainingGoals.isEmpty then
+          saved.restore
+          return none
+        -- extract the proof
+        let proof ← instantiateMVars mvar
+        -- Reject unresolved metavariables and explicit admissions.
+        if proof.hasExprMVar || proof.hasSorry then
+          saved.restore
+          return none
+        return some proof
+      catch e =>
         saved.restore
+        if e.isInterrupt then throw e
         return none
-      -- extract the proof
-      let proof ← instantiateMVars mvar
-      -- Reject unresolved metavariables and explicit admissions.
-      if proof.hasExprMVar || proof.hasSorry then
-        saved.restore
-        return none
-      return some proof
 
 /-- Try to prove `goal` with the default PA oracle. -/
 def proveLeaf (goal : Expr) : TermElabM (Option Expr) := do

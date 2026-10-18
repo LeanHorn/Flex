@@ -655,7 +655,7 @@ theorem Exp.openExp_of_lc_at (e : Exp) (k : Nat) (u : Exp) (h : Exp.lc_at k e) :
   induction e generalizing k with
   | bvar j =>
     simp only [Exp.lc_at] at h
-    simp only [Exp.openExp, if_neg (Nat.ne_of_lt h)]
+    simp only [Exp.openExp, ite_eq_right (Nat.ne_of_lt h)]
   | fvar _ => rfl
   | iconst _ => rfl
   | bconst _ => rfl
@@ -956,20 +956,20 @@ theorem Term.interp_openBVar {b : Base} (x : EVar) (w : Val) :
       by_cases hjk : j = k
       · subst hjk
         simp only [Term.openBVar, Term.interp, REnv.get, REnv.lookup,
-          REnv.write, beq_self_eq_true, if_true, REnv.getBV, REnv.insertBV_bv,
-          List.getElem?_insertIdx_self, hk, if_true, Option.getD_some]
-      · simp only [Term.openBVar, if_neg hjk, Term.interp, REnv.getBV,
+          REnv.write, beq_self_eq_true, ite_true, REnv.getBV, REnv.insertBV_bv,
+          List.getElem?_insertIdx_self, hk, ite_true, Option.getD_some]
+      · simp only [Term.openBVar, ite_eq_right hjk, Term.interp, REnv.getBV,
           REnv.insertBV_bv]
         by_cases hlt : k < j
-        · rw [if_pos hlt, Term.interp, REnv.getBV,
+        · rw [ite_eq_left hlt, Term.interp, REnv.getBV,
             List.getElem?_insertIdx_of_gt hlt]
-        · rw [if_neg hlt, Term.interp, REnv.getBV,
+        · rw [ite_eq_right hlt, Term.interp, REnv.getBV,
             List.getElem?_insertIdx_of_lt (by omega)]
   | fvar b y =>
       intro γ k _ hx
       simp only [Term.fv, List.mem_singleton] at hx
       simp only [Term.openBVar, Term.interp, REnv.get, REnv.lookup, REnv.write,
-        REnv.insertBV_map, beq_eq_false_iff_ne.mpr hx, Bool.false_eq_true, if_false]
+        REnv.insertBV_map, beq_eq_false_iff_ne.mpr hx, Bool.false_eq_true, ite_false]
   | add t₁ t₂ ih₁ ih₂ =>
       intro γ k hk hx
       simp only [Term.fv, List.mem_append, not_or] at hx

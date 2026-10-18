@@ -4,54 +4,83 @@ import Flex.Tactic.Utils
 
 open Lean Meta Elab Tactic
 
-/-- Run `k` and throw away every message it logged, whether it succeeded or
-    not. Needed because `grind`/`omega` report failures through the message
-    log, not as exceptions, so `try`/`first` alone would leak them. -/
-private def withSilencedMessages {α} (k : TermElabM α) : TermElabM α := do
-  let saved ← Core.getMessageLog
-  try
-    let r ← k
-    Core.setMessageLog saved
-    return r
-  catch e =>
-    Core.setMessageLog saved
-    throw e
+/-- Return type for oracle of PA.
+    success if `proof` returned, or `none` if failure. -/
+abbrev PAOracle := Expr → TermElabM (Option Expr)
 
-/-- The tactic oracle used by all of PA. Change it here only.
+/-- The default tactic oracle used by PA, before any per-call fallback.
     No `aesop`: it can hit `maxRecDepth` (uncatchable) and over-weakens solutions. -/
 syntax "pa_oracle" : tactic
 macro_rules
   | `(tactic| pa_oracle) => `(tactic| first | omega | grind | (constructor <;> grind))
 
-/-- Try to prove `goal` with `tac`. Returns the proof term, or `none` if the
-    tactic failed or left anything unproved. -/
-def proveLeafWith (tac : TSyntax `tactic) (goal : Expr) : TermElabM (Option Expr) :=
-  withSilencedMessages do
-    let mvar ← mkFreshExprMVar (some goal) (kind := .syntheticOpaque)
-    try
-      let goals   ← Tactic.run mvar.mvarId! (evalTactic tac)
-      if !goals.isEmpty then return none
-      let proof   ← instantiateMVars mvar
-      -- No goals left is not enough: `constructor <;> grind` hides unsolved
-      -- subgoals behind `sorry`.
-      if proof.hasSorry || proof.hasExprMVar then return none
-      return some proof
-    catch _ =>
-      return none
+initialize Lean.registerTraceClass `flex.oracle
 
-/-- Prove one qualifier `q(x̄)` with the PA oracle and return the proof term.
-    Used by `walkPAProof` to build the certificate. The hypotheses are already
-    in the local context, so no `intros` (unlike `checkExprVC`). -/
+/-- Suppress messages from speculative PA checks,
+    since failed attempts to prove candidate qualifiers
+    would otherwise clutter the Infoview. -/
+private def withSilencedMessages {α} (k : TermElabM α) : TermElabM α := do
+  let saved ← Core.getMessageLog
+  try
+    k
+  finally
+    Core.setMessageLog saved
+
+/-- Try to prove `goal` using `tac`, suppressing intermediate messages.
+    Return `some proof` on success or `none` on failure. -/
+def proveLeafWith
+  (tac : TSyntax `tactic)
+  (goal : Expr)
+  : TermElabM (Option Expr) := do
+    withSilencedMessages <| withNewMCtxDepth do
+      let saved ← saveState
+      try
+        -- create a new meta-variable where will do the proof
+        let mvar ← mkFreshExprMVar (some goal) (kind := .syntheticOpaque)
+        let remainingGoals ← Tactic.run mvar.mvarId! do
+          -- intro binders
+          evalTactic (← `(tactic| intros))
+          evalTactic tac
+        -- check if remaining goals are fully done
+        -- if not, consider failure
+        if !remainingGoals.isEmpty then
+          saved.restore
+          return none
+        -- extract the proof
+        let proof ← instantiateMVars mvar
+        -- Reject unresolved metavariables and explicit admissions.
+        if proof.hasExprMVar || proof.hasSorry then
+          saved.restore
+          return none
+        return some proof
+      catch e =>
+        saved.restore
+        if e.isInterrupt then throw e
+        return none
+
+/-- Try to prove `goal` with the default PA oracle. -/
 def proveLeaf (goal : Expr) : TermElabM (Option Expr) := do
   proveLeafWith (← `(tactic| pa_oracle)) goal
 
-/-- Can the oracle prove the clause `prop`? Same check as `proveLeaf`, but
-    the goal is a whole clause, so `intros` first. -/
-def checkExprVC (prop : Expr) : TermElabM Bool := do
-  return (← proveLeafWith (← `(tactic| (intros; pa_oracle))) prop).isSome
+/-- Try the existing PA Lean oracle first, then the supplied tactic on failure. -/
+def withPAFallback (tac : TSyntax `tactic) : PAOracle :=
+  fun goal => do
+    if let some proof   ← proveLeaf goal then return some proof
+    let result          ← proveLeafWith tac goal
+    trace[flex.oracle] "fallback accepted={result.isSome}: {tac}"
+    return result
 
-/-- Sat-guard: is the clause body contradictory? The caller has already
-    replaced the head with `False` (`specializeClauseAsNeg`), so this is just
-    `checkExprVC` on that clause. -/
-def checkExprUnsat (propWithFalseConclusion : Expr) : TermElabM Bool :=
-  checkExprVC propWithFalseConclusion
+/-- Try `tac` first, then the default PA oracle. -/
+def withPAPriority (tac : TSyntax `tactic) : PAOracle :=
+  fun goal => do
+    if let some proof ← proveLeafWith tac goal then return some proof
+    proveLeaf goal
+
+/-- Return whether the oracle proves `prop`. -/
+def checkExprVC (prop : Expr) (oracle : PAOracle := proveLeaf) : TermElabM Bool := do
+  return (← oracle prop).isSome
+
+/-- Check a clause whose conclusion has been replaced with `False`. -/
+def checkExprUnsat (clause : Expr) (oracle : PAOracle := proveLeaf)
+    : TermElabM Bool :=
+  checkExprVC clause oracle

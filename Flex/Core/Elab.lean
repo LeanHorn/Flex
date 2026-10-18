@@ -111,19 +111,14 @@ where
       return (1 + n, domTy :: rest)
     else return (0, [])
 
-/-- Turn a κ-solution body into the witness lambda assigned to `?κ`:
-    `sol` over fake fvars `z0, z1, ...` ↦ `fun (z0 : T0) (z1 : T1) ... => sol`.
-
-    The `zᵢ` inside `sol` are fake fvars (`FVarId.mk `zᵢ`) that live in no local
-    context, and `mkLambdaFVars` can only bind real locals. So per parameter:
-    declare a real `zᵢ : Tᵢ`, swap the fake for it, recurse *inside* that scope.
-    Recursing inside the continuation keeps every local alive until the final
-    `mkLambdaFVars` binds them all at once. -/
+/-- Build the witness `fun (z0 : T0) … (zₙ : Tₙ) => sol` that gets assigned to `?κ`.
+    Inside `sol`, each parameter `zᵢ` is a placeholder fvar named `zᵢ`;
+    `abstract` turns those placeholders into the lambda's bound variables. -/
 def solToWitnessExpr (sol : Expr) (params : List Name) (paramTypes : List Expr) : MetaM Expr := do
-  let rec go (sol : Expr) (fvars : Array Expr) : List (Name × Expr) → MetaM Expr
-    | [] => mkLambdaFVars fvars sol
-    | (n, ty) :: rest =>
-      withLocalDeclD n ty fun fvar => do
-        let sol' := sol.replaceFVar (.fvar (FVarId.mk n)) fvar
-        go sol' (fvars.push fvar) rest
-  go sol #[] (params.zip paramTypes)
+  let body :=
+    (← instantiateMVars sol).abstract (params.toArray.map fun z => mkFVar ⟨z⟩)
+  return (params.zip paramTypes).foldr (fun (z, ty) b => .lam z ty b .default) body
+
+/-- Assign κ's mvar the witness `fun z₀ ⋯ zₙ₋₁ => sol` -/
+def KVar.assignSol (κ : KVar) (sol : Expr) : MetaM Unit := do
+  κ.mvarId.assign (← solToWitnessExpr sol κ.params κ.paramTypes)

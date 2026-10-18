@@ -3,11 +3,9 @@ import Lean
 open Lean Meta
 
 initialize qualifAttr : TagAttribute ←
-  registerTagAttribute `qualif "marks a definition as a refinement type qualifier for predicate abstraction."
+  registerTagAttribute `qualif "Marks a definition as a PA qualifier."
 
--- Get all defs tagged as `@[qualif]`
--- We must fold importedEntries manually: getState returns only the current
--- module's accumulated state; entries from imported modules live in importedEntries.
+/-- Collect local and imported definitions tagged `@[qualif]`. -/
 def getQualifiers : MetaM (Array Expr) := do
   let s := qualifAttr.ext.toEnvExtension.getState (← getEnv)
   let mut names : NameSet := s.state
@@ -16,13 +14,51 @@ def getQualifiers : MetaM (Array Expr) := do
       names := names.insert name
   names.toArray.mapM fun n => mkConstWithLevelParams n
 
--- Instantiate a qualifier by β-reduction.
--- Unfolds ONLY the qualifier's own lambda (via `unfoldDefinition?`) and then
--- collapses the resulting redex with `headBeta`. We deliberately avoid `whnf`
--- because it would further unfold relations like `≤` into their kernel defs
--- (e.g. `(b - a).NonNeg`), producing unreadable trace output.
+/-- Apply arguments and unfold the qualifier, keeping relations like `≤` readable. -/
 def Expr.instQualifier (q : Expr) (args : Array Expr) : MetaM Expr := do
   let applied := mkAppN q args
   match ← unfoldDefinition? applied with
   | some unfolded => return unfolded.headBeta
-  | none          => return applied
+  | none          => return applied.headBeta
+
+register_option flex.standardQualifiers : Bool := {
+  defValue := true
+  descr := "Include the standard Int, Nat, and Bool qualifier bank in fix."
+}
+
+namespace Flex.PA.StandardQualifiers
+
+-- The fixed integer bank used by the arithmetic benchmarks.
+def intEqZero (x : Int) : Prop := x = 0
+def intPos (x : Int) : Prop := 0 < x
+def intNonneg (x : Int) : Prop := 0 ≤ x
+def intNeg (x : Int) : Prop := x < 0
+def intNonpos (x : Int) : Prop := x ≤ 0
+def intEq (x y : Int) : Prop := x = y
+-- Reversed comparisons share the same syntax as their forward instances.
+def intGt (x y : Int) : Prop := y < x
+def intGe (x y : Int) : Prop := y ≤ x
+def intLt (x y : Int) : Prop := x < y
+def intLe (x y : Int) : Prop := x ≤ y
+def intLePred (x y : Int) : Prop := x ≤ y - 1
+
+def natEqZero (x : Nat) : Prop := x = 0
+def natPos (x : Nat) : Prop := 0 < x
+def natEq (x y : Nat) : Prop := x = y
+def natLt (x y : Nat) : Prop := x < y
+def natLe (x y : Nat) : Prop := x ≤ y
+
+def boolTrue (x : Bool) : Prop := x = true
+def boolFalse (x : Bool) : Prop := x = false
+def boolEq (x y : Bool) : Prop := x = y
+
+end Flex.PA.StandardQualifiers
+
+open Flex.PA.StandardQualifiers in
+/-- Return the fixed bank unless explicitly disabled. -/
+def getStandardQualifiers : MetaM (Array Expr) := do
+  unless flex.standardQualifiers.get (← getOptions) do return #[]
+  return #[``intEqZero, ``intPos, ``intNonneg, ``intNeg, ``intNonpos,
+    ``intEq, ``intGt, ``intGe, ``intLt, ``intLe, ``intLePred,
+    ``natEqZero, ``natPos, ``natEq, ``natLt, ``natLe,
+    ``boolTrue, ``boolFalse, ``boolEq].map fun name => mkConst name

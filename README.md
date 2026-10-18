@@ -1,64 +1,70 @@
 # Flex
 
-A Lean 4 library for a constraint-solving framework for Constrained Horn Clauses (CHCs).
-
----
+A Lean 4 library for solving Constrained Horn Clauses (CHCs).
 
 ## Using as a Dependency
 
-### Prerequisites
-
-- [Lean 4](https://leanprover.github.io/lean4/doc/quickstart.html) installed via `elan`
-
-### Step 1 — Add to your `lakefile.toml`
+Use Lean **v4.34.0** via `elan`. Add to your `lakefile.toml`:
 
 ```toml
 [[require]]
 name = "Flex"
-git = "https://github.com/jam-khan/Flex"
+git = "https://github.com/LeanHorn/Flex"
 rev = "main"
 ```
 
-### Step 2 — Fetch the dependency
+Fetch and build:
 
 ```bash
-lake update
-```
-
-This clones the repo into `.lake/packages/Flex/` using your local Git credentials.
-
-### Step 3 — Build
-
-```bash
+MATHLIB_NO_CACHE_ON_UPDATE=1 lake update
 lake build
 ```
 
-> **Note:** Flex is mathlib-free — the only dependency is `aesop` (built from source on the first build).
+Flex depends on `aesop`, `lean-auto`, and `lean-smt`. The update command skips
+unused Mathlib caches from lean-smt's transitive dependency. lean-smt downloads
+cvc5 automatically; `flex_auto` requires `z3` on `PATH`. For Linux native
+dependencies and linker setup, see the [CI workflow](.github/workflows/lean_action_ci.yml).
 
----
+## Usage
 
-## Importing
-
-A single import gives you everything:
-
-```lean4
-import Flex
-```
-
-This includes all core types, tactics, elaboration, and the solver.
-
-### Example
+`zap` eliminates acyclic predicates. `fix` synthesizes invariants by predicate
+abstraction and leaves any unproved residual obligations as Lean goals.
 
 ```lean4
 import Flex
 
-def ex1 : Prop :=
-  ∃ κ : Int → Prop,
-    ∀ x : Int,
-      0 ≤ x →
-      (∀ ν : Int, ν = x - 1 → κ ν)
-    ∧ (∀ y : Int, κ y →
-        ∀ ν : Int, ν = y + 1 → 0 ≤ ν)
+example : ∃ k : Int → Prop,
+    k 5
+    ∧ (∀ i, k i → 1 ≤ i → k (i - 1))
+    ∧ (∀ i, k i → 0 ≤ i) := by
+  fix
 ```
 
-See the [`Demo/`](./Demo/Basic.lean) folder for more worked examples.
+By default, `fix` uses a [standard qualifier bank](Flex/PA/Qualifier.lean) for
+`Int`, `Nat`, and `Bool`, together with definitions tagged `@[qualif]`.
+
+## Scraping and SMT Oracles
+
+Scraping adds qualifier candidates from the goal and definitions:
+
+| Option | Candidates collected |
+| --- | --- |
+| `fix (scrape := basic)` | Clause conclusions and explicitly selected definitions. |
+| `fix (scrape := standard)` | Also premises, Boolean observations, and relevant definitions discovered automatically. |
+| `fix (scrape := deep)` | Also explores helper definitions and generalizes numeric templates, within search limits. |
+
+Scraping is off by default. Add `(defs := [fib])` to select definitions explicitly.
+Use `set_option flex.reportQualifiers true` to inspect scraped candidates in the Infoview.
+
+Optional SMT backends can be selected separately for synthesis and proofs:
+
+```lean4
+fix (synth := flex_auto [*]) (proof := flex_smt [*])
+```
+
+These options try the selected backend before Lean automation. `flex_auto` uses
+a trusted SMT axiom; `flex_smt` reconstructs Lean proofs. Synthesis proof terms
+are discarded; only proof-phase evidence enters the final certificate.
+
+See [Demo/Basic.lean](Demo/Basic.lean) for elimination examples and
+[Demo/Fix.lean](Demo/Fix.lean) for invariants, scraping, and SMT oracles.

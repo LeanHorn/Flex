@@ -166,3 +166,21 @@ open STLC
 
 /-- info: 'infer_mirror' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms infer_mirror
+
+/-- info: 'infer_filterGe' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms infer_filterGe
+
+/-- info: 'infer_sum' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms infer_sum
+
+/-- info: 'infer_count' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms infer_count
+
+/-- info: 'infer_node' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms infer_node
+
+/-- info: 'infer_heightLeSize' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms infer_heightLeSize
+
+/-- info: 'infer_insert' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms infer_insert

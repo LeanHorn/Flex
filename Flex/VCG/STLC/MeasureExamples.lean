@@ -19,7 +19,7 @@ attribute [local simp] Exp.ftv Ty.ftv Refinement.ftv Formula.ftv Term.ftv Base.f
   Ty.optBase Base.shiftT
   DEnv.payload? DEnv.decl? DEnv.nCtors DEnv.instOK Ty.instTysOK Ty.instTysFrom Ty.instTys
   Cstr.conjAll List.finRange DEnv.var DataDecl.measBody? Base.constSubst
-  TEnv.genVars Ty.closeTv BSubst.closeAt List.eraseDups_cons
+  TEnv.genVars Ty.closeTv BSubst.closeAt List.eraseDups_cons caseL
 
 /-! ## Lists with a length measure -/
 
@@ -53,9 +53,10 @@ abbrev lengthE : Exp :=
 /-- The verification condition is the two equations a `case` on `xs` reveals,
     with `len` uninterpreted:
     `len xs = 0 → 0 = len xs` and `len xs = 1 + len t → 1 + len t = len xs`. -/
-theorem meas_length (κ : KEnv) : topVC κ [] lengthE lengthTy lenEnv := by
-  simp [topVC, lengthE, lengthTy, lenEnv, lenListDecl, listDecl]
-  intro γ; constructor <;> intros <;> omega
+theorem meas_length : ∃ κ : KEnv, Check lenEnv κ [] lengthE lengthTy := by
+  simp only [lengthE, lenEnv, lenListDecl, listDecl]
+  generate
+  solve
 
 /-! ## `append : ∀α. xs:list α → ys:list α → list α{len ν = len xs + len ys}` -/
 
@@ -66,9 +67,10 @@ abbrev appendLenTy : Ty :=
 /-- The same program as `appendE` (DataExamples), at the precise type: the
     recursive call `go t ys` returns `len t + len ys` elements, and
     `Cons(h, r)` has one more. -/
-theorem meas_append (κ : KEnv) : topVC κ [] appendE appendLenTy lenEnv := by
-  simp [topVC, appendE, appendLenTy, lenEnv, lenListDecl, listDecl]
-  intro γ; constructor <;> intros <;> omega
+theorem meas_append : ∃ κ : KEnv, Check lenEnv κ [] appendE appendLenTy := by
+  simp only [appendE, lenEnv, lenListDecl, listDecl]
+  generate
+  solve
 
 /-! ## `head : ∀α. xs:list α{0 < len ν} → α` — the `Nil` case is unreachable -/
 
@@ -80,9 +82,10 @@ abbrev headTy : Ty :=
 abbrev headE : Exp :=
   .tabs .star (.lam (caseL (.bvar 0) [.unreach, .split (.bvar 0) (.bvar 1)]))
 
-theorem meas_head (κ : KEnv) : topVC κ [] headE headTy lenEnv := by
-  simp [topVC, headE, headTy, lenEnv, lenListDecl, listDecl]
-  intro γ; omega
+theorem meas_head : ∃ κ : KEnv, Check lenEnv κ [] headE headTy := by
+  simp only [headE, lenEnv, lenListDecl, listDecl]
+  generate
+  solve
 
 /-- Without the precondition, `head` is rejected: nothing rules out `Nil`. -/
 theorem meas_head_bad (κ : KEnv) :
@@ -95,9 +98,10 @@ theorem meas_head_bad (κ : KEnv) :
 abbrev mapLenTy : Ty := .forall .star (.forall .star
   (.arrow (.arrow (Par 1) (Par 0)) (.arrow (ListT (Par 1)) (ListLen (Par 0) (lenB 1)))))
 
-theorem meas_map (κ : KEnv) : topVC κ [] mapE mapLenTy lenEnv := by
-  simp [topVC, mapE, mapLenTy, lenEnv, lenListDecl, listDecl]
-  intro γ; constructor <;> intros <;> omega
+theorem meas_map : ∃ κ : KEnv, Check lenEnv κ [] mapE mapLenTy := by
+  simp only [mapE, lenEnv, lenListDecl, listDecl]
+  generate
+  solve
 
 /-! ## Building a list: `[1, 2]` has length 2 (and not 3) -/
 
@@ -108,9 +112,10 @@ abbrev twoE : Exp :=
   (.letin (consE TT (.bvar 1) (.bvar 0))              -- l = Cons(two, nil)
   (consE TT (.bvar 3) (.bvar 0)))))                   -- Cons(one, l)
 
-theorem meas_two (κ : KEnv) : topVC κ [] twoE (ListLen TT (.const .int 2)) lenEnv := by
-  simp [topVC, twoE, lenEnv, lenListDecl, listDecl]
-  intro γ; omega
+theorem meas_two : ∃ κ : KEnv, Check lenEnv κ [] twoE (ListLen TT (.const .int 2)) := by
+  simp only [twoE, lenEnv, lenListDecl, listDecl]
+  generate
+  solve
 
 theorem meas_two_bad (κ : KEnv) : ¬ topVC κ [] twoE (ListLen TT (.const .int 3)) lenEnv := by
   simp [topVC, twoE, lenEnv, lenListDecl, listDecl]
@@ -147,20 +152,21 @@ abbrev headClientE : Exp :=
   (.letin (consE TT (.bvar 3) (.bvar 0))              -- l' = Cons(one, l)
   (.app (.tapp (.ann headE headTy) TT) (.bvar 0))))))  -- head[Int] l'
 
-theorem meas_headClient_vc (κ : KEnv) : topVC κ [] headClientE TT lenEnv := by
-  simp [topVC, headClientE, headE, headTy, lenEnv, lenListDecl, listDecl]
-  intro γ _ _ _; constructor <;> intros <;> omega
+theorem meas_headClient_vc : ∃ κ : KEnv, Check lenEnv κ [] headClientE TT := by
+  simp only [headClientE, headE, headTy, lenEnv, lenListDecl, listDecl]
+  generate
+  solve
 
 /-- Running the client never gets stuck — in particular `head` never takes its
     `Nil` branch, which `len` rules out — and any value it returns is an
     integer. -/
 theorem meas_headClient_safe (n : Nat) :
     ∃ o, Run n headClientE o ∧ ∀ v m, o = .val v m → ∃ i : Int, v = .iconst i := by
-  have hh := topVC_decl_sound (fun _ _ => True) headClientE TT
+  obtain ⟨κ, hc⟩ := meas_headClient_vc
+  have hh := check_to_hastype TEnv.WFBVars.empty
     (by simp [Exp.WFBVars, Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar,
               Term.hasBVar])
-    (by simp [Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar])
-    (meas_headClient_vc _)
+    (by simp [Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar]) hc
   obtain ⟨o, hrun, hres⟩ := type_safety lenEnv_wf hh n
   refine ⟨o, hrun, fun v m ho => ?_⟩
   have := hres v m ho
@@ -195,9 +201,10 @@ abbrev nonnegE : Exp :=
     , .split (.bvar 0) (.app (.bvar 4) (.bvar 0)) ]))    -- t=0 h=1 p=2 xs=3 go=4: go t
 
 /-- The lemma's verification condition is the induction. -/
-theorem meas_nonneg (κ : KEnv) : topVC κ [] nonnegE nonnegTy lenEnv := by
-  simp [topVC, nonnegE, nonnegTy, lenEnv, lenListDecl, listDecl]
-  intro γ; constructor <;> intros <;> omega
+theorem meas_nonneg : ∃ κ : KEnv, Check lenEnv κ [] nonnegE nonnegTy := by
+  simp only [nonnegE, lenEnv, lenListDecl, listDecl]
+  generate
+  solve
 
 /-- `cons : ∀α. α → t:list α → list α{0 < len ν}` -/
 abbrev consPosTy : Ty :=
@@ -214,9 +221,10 @@ abbrev consPosLemmaE : Exp :=
       (consE (Par 0) (.bvar 2) (.bvar 1)))))                            -- Cons(h, t)
 
 /-- With the lemma: `len ν = 1 + len t` and `0 ≤ len t` give `0 < len ν`. -/
-theorem meas_consPos (κ : KEnv) : topVC κ [] consPosLemmaE consPosTy lenEnv := by
-  simp [topVC, consPosLemmaE, nonnegE, nonnegTy, consPosTy, lenEnv, lenListDecl, listDecl]
-  intro γ; refine ⟨⟨?_, ?_⟩, ?_⟩ <;> intros <;> omega
+theorem meas_consPos : ∃ κ : KEnv, Check lenEnv κ [] consPosLemmaE consPosTy := by
+  simp only [consPosLemmaE, nonnegE, nonnegTy, lenEnv, lenListDecl, listDecl]
+  generate
+  solve
 
 /-- Without the lemma, `t` might have negative length. -/
 theorem meas_consPos_bad (κ : KEnv) : ¬ topVC κ [] consPosE consPosTy lenEnv := by
@@ -261,9 +269,10 @@ abbrev sumIListE : Exp :=
         (.add (.bvar 2) (.bvar 0))) ])                    -- h + r
 
 /-- The match records `sum xs = h + sum t`, reading the field `h`. -/
-theorem meas_sumIList (κ : KEnv) : topVC κ [] sumIListE sumIListTy ilistEnv := by
-  simp [topVC, sumIListE, sumIListTy, ilistEnv, ilistDecl]
-  intro γ; constructor <;> intros <;> omega
+theorem meas_sumIList : ∃ κ : KEnv, Check ilistEnv κ [] sumIListE sumIListTy := by
+  simp only [sumIListE, ilistEnv, ilistDecl]
+  generate
+  solve
 
 /-! ## Trees: `size` -/
 
@@ -297,9 +306,10 @@ abbrev mirrorE : Exp :=
           (.letin (.app (.bvar 7) (.bvar 1))                          -- r' = go r  (l'=0 r=1 x=2)
           (.ctor "tree" 1 [Par 0] (.pair (.bvar 0) (.pair (.bvar 3) (.bvar 1))))))) ]))
 
-theorem meas_mirror (κ : KEnv) : topVC κ [] mirrorE mirrorTy treeEnv := by
-  simp [topVC, mirrorE, mirrorTy, treeEnv, treeDecl]
-  intro γ; constructor <;> intros <;> omega
+theorem meas_mirror : ∃ κ : KEnv, Check treeEnv κ [] mirrorE mirrorTy := by
+  simp only [mirrorE, treeEnv, treeDecl]
+  generate
+  solve
 
 /-- The lemma `sizeNonneg : ∀α. t:tree α → Int{0 ≤ size t}`: the recursion
     makes one call per subtree (two induction hypotheses).
@@ -315,9 +325,10 @@ abbrev sizeNonnegE : Exp :=
           (.letin (.app (.bvar 6) (.bvar 3))                          -- a = go l
           (.app (.bvar 7) (.bvar 1)))) ]))                            -- go r   (a=0 r=1)
 
-theorem meas_sizeNonneg (κ : KEnv) : topVC κ [] sizeNonnegE sizeNonnegTy treeEnv := by
-  simp [topVC, sizeNonnegE, sizeNonnegTy, treeEnv, treeDecl]
-  intro γ; constructor <;> intros <;> omega
+theorem meas_sizeNonneg : ∃ κ : KEnv, Check treeEnv κ [] sizeNonnegE sizeNonnegTy := by
+  simp only [sizeNonnegE, treeEnv, treeDecl]
+  generate
+  solve
 
 /-- `node : ∀α. l:tree α → x:α → r:tree α → tree α{size l < size ν}` needs
     `size r ≥ 0`, which the lemma provides:
@@ -330,9 +341,10 @@ abbrev nodeE : Exp :=
     (.letin (.app (.tapp (.ann sizeNonnegE sizeNonnegTy) (Par 0)) (.bvar 0))  -- _ = sizeNonneg[α] r
       (.ctor "tree" 1 [Par 0] (.pair (.bvar 3) (.pair (.bvar 2) (.bvar 1))))))))
 
-theorem meas_node (κ : KEnv) : topVC κ [] nodeE nodeTy treeEnv := by
-  simp [topVC, nodeE, nodeTy, sizeNonnegE, sizeNonnegTy, treeEnv, treeDecl]
-  intro γ; refine ⟨⟨?_, ?_⟩, ?_⟩ <;> intros <;> omega
+theorem meas_node : ∃ κ : KEnv, Check treeEnv κ [] nodeE nodeTy := by
+  simp only [nodeE, sizeNonnegE, sizeNonnegTy, treeEnv, treeDecl]
+  generate
+  solve
 
 /-! ## `filterGe` shrinks: `len ν ≤ len xs`
 
@@ -364,10 +376,10 @@ theorem olistLenEnv_wf : olistLenEnv.wfB = true := by decide
 abbrev insLenTy : Ty := .forall .B (.arrow (Par 0) (.arrow (OListT (Par 0))
   (.dataL "olist" [Par 0] (.fmla (.eq .int (lenB 0) (.add (.const .int 1) (lenB 1)))))))
 
-theorem meas_insert (κ : KEnv) : topVC κ [] insE insLenTy olistLenEnv := by
-  simp [topVC, olistLenEnv, olistDecl]
-  split_sorts
-  all_goals grind
+theorem meas_insert : ∃ κ : KEnv, Check olistLenEnv κ [] insE insLenTy := by
+  simp only [insE, olistLenEnv, olistDecl]
+  generate
+  solve
 
 /-! ## Conditionals: tree `height`
 
@@ -391,9 +403,10 @@ abbrev mirrorHTy : Ty :=
   .forall .star (.arrow (TreeT (Par 0))
     (TreeT (Par 0) (.fmla (.and (.eq .int (sizeB 0) (sizeB 1)) (.eq .int (heightB 0) (heightB 1))))))
 
-theorem meas_mirrorHeight (κ : KEnv) : topVC κ [] mirrorE mirrorHTy htreeEnv := by
-  simp [topVC, mirrorE, mirrorHTy, htreeEnv, htreeDecl, treeDecl]
-  grind
+theorem meas_mirrorHeight : ∃ κ : KEnv, Check htreeEnv κ [] mirrorE mirrorHTy := by
+  simp only [mirrorE, htreeEnv, htreeDecl, treeDecl]
+  generate
+  solve
 
 /-- A lemma relating two measures, `0 ≤ height t ≤ size t`, by recursion on
     both subtrees:
@@ -403,9 +416,10 @@ abbrev heightLeSizeTy : Ty :=
   .forall .star (.arrow (TreeT (Par 0))
     (.refine .int (.fmla (.and (.leqI (.const .int 0) (heightB 1)) (.leqI (heightB 1) (sizeB 1))))))
 
-theorem meas_heightLeSize (κ : KEnv) : topVC κ [] sizeNonnegE heightLeSizeTy htreeEnv := by
-  simp [topVC, sizeNonnegE, heightLeSizeTy, htreeEnv, htreeDecl, treeDecl]
-  grind
+theorem meas_heightLeSize : ∃ κ : KEnv, Check htreeEnv κ [] sizeNonnegE heightLeSizeTy := by
+  simp only [sizeNonnegE, htreeEnv, htreeDecl, treeDecl]
+  generate
+  solve
 
 /-! ## Reading `Bool` fields: `countTrue`
 
@@ -440,9 +454,10 @@ abbrev countE : Exp :=
 
 /-- The match records `countTrue xs = (if b then 1 + countTrue t else countTrue t)`;
     the branch on `b` picks the matching side. -/
-theorem meas_count (κ : KEnv) : topVC κ [] countE countTy blistEnv := by
-  simp [topVC, countE, countTy, blistEnv, blistDecl]
-  grind
+theorem meas_count : ∃ κ : KEnv, Check blistEnv κ [] countE countTy := by
+  simp only [countE, blistEnv, blistDecl]
+  generate
+  solve
 
 /-- `let tt = true; let ff = false; let n = BNil; let l = BCons(ff, n); BCons(tt, l)`
     has exactly one `true`. -/
@@ -452,7 +467,7 @@ abbrev oneTrueE : Exp :=
   (.letin (.ctor "blist" 1 [] (.pair (.bvar 1) (.bvar 0)))  -- l = BCons(ff, n)
   (.ctor "blist" 1 [] (.pair (.bvar 3) (.bvar 0))))))       -- BCons(tt, l)
 
-theorem meas_oneTrue (κ : KEnv) :
-    topVC κ [] oneTrueE (.dataL "blist" [] (.fmla (.eq .int (countB 0) (.const .int 1)))) blistEnv := by
-  simp [topVC, oneTrueE, blistEnv, blistDecl]
-  grind
+theorem meas_oneTrue : ∃ κ : KEnv, Check blistEnv κ [] oneTrueE (.dataL "blist" [] (.fmla (.eq .int (countB 0) (.const .int 1)))) := by
+  simp only [oneTrueE, blistEnv, blistDecl]
+  generate
+  solve

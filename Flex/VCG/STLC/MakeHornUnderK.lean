@@ -156,9 +156,10 @@ macro "vc_generate" : tactic =>
 
 /-- `vc_reify` — reify the single `KEnv` into typed per-κ unknowns (arities
     inferred automatically) and normalize the environment lookups, leaving a
-    clean curried CHC goal. Handles any arity via `liftKPred`. -/
+    clean curried CHC goal. Handles any arity via `liftKPred`; a program with no
+    κ's leaves the plain (κ-free) verification condition. -/
 macro "vc_reify" : tactic =>
-  `(tactic| intro_kenv <;> simp [STLC.mkKEnv, List.lookup, STLC.liftKPred,
+  `(tactic| (first | intro_kenv | intro_kenv []) <;> try simp [STLC.mkKEnv, List.lookup, STLC.liftKPred,
                                   STLC.liftKPred_zero, STLC.liftKPred_succ_int])
 
 /-! ## Splitting a verification condition on the sorts it reads

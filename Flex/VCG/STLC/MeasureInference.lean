@@ -96,3 +96,77 @@ theorem infer_mirror : ∃ κ : KEnv, Check htreeEnv κ []
   simp only [mirrorE, htreeEnv, htreeDecl, treeDecl]
   generate
   fix
+
+/-! ## `filterGe`: the length bound inferred, alongside the element refinement's κ (`solve` = `zap`, then `fix`) -/
+abbrev filterGeTyK : Ty :=
+  .arrow TT (.arrow (ListT TT)
+    (.dataL "list" [.refine .int (.fmla (.leqI (.bvar .int 2) (.bvar .int 0)))]
+      (.kapp "kl" [lenA 0, lenA 1])))
+
+theorem infer_filterGe : ∃ κ : KEnv, Check lenEnv κ []
+    (.letin (.ann filterGeE filterGeTyK) (.lam (.lam (.app (.app (.bvar 2) (.bvar 1)) (.bvar 0)))))
+    (.arrow TT (.arrow (ListT TT)
+      (.dataL "list" [.refine .int (.fmla (.leqI (.bvar .int 2) (.bvar .int 0)))]
+        (.fmla (.leqI (lenB 0) (lenB 1)))))) := by
+  simp only [filterGeE, lenEnv, lenListDecl, listDecl]
+  generate
+  solve
+
+/-! ## `sum` over an integer list (an `Int`-field measure) -/
+abbrev sumB (i : Nat) : (Σ b : Base, Term b) := ⟨.int, .mbvar "sum" i⟩
+theorem infer_sum : ∃ κ : KEnv, Check ilistEnv κ []
+    (.letin (.ann sumIListE (.arrow (.dataL "ilist" []) (.refine .int (.kapp "k" [⟨.int, .bvar .int 0⟩, sumB 1]))))
+      (.lam (.app (.bvar 1) (.bvar 0))))
+    sumIListTy := by
+  simp only [sumIListE, ilistEnv, ilistDecl]
+  generate
+  fix
+
+/-! ## `count` over a list of booleans (a `Bool`-field measure; `ite` in the VC) -/
+theorem infer_count : ∃ κ : KEnv, Check blistEnv κ []
+    (.letin (.ann countE (.arrow (.dataL "blist" [])
+        (.refine .int (.kapp "k" [⟨.int, .bvar .int 0⟩, ⟨.int, countB 1⟩]))))
+      (.lam (.app (.bvar 1) (.bvar 0))))
+    countTy := by
+  simp only [countE, blistEnv, blistDecl]
+  generate
+  fix
+
+/-! ## `node`, with the statement of its size lemma inferred -/
+abbrev sizeA (i : Nat) : (Σ b : Base, Term b) := ⟨.int, sizeB i⟩
+theorem infer_node : ∃ κ : KEnv, Check treeEnv κ []
+    (.letin (.ann sizeNonnegE (.forall .star (.arrow (TreeT (Par 0)) (.refine .int (.kapp "k" [sizeA 1])))))
+      (.tabs .star (.lam (.lam (.lam                                   -- r=0 x=1 l=2 lemma=3
+        (.letin (.app (.tapp (.bvar 3) (Par 0)) (.bvar 0))
+          (.ctor "tree" 1 [Par 0] (.pair (.bvar 3) (.pair (.bvar 2) (.bvar 1))))))))))
+    nodeTy := by
+  simp only [sizeNonnegE, nodeTy, treeEnv, treeDecl]
+  generate
+  fix
+
+/-! ## A lemma relating two measures, inferred: the client needs `height t ≤ size t`; the
+  induction also needs `0 ≤ height t` (and `0 ≤ size t`), which the solver finds too -/
+theorem infer_heightLeSize : ∃ κ : KEnv, Check htreeEnv κ []
+    (.letin (.ann sizeNonnegE (.forall .star (.arrow (TreeT (Par 0))
+        (.refine .int (.kapp "k" [heightA 1, sizeA 1])))))
+      (.lam (.app (.tapp (.bvar 1) TT) (.bvar 0))))
+    (.arrow (TreeT TT) (.refine .int (.fmla (.leqI (heightB 1) (sizeB 1))))) := by
+  simp only [sizeNonnegE, htreeEnv, htreeDecl, treeDecl]
+  generate
+  fix
+
+/-! ## Ordered-list `insert` (polymorphic recursion), adding one element -/
+
+@[qualif] def QSuccM (a b : Int) : Prop := a = b + 1
+
+abbrev insTyK : Ty := .forall .B (.arrow (Par 0) (.arrow (OListT (Par 0))
+  (.dataL "olist" [Par 0] (.kapp "k" [lenA 0, lenA 1]))))
+
+theorem infer_insert : ∃ κ : KEnv, Check olistLenEnv κ []
+    (.letin (.ann insE insTyK)
+      (.lam (.lam (.app (.app (.tapp (.bvar 2) TT) (.bvar 1)) (.bvar 0)))))
+    (.arrow TT (.arrow (OListT TT)
+      (.dataL "olist" [TT] (.fmla (.eq .int (lenB 0) (.add (.const .int 1) (lenB 1))))))) := by
+  simp only [insE, olistLenEnv, olistDecl]
+  generate
+  solve

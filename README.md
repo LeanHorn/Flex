@@ -109,8 +109,6 @@ mixed types, mutually recursive predicates, literal-bound scraping, generalized
 sum bounds, and Fibonacci. The first four use plain `fix`. The mixed acyclic/cyclic
 examples use `zap` followed by `fix`; the last three add scraping.
 Oracle variants reuse the unary countdown.
-The extraction rules and their stated limits are in [docs/scraping.tex](docs/scraping.tex);
-the properties there are design arguments, not mechanized theorems.
 
 ### Example
 

@@ -1,5 +1,5 @@
 import Demo.Basic
-import Demo.Cyclic
+import Demo.Fix
 import Flex.CHC
 
 /-! Benchmark prelude used by `scripts/benchmark_chc.py`.
@@ -146,7 +146,7 @@ private def timedKernelCheck (measure : IO.Ref Measurement) (goal type : Expr) :
       let info ← getConstInfo name
       if let some index := env.getModuleIdxFor? name then
         let moduleName := env.allImportedModuleNames[index.toNat]!
-        if (moduleName == `Demo.Basic || moduleName == `Demo.Cyclic) &&
+        if (moduleName == `Demo.Basic || moduleName == `Demo.Fix) &&
             (info matches .thmInfo _) && name.getRoot != `Point && name.getRoot != `double then
           throwError "proof reused an existing demo theorem: {name}"
         -- Earlier imported modules cannot depend on the demo modules.
@@ -180,7 +180,8 @@ elab "chc_case " target:ident backend:str repetition:num : command => do
         if backend.getString == "fix" then
           let remaining ← Tactic.run goal.mvarId! do
             withMainContext do
-              timed measure "fix" do evalTactic (← `(tactic| solve_fixpoint))
+              timed measure "fix" do
+                evalTactic (← `(tactic| (try zap; all_goals first | (fix; done) | grind)))
           unless remaining.isEmpty do throwError "automation left {remaining.length} goals"
         else
           proveCHC measure backend.getString goal.mvarId!

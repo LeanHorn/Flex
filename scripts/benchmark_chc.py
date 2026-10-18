@@ -28,7 +28,9 @@ import threading
 ROOT = Path(__file__).resolve().parents[1]
 BASIC = [f"ex{i}" for i in range(1, 15)] + [
     "ex_nat", "ex_bool", "ex_pair", "ex_prod", "ex_userfn", "ex_stress"]
-CYCLIC = ["cyc0"] + [f"pa{i}" for i in range(1, 8)]
+CYCLIC = ["cyc0"] + [f"Mixed.{name}" for name in [
+    "seededCountdown", "mergingSeeds", "strideTwo", "independentLoops",
+    "chainedSeed", "counterAndAccumulator", "cyclicBeforeSeed"]]
 BACKENDS = ["fix", "spacer", "eldarica"]
 # The public pipeline separates preparation and certification. Legacy phase
 # columns remain readable when summarizing records from older benchmark runs.
@@ -145,7 +147,7 @@ def main() -> int:
     if "eldarica" in args.backends and not shutil.which(args.eldarica):
         parser.error("Eldarica not found; provide --eldarica /path/to/eld or select --backends fix spacer")
     if not args.skip_build:
-        subprocess.run(["lake", "--log-level=error", "build", "Flex.CHC", "Demo.Basic", "Demo.Cyclic"],
+        subprocess.run(["lake", "--log-level=error", "build", "Flex.CHC", "Demo.Basic", "Demo.Fix"],
                        cwd=ROOT, check=True)
     metadata = {
         "started_at": datetime.now(timezone.utc).isoformat(),
@@ -158,9 +160,9 @@ def main() -> int:
         "timing": "serial in-process Lean wall time, including fresh solver startup and kernel audit; excludes imports, builds, witness pretty printing",
         "chc_pipeline": "Flex.CHC.solveGoal with proof oracle first | omega | grind; partial VCs are not counted as proofs",
         "obligation_summary": "maximum remaining and minimum proved obligations across measured repetitions",
-        "baseline": "solve_fixpoint with Demo.Basic and Demo.Cyclic imported (including Cyclic qualifiers)",
+        "baseline": "zap followed by fix with the standard qualifier bank, then grind for residual goals; imports Demo.Basic and Demo.Fix",
         "sources_sha256": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-                           for name in ["Demo/Basic.lean", "Demo/Cyclic.lean", "eval/CHCCases.lean",
+                           for name in ["Demo/Basic.lean", "Demo/Fix.lean", "eval/CHCCases.lean",
                                         "scripts/benchmark_chc.py", "lake-manifest.json", "lakefile.lean",
                                         "Flex/CHC/Process.lean", "Flex/CHC/Process/Native.lean",
                                         "Flex/CHC/Process/Portable.lean", "Flex/CHC/Process/Types.lean",

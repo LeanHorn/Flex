@@ -1,5 +1,4 @@
 import Flex
-import Flex.Tactic.Oracles.Smt
 import Smt2Lean
 
 /-! Check the shared lean-smt/cvc5 dependencies in one environment. The native
@@ -48,7 +47,7 @@ def counter : Prop := ∃ k : Int → Prop,
   k 0 ∧ (∀ n, k n → k (n + 1)) ∧ (∀ n, k n → 0 ≤ n)
 
 theorem counter_proof : counter := by
-  fix (scrape := head) (synth := flex_auto) (proof := flex_smt [*])
+  fix (scrape := basic) (synth := flex_auto) (proof := flex_smt [*])
 
 -- Exercise reconstruction directly, so a fallback cannot hide incompatibility.
 theorem arithmetic_proof (x y : Int) (h : x ≤ y) : x + 1 ≤ y + 1 := by

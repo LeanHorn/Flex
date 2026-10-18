@@ -1,6 +1,6 @@
 import Flex.CHC.Certificate
 import Flex.CHC.Export
-import Flex.Tactic.Oracles.Smt
+import Flex.Tactic.Oracles
 import Auto.Solver.SMT
 
 /-! Model candidates become ordinary Lean obligations even when a proof oracle

@@ -6,7 +6,7 @@ package «Flex» where
 
 -- aesop supplies goal closers; lean-auto and lean-smt supply opt-in SMT oracles.
 -- `Std` ships with the Lean toolchain, so it needs no `require`.
--- Flex's imported modules are mathlib-free; this lean-smt revision declares
+-- Flex's core imports are mathlib-free; this lean-smt revision declares
 -- mathlib as a transitive package dependency but its `Smt` import does not use it.
 -- Keep these pins aligned with lean-smt's Lean v4.34.0 dependency set.
 require aesop from git

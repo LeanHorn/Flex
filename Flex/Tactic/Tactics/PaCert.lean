@@ -124,37 +124,30 @@ syntax "fix" (atomic("(" &"scrape" ":=") ident ")")?
   (atomic("(" &"defs" ":=") "[" ident,* "]" ")")?
   (atomic("(" &"oracle" ":=") tacticSeq ")")?
   (atomic("(" &"synth" ":=") tacticSeq ")")?
-  (atomic("(" &"proof" ":=") tacticSeq ")")?
-  (atomic("(" &"trust" ":=") ident ")")? : tactic
+  (atomic("(" &"proof" ":=") tacticSeq ")")? : tactic
 
 elab_rules : tactic
   | `(tactic| fix $[(scrape := $mode:ident)]? $[(defs := [$defs:ident,*])]?
       $[(oracle := $fallback:tacticSeq)]? $[(synth := $synth:tacticSeq)]?
-      $[(proof := $proof:tacticSeq)]? $[(trust := $trust:ident)]?) => do
+      $[(proof := $proof:tacticSeq)]?) => do
     let mode ← match mode.map (·.getId) with
       | none | some `no => pure PAScrapeMode.no
       | some `head => pure PAScrapeMode.head
       | some `both => pure PAScrapeMode.both
       | _ => throwError "fix: scrape must be `no`, `head`, or `both`"
-    let trust ← match trust.map (·.getId) with
-      | none | some `false => pure false
-      | some `true => pure true
-      | _ => throwError "fix: trust must be `true` or `false`"
     let defs ← match defs with
       | none => pure #[]
       | some names => names.getElems.mapM fun name =>
         realizeGlobalConstNoOverloadWithInfo name
-    if trust && fallback.isNone && synth.isNone && proof.isNone then
-      throwError "fix: `trust := true` requires an explicit oracle"
     let oracle ← match fallback with
       | none => pure proveLeaf
-      | some tac => pure (withPAFallback (← `(tactic| ($tac:tacticSeq))) trust)
+      | some tac => pure (withPAFallback (← `(tactic| ($tac:tacticSeq))))
     let synthOracle ← match synth with
       | none => pure oracle
-      | some tac => pure (withPAPriority (← `(tactic| ($tac:tacticSeq))) trust)
+      | some tac => pure (withPAPriority (← `(tactic| ($tac:tacticSeq))))
     let proofOracle ← match proof with
       | none => pure oracle
-      | some tac => pure (withPAPriority (← `(tactic| ($tac:tacticSeq))) trust)
+      | some tac => pure (withPAPriority (← `(tactic| ($tac:tacticSeq))))
     paCertImpl synthOracle { mode, defs } (some proofOracle)
     benchFixPhase "residual" do
       let mut remaining := []

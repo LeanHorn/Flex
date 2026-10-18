@@ -4,24 +4,9 @@ import Flex.Tactic.Utils
 
 open Lean Meta Elab Tactic
 
-/-- A PA query returns evidence on success and `none` on failure/unknown.
-    Keeping this per invocation avoids changing other proofs' oracle settings. -/
+/-- Return type for oracle of PA.
+    success if `proof` returned, or `none` if failure. -/
 abbrev PAOracle := Expr → TermElabM (Option Expr)
-
-initialize Lean.registerTraceClass `flex.oracle
-
-/-- Run `k` and throw away every message it logged, whether it succeeded or
-    not. Needed because `grind`/`omega` report failures through the message
-    log, not as exceptions, so `try`/`first` alone would leak them. -/
-private def withSilencedMessages {α} (k : TermElabM α) : TermElabM α := do
-  let saved ← Core.getMessageLog
-  try
-    let r ← k
-    Core.setMessageLog saved
-    return r
-  catch e =>
-    Core.setMessageLog saved
-    throw e
 
 /-- The default tactic oracle used by PA, before any per-call fallback.
     No `aesop`: it can hit `maxRecDepth` (uncatchable) and over-weakens solutions. -/
@@ -29,65 +14,68 @@ syntax "pa_oracle" : tactic
 macro_rules
   | `(tactic| pa_oracle) => `(tactic| first | omega | grind | (constructor <;> grind))
 
-/-- Introduce a query's binders and run `tac` in an isolated metavariable scope.
-    Reject failure and remaining goals; admitted evidence requires `trust`.
-    Named axioms retain their ordinary Lean semantics. -/
-def proveLeafWith (tac : TSyntax `tactic) (goal : Expr)
-    (trust : Bool := false) : TermElabM (Option Expr) :=
-  withSilencedMessages <| withNewMCtxDepth do
-    let saved ← saveState
-    let mvar ← mkFreshExprMVar (some goal) (kind := .syntheticOpaque)
-    try
-      let goals ← Tactic.run mvar.mvarId! do
+initialize Lean.registerTraceClass `flex.oracle
+
+/-- Suppress messages from speculative PA checks,
+    since failed attempts to prove candidate qualifiers
+    would otherwise clutter the Infoview. -/
+private def withSilencedMessages {α} (k : TermElabM α) : TermElabM α := do
+  let saved ← Core.getMessageLog
+  try
+    k
+  finally
+    Core.setMessageLog saved
+
+/-- Try to prove `goal` using `tac`, suppressing intermediate messages.
+    Return `some proof` on success or `none` on failure. -/
+def proveLeafWith
+  (tac : TSyntax `tactic)
+  (goal : Expr)
+  : TermElabM (Option Expr) := do
+    withSilencedMessages <| withNewMCtxDepth do
+      let saved ← saveState
+      -- create a new meta-variable where will do the proof
+      let mvar ← mkFreshExprMVar (some goal) (kind := .syntheticOpaque)
+      let remainingGoals ← Tactic.run mvar.mvarId! do
+        -- intro binders
         evalTactic (← `(tactic| intros))
         evalTactic tac
-      if !goals.isEmpty then
+      -- check if remaining goals are fully done
+      -- if not, consider failure
+      if !remainingGoals.isEmpty then
         saved.restore
-        trace[flex.oracle] "oracle left subgoals: {tac}"
         return none
-      let proof   ← instantiateMVars mvar
-      -- No goals left is not enough: `constructor <;> grind` hides unsolved
-      -- subgoals behind `sorry`.
-      if (!trust && proof.hasSorry) || proof.hasExprMVar then
+      -- extract the proof
+      let proof ← instantiateMVars mvar
+      -- Reject unresolved metavariables and explicit admissions.
+      if proof.hasExprMVar || proof.hasSorry then
         saved.restore
-        trace[flex.oracle] "oracle returned incomplete evidence: {tac}"
         return none
       return some proof
-    catch e =>
-      saved.restore
-      trace[flex.oracle] "oracle failed: {tac}\n{e.toMessageData}"
-      return none
 
-/-- Prove one qualifier `q(x̄)` with the PA oracle and return the proof term.
-    Used by `walkPAProof` to build the certificate, and by `checkExprVC` on
-    whole clauses. `proveLeafWith` introduces any remaining binders. -/
+/-- Try to prove `goal` with the default PA oracle. -/
 def proveLeaf (goal : Expr) : TermElabM (Option Expr) := do
   proveLeafWith (← `(tactic| pa_oracle)) goal
 
-/-- Try the existing Lean oracle first, then an optional imported tactic.
-    `trust` permits admitted evidence from that fallback (e.g. an SMT backend
-    without reconstruction). Such results retain their backend's trust model. -/
-def withPAFallback (tac : TSyntax `tactic) (trust : Bool := false) : PAOracle :=
+/-- Try the existing PA Lean oracle first, then the supplied tactic on failure. -/
+def withPAFallback (tac : TSyntax `tactic) : PAOracle :=
   fun goal => do
-    if let some proof ← proveLeaf goal then return some proof
-    let result ← proveLeafWith tac goal trust
+    if let some proof   ← proveLeaf goal then return some proof
+    let result          ← proveLeafWith tac goal
     trace[flex.oracle] "fallback accepted={result.isSome}: {tac}"
     return result
 
-/-- Prefer an external oracle, falling back to Lean on failure/unknown.
-    Used by the independent `synth` and `proof` options of `fix`. -/
-def withPAPriority (tac : TSyntax `tactic) (trust : Bool := false) : PAOracle :=
+/-- Try `tac` first, then the default PA oracle. -/
+def withPAPriority (tac : TSyntax `tactic) : PAOracle :=
   fun goal => do
-    if let some proof ← proveLeafWith tac goal trust then return some proof
+    if let some proof ← proveLeafWith tac goal then return some proof
     proveLeaf goal
 
-/-- Can the oracle establish the whole clause `prop`? -/
+/-- Return whether the oracle proves `prop`. -/
 def checkExprVC (prop : Expr) (oracle : PAOracle := proveLeaf) : TermElabM Bool := do
   return (← oracle prop).isSome
 
-/-- Sat-guard: is the clause body contradictory? The caller has already
-    replaced the head with `False` (`specializeClauseAsNeg`), so this is just
-    `checkExprVC` on that clause. -/
-def checkExprUnsat (propWithFalseConclusion : Expr) (oracle : PAOracle := proveLeaf)
+/-- Check a clause whose conclusion has been replaced with `False`. -/
+def checkExprUnsat (clause : Expr) (oracle : PAOracle := proveLeaf)
     : TermElabM Bool :=
-  checkExprVC propWithFalseConclusion oracle
+  checkExprVC clause oracle

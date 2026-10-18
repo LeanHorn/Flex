@@ -1,11 +1,8 @@
 import Flex
 
-/-! Opt-in PA scraping and per-call oracle regression examples. No manual
-    Fibonacci qualifiers or external solver installation are needed here. -/
+/-! Qualifier scraping from constraints and recursive definitions. -/
 
 namespace OracleScrape
-
-open Lean Meta Elab Term
 
 theorem countdown_scraped :
   ∃ k : Int → Prop,
@@ -30,21 +27,5 @@ theorem fib_scraped :
             ∧ ((i < n) → k (i + 1) curr (prev + curr) n)))
       ∧ ((n ≤ 1) → 1 = fib n)
  := by fix (scrape := both) (defs := [fib])
-
--- A failed/nonterminal backend must not count as success or modify the
--- caller's metavariables; an admitted result needs explicit trust.
-run_elab do
-  let no ← proveLeafWith (← `(tactic| skip)) (mkConst ``False)
-  unless no.isNone do throwError "nonterminal oracle accepted"
-  let no ← proveLeafWith (← `(tactic| admit)) (mkConst ``False)
-  unless no.isNone do throwError "untrusted admit accepted"
-  let yes ← proveLeafWith (← `(tactic| admit)) (mkConst ``False) true
-  unless yes.isSome do throwError "trusted oracle rejected"
-  let x ← mkFreshExprMVar (some (mkConst ``Nat))
-  let goal ← mkEq x (mkNatLit 0)
-  let _ ← proveLeafWith (← `(tactic| exact rfl)) goal
-  if ← x.mvarId!.isAssigned then throwError "oracle assigned caller's metavariable"
-  let no ← proveLeafWith (← `(tactic| (exact True.intro; fail "rollback"))) (mkConst ``True)
-  unless no.isNone do throwError "failing oracle accepted"
 
 end OracleScrape

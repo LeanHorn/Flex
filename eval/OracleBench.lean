@@ -1,5 +1,4 @@
 import Flex
-import Flex.Tactic.Oracles.Smt
 
 /-! Prelude injected by `scripts/benchmark_oracles.py`. Time declaration
 elaboration after imports; inspect the result so failed/admitted proofs cannot

@@ -1,5 +1,4 @@
 import Flex
-import Flex.Tactic.Oracles.Smt
 
 /-! Trusted candidate checks must not leak into independently reconstructed
 certificates. Requires Z3 for `flex_auto`; lean-smt uses its bundled cvc5 FFI. -/

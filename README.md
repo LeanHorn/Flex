@@ -45,14 +45,13 @@ lake build
 
 ## Importing
 
-A single import gives you the core API, Lean tactics, and lean-auto wrapper:
+A single import gives you the core API, Lean tactics, and lean-auto/lean-smt wrappers:
 
 ```lean4
 import Flex
 ```
 
 This includes all core types, tactics, elaboration, and the solver.
-For lean-smt, additionally import `Flex.Tactic.Oracles.Smt`.
 
 With `(scrape := head)`, `(scrape := both)`, or `(defs := [...])`, `fix` shows
 the scraped qualifier count and typed templates in the Infoview. These are

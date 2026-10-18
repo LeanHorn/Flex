@@ -29,7 +29,7 @@ attribute [local simp] Exp.ftv Ty.ftv Refinement.ftv Formula.ftv Term.ftv Base.f
 /-- `len` of BVar i, as a κ argument. -/
 abbrev lenA (i : Nat) : (Σ b : Base, Term b) := ⟨.int, lenB i⟩
 
-/-! ## `length`: `xs:list α → Int{k(ν, len xs)}`, solved by `k(ν, n) := ν = n` -/
+/-! ## `length`: `xs:list α → Int{k(ν, len xs)}`, where the client needs `ν = len xs` -/
 abbrev lengthTyK : Ty :=
   .forall .star (.arrow (ListT (Par 0)) (.refine .int (.kapp "k" [⟨.int, .bvar .int 0⟩, lenA 1])))
 
@@ -54,7 +54,7 @@ theorem infer_map : ∃ κ : KEnv, Check lenEnv κ []
   generate
   fix
 
-/-! ## `append`: a three-way relation, `k(len ν, len xs, len ys) := len ν = len xs + len ys` -/
+/-! ## `append`: a three-way relation `k(len ν, len xs, len ys)`; the client needs `len ν = len xs + len ys` -/
 abbrev appendTyK : Ty := .forall .star (.arrow (ListT (Par 0)) (.arrow (ListT (Par 0))
   (.dataL "list" [Par 0] (.kapp "k" [lenA 0, lenA 2, lenA 1]))))
 
@@ -68,8 +68,9 @@ theorem infer_append : ∃ κ : KEnv, Check lenEnv κ []
 
 /-! ## The statement of a lemma: `nonneg : xs:list α → Int{k(len xs)}`
 
-  The client `cons` calls `nonneg t` and needs `0 < len (Cons h t)`; the solver
-  infers the lemma `k(n) := 0 ≤ n`, and the recursion checks it. -/
+  The client `cons` calls `nonneg t` and needs `0 < len (Cons h t)`, i.e. a
+  lemma at least as strong as `0 ≤ len t`; the solver finds one that the
+  recursion establishes. -/
 abbrev nonnegTyK : Ty :=
   .forall .star (.arrow (ListT (Par 0)) (.refine .int (.kapp "k" [lenA 1])))
 

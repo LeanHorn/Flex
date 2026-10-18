@@ -355,3 +355,41 @@ theorem meas_insert (κ : KEnv) : topVC κ [] insE insLenTy olistLenEnv := by
   simp [topVC, olistLenEnv, olistDecl]
   split_sorts
   all_goals grind
+
+/-! ## Conditionals: tree `height`
+
+  `height (Node l x r) = 1 + max (height l) (height r)` uses a conditional
+  (`MBody.max a b = if a ≤ b then b else a`), which becomes an `ite` term in
+  the logic. -/
+
+/-- Trees with both `size` and `height`. -/
+def htreeDecl : DataDecl :=
+  { treeDecl with
+    measures := treeDecl.measures ++
+      [("height", [.const 0, .add (.const 1) (.max (.meas "height" 0) (.meas "height" 2))])] }
+def htreeEnv : DEnv := [("tree", htreeDecl)]
+
+theorem htreeEnv_wf : htreeEnv.wfB = true := by decide
+
+abbrev heightB (i : Nat) : Term .int := .mbvar "height" i
+
+/-- `mirror` preserves the height too (the `max` swaps its arguments). -/
+abbrev mirrorHTy : Ty :=
+  .forall .star (.arrow (TreeT (Par 0))
+    (TreeT (Par 0) (.fmla (.and (.eq .int (sizeB 0) (sizeB 1)) (.eq .int (heightB 0) (heightB 1))))))
+
+theorem meas_mirrorHeight (κ : KEnv) : topVC κ [] mirrorE mirrorHTy htreeEnv := by
+  simp [topVC, mirrorE, mirrorHTy, htreeEnv, htreeDecl, treeDecl]
+  grind
+
+/-- A lemma relating two measures, `0 ≤ height t ≤ size t`, by recursion on
+    both subtrees:
+    `Λα. fix go. λt. case t of Leaf _ => 0
+                     | Node p => let (l, q) = p; let (x, r) = q; let a = go l; go r` -/
+abbrev heightLeSizeTy : Ty :=
+  .forall .star (.arrow (TreeT (Par 0))
+    (.refine .int (.fmla (.and (.leqI (.const .int 0) (heightB 1)) (.leqI (heightB 1) (sizeB 1))))))
+
+theorem meas_heightLeSize (κ : KEnv) : topVC κ [] sizeNonnegE heightLeSizeTy htreeEnv := by
+  simp [topVC, sizeNonnegE, heightLeSizeTy, htreeEnv, htreeDecl, treeDecl]
+  grind

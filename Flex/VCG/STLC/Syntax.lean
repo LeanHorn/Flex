@@ -626,13 +626,18 @@ def Ty.tuple : List Ty → Ty
   | t :: ts => .prod t (Ty.tuple ts)
 
 /-- A measure's body for one constructor, over that constructor's fields:
-    an integer built from literals, `Int` fields, and measures of fields. -/
+    an integer built from literals, `Int` fields, measures of fields, `+`, and
+    conditionals on comparisons. -/
 inductive MBody where
   | const : Int → MBody
   | field : Nat → MBody               -- the (`Int`) field `i`
   | meas  : String → Nat → MBody      -- measure `m` of field `i`
   | add   : MBody → MBody → MBody
+  | iteLe : MBody → MBody → MBody → MBody → MBody   -- `if a ≤ b then t else e`
   deriving Repr
+
+/-- `max a b`, as a conditional. -/
+@[reducible] def MBody.max (a b : MBody) : MBody := .iteLe a b b a
 
 /-- A measure body as a refinement term, given terms for the fields and for
     the fields' measures. -/
@@ -641,6 +646,8 @@ def MBody.toTerm (fld : Nat → Term .int) (msr : String → Nat → Term .int) 
   | .field i  => fld i
   | .meas m i => msr m i
   | .add a b  => .add (a.toTerm fld msr) (b.toTerm fld msr)
+  | .iteLe a b t e =>
+      .ite .int (.leqI (a.toTerm fld msr) (b.toTerm fld msr)) (t.toTerm fld msr) (e.toTerm fld msr)
 
 /-- Every field a body reads is one of the `n` fields. -/
 def MBody.idxOK (n : Nat) : MBody → Bool
@@ -648,6 +655,7 @@ def MBody.idxOK (n : Nat) : MBody → Bool
   | .field i  => decide (i < n)
   | .meas _ i => decide (i < n)
   | .add a b  => a.idxOK n && b.idxOK n
+  | .iteLe a b t e => a.idxOK n && b.idxOK n && t.idxOK n && e.idxOK n
 
 /-- Conjoin `r` into the refinement of the last component of a payload type
     with `n + 1` components (types without a refinement are left alone). -/
@@ -800,6 +808,7 @@ def MBody.eval (fv : Nat → Int) (fm : Nat → String → Int) : MBody → Int
   | .field i  => fv i
   | .meas m i => fm i m
   | .add a b  => a.eval fv fm + b.eval fv fm
+  | .iteLe a b t e => if a.eval fv fm ≤ b.eval fv fm then t.eval fv fm else e.eval fv fm
 
 /-- The value of measure `m` on `v`. -/
 def DEnv.measEval (de : DEnv) (m : String) : Val → Int

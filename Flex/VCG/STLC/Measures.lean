@@ -71,6 +71,10 @@ theorem MBody.interp_toTerm (γ : REnv) (fld : Nat → Term .int) (msr : String 
   | .add x y => by
     simp only [MBody.toTerm, MBody.eval, Term.interp, MBody.interp_toTerm γ fld msr x,
       MBody.interp_toTerm γ fld msr y]
+  | .iteLe x y t e => by
+    simp only [MBody.toTerm, MBody.eval, Term.interp, MBody.interp_toTerm γ fld msr x,
+      MBody.interp_toTerm γ fld msr y, MBody.interp_toTerm γ fld msr t,
+      MBody.interp_toTerm γ fld msr e, decide_eq_true_eq]
 
 theorem MBody.eval_congr {n : Nat} {fv gv : Nat → Int} {f g : Nat → String → Int}
     (hv : ∀ i < n, fv i = gv i) (hfg : ∀ i < n, ∀ m, f i m = g i m) :
@@ -85,6 +89,10 @@ theorem MBody.eval_congr {n : Nat} {fv gv : Nat → Int} {f g : Nat → String �
   | .add x y, h => by
     simp only [MBody.idxOK, Bool.and_eq_true] at h
     simp only [MBody.eval, MBody.eval_congr hv hfg x h.1, MBody.eval_congr hv hfg y h.2]
+  | .iteLe x y t e, h => by
+    simp only [MBody.idxOK, Bool.and_eq_true] at h
+    simp only [MBody.eval, MBody.eval_congr hv hfg x h.1.1.1, MBody.eval_congr hv hfg y h.1.1.2,
+      MBody.eval_congr hv hfg t h.1.2, MBody.eval_congr hv hfg e h.2]
 
 /-! ## Payloads -/
 

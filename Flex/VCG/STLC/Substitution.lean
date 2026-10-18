@@ -2557,6 +2557,10 @@ theorem MBody.toTerm_noBVar {fld : Nat → Term .int} {msr : String → Nat → 
   | .add x y, b, k => by
     simp only [MBody.toTerm, Term.hasBVar, not_or]
     exact ⟨MBody.toTerm_noBVar hf hm x b k, MBody.toTerm_noBVar hf hm y b k⟩
+  | .iteLe x y t e, b, k => by
+    simp only [MBody.toTerm, Term.hasBVar, not_or]
+    exact ⟨⟨MBody.toTerm_noBVar hf hm x b k, MBody.toTerm_noBVar hf hm y b k⟩,
+      MBody.toTerm_noBVar hf hm t b k, MBody.toTerm_noBVar hf hm e b k⟩
 
 /-- A constructor's measure facts mention no sorted bound variable (they read
     ν and the fields only through measures). -/

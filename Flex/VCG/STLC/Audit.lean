@@ -138,3 +138,9 @@ open STLC
 
 /-- info: 'meas_insert' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms meas_insert
+
+/-- info: 'meas_mirrorHeight' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms meas_mirrorHeight
+
+/-- info: 'meas_heightLeSize' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms meas_heightLeSize

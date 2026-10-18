@@ -236,6 +236,19 @@ def ilistEnv : DEnv := [("ilist", ilistDecl)]
 
 theorem ilistEnv_wf : ilistEnv.wfB = true := by decide
 
+/-- Reading a field as an `Int` requires it to be declared `Int`: summing the
+    elements of a polymorphic `list α` (field `0 : α`) is rejected. -/
+theorem sumPoly_wf_bad :
+    DEnv.wfB [("list", { listDecl with
+      measures := [("sum", [.const 0, .add (.field 0) (.meas "sum" 1)])] })] = false := by
+  decide
+
+/-- … and branching on a field requires it to be declared `Bool`. -/
+theorem iteBOnInt_wf_bad :
+    DEnv.wfB [("ilist", { ilistDecl with
+      measures := [("sum", [.const 0, .iteB 0 (.const 1) (.const 0)])] })] = false := by
+  decide
+
 /-- `sumList : xs:ilist → Int{ν = sum xs}`:
     `fix go. λxs. case xs of INil _ => 0 | ICons p => let (h, t) = p; let r = go t; h + r` -/
 abbrev sumIListTy : Ty :=

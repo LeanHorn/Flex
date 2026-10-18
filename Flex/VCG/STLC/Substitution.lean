@@ -2515,11 +2515,28 @@ def Ty.varOK (de : DEnv) (vs : List Variance) : Nat → Pol → Ty → Bool
   | d, p, .prod s t       => Ty.varOK de vs d p s && Ty.varOK de vs d p t
   | d, p, .data C n args _ => (List.finRange n).all fun l => Ty.varOK de vs d (p.comp (de.var C l)) (args l)
 
+/-- A body reads an `Int` field only where one is declared `Int{…}`, and
+    branches on a field only where it is declared `Bool{…}`. (Soundness does not
+    depend on this — a mismatched field reads as `0`/`false` — but such a
+    measure is surely a mistake.) -/
+def MBody.fieldsOK (ts : List Ty) : MBody → Bool
+  | .const _  => true
+  | .field i  => match ts[i]? with
+    | some (.refine .int _) => true
+    | _ => false
+  | .meas _ _ => true
+  | .add a b  => a.fieldsOK ts && b.fieldsOK ts
+  | .iteLe a b t e => a.fieldsOK ts && b.fieldsOK ts && t.fieldsOK ts && e.fieldsOK ts
+  | .iteB i t e => (match ts[i]? with
+    | some (.refine .bool _) => true
+    | _ => false) && t.fieldsOK ts && e.fieldsOK ts
+
 /-- Well-formed measures: distinct names, and every body reads only fields of
-    its constructor. -/
+    its constructor, each at its declared base. -/
 def DataDecl.measOK (d : DataDecl) : Bool :=
   decide (d.measures.map Prod.fst).Nodup &&
-  d.measures.all fun mb => (mb.2.zip d.ctorFields).all fun bc => bc.1.idxOK bc.2.2.length
+  d.measures.all fun mb => (mb.2.zip d.ctorFields).all fun bc =>
+    bc.1.idxOK bc.2.2.length && bc.1.fieldsOK bc.2.2
 
 /-- Well-formed declarations: payloads have no free term or type variables, and
     respect the declared variances; measures are well-formed. -/

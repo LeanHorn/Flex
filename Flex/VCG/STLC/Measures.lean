@@ -52,7 +52,9 @@ theorem DEnv.wfB_meas {de : DEnv} (h : de.wfB = true) {C : String} {d : DataDecl
   have hzip : (b, c) ∈ x.2.zip d.ctorFields := by
     rw [List.mem_iff_getElem?]
     exact ⟨j, by simp [List.getElem?_zip_eq_some, hb, hc]⟩
-  exact hok.2 x hx (b, c) hzip
+  have := hok.2 x hx (b, c) hzip
+  simp only [Bool.and_eq_true] at this
+  exact this.1
 
 /-! ## Evaluating facts -/
 

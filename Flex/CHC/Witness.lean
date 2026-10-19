@@ -1,13 +1,12 @@
-import Flex.CHC.Fragment
-import Flex.CHC.Solver
+import Flex.CHC.Export
+import Flex.CHC.Backend
 import Smt2Lean.Model
 
 namespace Flex.CHC
 
 open Lean Meta
 
-/-- A closed predicate candidate for an existing existential witness slot.
-This records a typed interpretation, not evidence that it satisfies the CHCs. -/
+/-- A closed, typed predicate candidate; satisfaction is checked by certification. -/
 structure Witness where
   symbol : String
   mvarId : MVarId
@@ -18,8 +17,7 @@ private def requireClosed (expression : Expr) (description : String) : MetaM Uni
   if expression.hasFVar || expression.hasLooseBVars || expression.hasMVar || expression.hasLevelMVar then
     throwError "CHC witnesses: {description} contains free or unresolved variables"
 
-/-- Recheck the export's metadata against the current witness slots. Exported
-problems may outlive other tactic work; a previously prepared slot can be stale. -/
+/-- Export metadata can become stale between preparation and model import. -/
 private def checkRelations (problem : ExportedProblem) : MetaM Unit := do
   let mut symbols : Std.HashSet String := {}
   let mut identities : Std.HashSet MVarId := {}
@@ -67,9 +65,7 @@ private def checkValue (relation : Relation) (value : Expr) : MetaM Unit := do
   unless ← isDefEq (← inferType value) relation.leanType do
     throwError "CHC witnesses: candidate type does not match '{relation.symbol}'"
 
-/-- Restore the original Bool/Prop distinction and keep even unused parameters.
-For example, an imported `Prop → Int → Prop` becomes `Bool → Int → Prop` by
-passing `b = true` in the Bool position; existing Prop positions are unchanged. -/
+/-- Restore Bool arguments as `b = true`, retaining Prop and unused parameters. -/
 private def adapt (relation : Relation) (definition : Smt2Lean.ReconstructedDefinition)
     : MetaM Witness := do
   unless ← isDefEq definition.type (importedType relation) do
@@ -94,24 +90,14 @@ private def successfulModel (result : SolverResult) : MetaM Unit := do
   | .error message => throwError "CHC witnesses: {message}"
   | _ => throwError "CHC witnesses: process did not successfully return a model"
 
-/-- Reconstruct and adapt all model predicates in the original existential order.
-
-Every exported relation is required, including unused and nullary predicates.
-Additional ordinary helper definitions are allowed; SMTLib-to-Lean expands them
-and checks that the reconstructed expressions are closed. Definitions are matched
-by solver symbol, never by model order or by the user's Lean binder names.
-
-This preparation restores the caller's meta state on success and failure. It does
-not assign any witness or establish that the candidates satisfy the constraints.
--/
+/-- Import every relation by solver symbol, in existential order. Helpers are
+expanded by SMTLib-to-Lean. Restores caller state without assigning witnesses. -/
 def importWitnesses (problem : ExportedProblem) (result : SolverResult) : MetaM (Array Witness) := do
   let saved ← Meta.saveState
   try
     checkRelations problem
     successfulModel result
-    -- Reconstruction creates temporary declarations for kernel checks. Give it
-    -- a private, unlocked environment even inside an asynchronous theorem task;
-    -- only closed expressions return, never that temporary environment.
+    -- Kernel checking needs temporary declarations in an unlocked environment.
     let response ← withoutModifyingEnv do
       let environment ← getEnv
       Smt2Lean.Model.importResponse result.process.stdout environment "flex-chc-model"
@@ -128,14 +114,10 @@ def importWitnesses (problem : ExportedProblem) (result : SolverResult) : MetaM 
       let some definition := byName[relation.symbol]?
         | throwError "CHC witnesses: missing model definition '{relation.symbol}'"
       adapt relation definition
-  finally saved.restore
+  finally restoreMetaState saved
 
-/-- Assign a complete, ordered witness bundle after revalidating every entry.
-
-Validation runs before any assignment and its temporary state is discarded. Any
-failure restores the caller's state, including pre-existing assignments. The body
-proof goal remains open: witness type correctness is not invariant correctness.
--/
+/-- Validate the complete, ordered bundle before assigning any witnesses.
+Discard validation state; restore entry state on failure. Leaves the body open. -/
 def assignWitnesses (problem : ExportedProblem) (witnesses : Array Witness) : MetaM Unit := do
   let saved ← Meta.saveState
   try
@@ -146,10 +128,10 @@ def assignWitnesses (problem : ExportedProblem) (witnesses : Array Witness) : Me
       unless witness.symbol == relation.symbol && witness.mvarId == relation.kvar.mvarId do
         throwError "CHC witnesses: candidate identity or order does not match '{relation.symbol}'"
       checkValue relation witness.value
-    saved.restore
+    restoreMetaState saved
     for witness in witnesses do witness.mvarId.assign witness.value
   catch error =>
-    saved.restore
+    restoreMetaState saved
     throw error
 
 end Flex.CHC

@@ -1,12 +1,192 @@
 import Flex.Fusion.Flatten
-import Flex.CHC.Prepare
-import Flex.CHC.Script
+import Smt.Translate.Int
+import Smt.Translate.Bool
+import Smt.Translate.Prop
 import Smt.Translate.Query
 import Smt2Lean.Chc
+import Qq
 
 namespace Flex.CHC
 
-open Lean Meta
+open Lean Meta Qq
+
+/-- Restore Meta/Core state after a speculative operation. -/
+def restoreMetaState (saved : Meta.SavedState) : MetaM Unit := do
+  set saved.meta
+  modifyThe Core.State fun _ => saved.core.toState
+
+/-- Integer and Boolean value sorts. -/
+inductive ValueSort where
+  | int | bool
+  deriving BEq, Repr, Inhabited
+
+/-- Map solver symbols to Lean witness slots, retaining unused arguments and Bool/Prop types. -/
+structure Relation where
+  symbol : String
+  kvar : KVar
+  leanType : Lean.Expr
+  argumentSorts : Array ValueSort
+  deriving Inhabited
+
+/-- Checked assertions ending in `check-sat`, with metadata for model reconstruction. -/
+structure ExportedProblem where
+  relations : Array Relation
+  commands : List Smt.Translate.Command
+  clauseCount : Nat
+  deriving Inhabited
+
+/-- Group universal binders: Spacer rejects some nested Bool/Int prefixes. -/
+private def clauseSexp (term : Smt.Term) : Sexp :=
+  go term []
+where
+  go : Smt.Term → List Sexp → Sexp
+    | .forallT name sort body, binders =>
+      go body (.expr [.atom (Smt.Term.quoteSymbol name), ToSexp.toSexp sort] :: binders)
+    | body, [] => ToSexp.toSexp body
+    | body, binders => .expr [.atom "forall", .expr binders.reverse, ToSexp.toSexp body]
+
+private def commandSexp : Smt.Translate.Command → Sexp
+  | .assert term => .expr [.atom "assert", clauseSexp term]
+  | command => ToSexp.toSexp command
+
+/-- Serialize the script with grouped universal binders. -/
+def ExportedProblem.toSMTLib (problem : ExportedProblem) : String :=
+  Sexp.serializeMany (problem.commands.map commandSexp) ++ "\n"
+
+namespace Fragment
+
+/-- Accept Int, Bool, and Prop values. -/
+def valueSort (type : Expr) : MetaM ValueSort := do
+  let type ← whnf type
+  if type.isConstOf ``Int then return .int
+  if type.isConstOf ``Bool || type.isProp then return .bool
+  throwError "CHC export: unsupported value type {type}; expected Int, Bool, or Prop"
+
+/-- Use only the supported lean-smt translators; restore the environment afterwards. -/
+def withTranslators (action : MetaM α) : MetaM α := withoutModifyingEnv do
+  let extension := Smt.Attribute.smtExt
+  modifyEnv fun env => extension.modifyState env fun state =>
+    state.insert ``Smt.Translator {
+      ``Smt.Translate.Int.translateType, ``Smt.Translate.Int.translateInt,
+      ``Smt.Translate.Int.translateProp, ``Smt.Translate.Bool.translateType,
+      ``Smt.Translate.Bool.translateBool, ``Smt.Translate.Bool.translateProp,
+      ``Smt.Translate.Prop.translateType, ``Smt.Translate.Prop.translateProp,
+      ``Smt.Translate.Prop.translateIte }
+  action
+
+private def application (term : Smt.Term) : Smt.Term × Array Smt.Term :=
+  go term #[]
+where
+  go : Smt.Term → Array Smt.Term → Smt.Term × Array Smt.Term
+    | .appT f x, args => go f (#[x] ++ args)
+    | f, args => (f, args)
+
+private def numeral : Smt.Term → Bool
+  | .literalT text => !text.isEmpty && text.toList.all Char.isDigit
+  | .appT (.symbolT "-") (.literalT text) => !text.isEmpty && text.toList.all Char.isDigit
+  | _ => false
+
+/-- Check supported operators and arities; the native parser subsequently checks sorts. -/
+partial def checkTerm (term : Smt.Term) (symbols : Array String) : MetaM Unit := do
+  match term with
+  | .literalT _ =>
+    unless numeral term do throwError "CHC export: unsupported SMT literal {term}"
+  | .symbolT name =>
+    unless symbols.contains name || #["true", "false"].contains name do
+      throwError "CHC export: undeclared SMT symbol '{name}'"
+  | .forallT name sort body =>
+    unless (toString sort == "Int" || toString sort == "Bool") && !symbols.contains name do
+      throwError "CHC export: invalid or shadowed SMT binder '{name}'"
+    checkTerm body (symbols.push name)
+  | .appT .. =>
+    let (head, args) := application term
+    let .symbolT name := head | throwError "CHC export: higher-order SMT application"
+    if !symbols.contains name then
+      let valid := match name with
+        | "not" => args.size == 1
+        | "-" => args.size == 1 || args.size == 2
+        | "ite" => args.size == 3
+        | "and" | "or" | "xor" | "=>" | "=" | "distinct" | "+" | "*" | "<" | "<=" | ">" | ">=" => args.size == 2
+        | _ => false
+      unless valid do throwError "CHC export: unsupported SMT operator '{name}' or arity"
+      if name == "*" && !args.any numeral then
+        throwError "CHC export: nonlinear multiplication; one operand must be an integer literal"
+    for argument in args do checkTerm argument symbols
+  | _ => throwError "CHC export: unsupported SMT term {term}"
+
+end Fragment
+
+namespace Prepare
+
+/-- Reduce beta/let/metadata wrappers, preserving arithmetic operators. -/
+partial def expose (expression : Expr) : MetaM Expr := do
+  let expression := expression.consumeMData.headBeta
+  match expression with
+  | .letE _ _ value body _ => expose (body.instantiate1 value)
+  | _ => return expression
+
+private def canonical (original expected : Expr) : MetaM Unit := do
+  unless ← isDefEq original expected do
+    throwError "CHC export: nonstandard operator instance in {original}"
+
+/-- Check standard instances before lean-smt erases their typeclass arguments. -/
+private def checkIntegerInstance (e : Expr) : MetaM Unit := do
+  let int := mkConst ``Int
+  if let some n := e.natLitOf? int then
+    canonical e (mkIntLit n)
+  else if let some a := e.negOf? int then
+    let a : Q(Int) := a
+    canonical e q(-$a)
+  else
+    let operators := #[e.hAddOf? int int, e.hSubOf? int int, e.hMulOf? int int,
+      e.leOf? int, e.ltOf? int, e.geOf? int, e.gtOf? int]
+    for arguments in operators, i in [:operators.size] do
+      if let some (a, b) := arguments then
+        let a : Q(Int) := a
+        let b : Q(Int) := b
+        let expected := #[q($a + $b), q($a - $b), q($a * $b),
+          q($a ≤ $b), q($a < $b), q($a ≥ $b), q($a > $b)][i]!
+        canonical e expected
+
+/-- Normalize theory terms, rejecting hidden quantifiers and higher-order expressions. -/
+partial def atom (input : Expr) : MetaM Expr := do
+  let e ← expose input
+  checkIntegerInstance e
+  if e.beq?.isSome || e.bne?.isSome then
+    throwError "CHC export: BEq comparisons are unsupported; use propositional equality"
+  match e with
+  | .forallE .. | .lam .. =>
+    throwError "CHC export: quantifiers must be clause binders; higher-order terms are unsupported"
+  | .app .. =>
+    let head := e.getAppFn
+    let args ← e.getAppArgs.mapM atom
+    return mkAppN head args
+  | .mvar .. => throwError "CHC export: unresolved metavariable {e}"
+  | _ => return e
+
+/-- Move value binders before guards. Unused Int/Bool/Prop binders can be dropped: their types are inhabited. -/
+partial def clause (input : Expr) : MetaM Expr :=
+  go input #[] #[]
+where
+  go (input : Expr) (variables guards : Array Expr) : MetaM Expr := do
+    let e ← expose input
+    if let .forallE _ domain body _ := e then
+      if ← isProp domain then
+        if body.hasLooseBVar 0 then
+          throwError "CHC export: constraints depending on proof terms are unsupported"
+        let guard ← atom domain
+        withLocalDeclD `guard domain fun proof =>
+          go (body.instantiate1 proof) variables (guards.push guard)
+      else
+        discard <| Fragment.valueSort domain
+        withLocalDeclD (Name.mkSimple s!"v_{variables.size}") domain fun binder =>
+          go (body.instantiate1 binder) (variables.push binder) guards
+    else
+      let mut result ← atom e
+      for guard in guards.reverse do result ← mkArrow guard result
+      mkForallFVars variables result (usedOnly := true)
+
+end Prepare
 
 private def relation (kvar : KVar) (index : Nat) : MetaM Relation := do
   if ← kvar.mvarId.isAssigned then
@@ -43,18 +223,8 @@ private def validate (problem : ExportedProblem) : MetaM Unit := do
           throw (.error s!"CHC export: wrong argument sort for '{expected.symbol}'")
   ).runIO
 
-/-- Export an already peeled Flex body and its κs in existential order.
-
-The body must be closed except for these unassigned κ metavariables. Ambient
-parameters/assumptions are not silently declared or asserted: put the required
-value binders and guards in the body. The initial fragment is first-order
-Bool/Int Horn constraints with linear arithmetic, standard operator instances,
-and local lets. Unsupported terms fail before any solver can run.
-
-This function does not peel a goal, assign witnesses, or prove constraints. It
-restores the caller's meta state and translator registrations on success/error.
-Only the supplied κ identities, closed signature metadata, and SMT commands escape.
--/
+/-- Export a body closed except for its unassigned κs. Supports first-order Bool/Int linear
+arithmetic and local lets; unsupported terms fail before solving. No witnesses are assigned. -/
 def exportConstraints (kvars : List KVar) (body : Expr) : MetaM ExportedProblem := do
   let saved ← Meta.saveState
   try
@@ -98,6 +268,6 @@ def exportConstraints (kvars : List KVar) (body : Expr) : MetaM ExportedProblem 
             clauseCount := clauses.size }
           validate problem
           return problem
-  finally saved.restore
+  finally restoreMetaState saved
 
 end Flex.CHC

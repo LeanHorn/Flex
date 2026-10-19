@@ -28,7 +28,7 @@ jobs:
           echo "LEAN_CC=$RUNNER_TEMP/flex-clang" >> "$GITHUB_ENV"
       - uses: leanprover/lean-action@v1.6.2
         with:
-          # lean-smt declares Mathlib, but Flex's imports do not use it.
+          # Build the Mathlib modules used by SMTLib-to-Lean from source.
           use-mathlib-cache: "false"
           build-args: "Flex Demo flex"
       - name: Run CLI

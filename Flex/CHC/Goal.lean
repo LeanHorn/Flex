@@ -1,5 +1,3 @@
-import Flex.CHC.Export
-import Flex.CHC.Backend
 import Flex.CHC.Certificate
 import Flex.CHC.Normalize
 
@@ -37,8 +35,7 @@ structure GoalReport where
   certificate : CertificateResult
   timings : Array PhaseTiming := #[]
 
-/-- Partial success means typed witnesses and explicit VCs, not a solver error.
-Neither `sat` alone nor successful witness reconstruction counts as a proof. -/
+/-- Only certification can report success; partial results retain explicit VCs. -/
 inductive GoalResult where
   | solved (report : GoalReport)
   | «partial» (report : GoalReport)
@@ -61,29 +58,18 @@ private def requireModel (result : SolverResult) : TermElabM Unit := do
   | .timedOut => throwError "CHC solver exceeded its wall-clock timeout"
   | .error message => throwError message
 
-/-- Export one existential constraint goal, ask the selected solver for witnesses,
-and certify the instantiated constraints. This library operation never changes a
-tactic's goal list; its caller decides where to insert the returned obligations.
+/-- Normalize, export, solve, and certify one existential constraint goal.
+`solved` proves the goal; `partial` retains witnesses and reported obligations.
+Failures restore all entry state; interrupts propagate. The tactic goal list is
+unchanged, and no backend or tactic fallback runs here.
 
-On `solved` the supplied goal is proved. On `partial` it is assigned a proof with
-exactly the reported residual obligations; its witnesses remain instantiated.
-Export, solver, import, and structural certificate errors return `failed` after
-restoring the state from before peeling the existential binders. Failed proof
-oracle calls instead leave obligations. Task cancellation is propagated.
-
-Horn guards are normalized before export, including existential and disjunctive
-antecedents produced by acyclic elimination. `maxClauses` bounds this expansion.
-Predicate signatures and the constraint body
-must be closed except for the peeled predicate metavariables. Ambient parameters
-are not silently generalized into a stronger synthesis problem. An unrelated
-ambient context is allowed. `config.timeoutMs` bounds the solver process only;
-callers configure proof-oracle budgets separately. No PA, zap, or backend fallback
-is performed here. -/
+Signatures and constraints must be closed except for peeled predicate slots.
+`maxClauses` bounds guard expansion; `config.timeoutMs` bounds only the solver.
+Callers configure oracle budgets and install residual goals. -/
 def solveGoal (goal : MVarId) (config : Config := {})
     (oracle : ProofOracle := defaultProofOracle) (maxClauses : Nat := 1024)
     : TermElabM GoalResult := do
-  let saved ← saveState
-  let messages ← Core.getMessageLog
+  let saved ← Term.saveState
   let phase ← IO.mkRef Stage.prepare
   let timings ← IO.mkRef (#[] : Array PhaseTiming)
   let transcript ← IO.mkRef (none : Option SolverResult)
@@ -116,10 +102,7 @@ def solveGoal (goal : MVarId) (config : Config := {})
       return if certificate.obligations.isEmpty then .solved report else .partial report
   catch error =>
     let message ← error.toMessageData.toString
-    set saved.elab
-    modifyThe Meta.State fun _ => saved.meta.meta
-    modifyThe Core.State fun _ => saved.meta.core.toState
-    Core.setMessageLog messages
+    restoreTermState saved
     if error.isInterrupt then throw error
     return .failed {
       stage := ← phase.get, message, solver := ← transcript.get

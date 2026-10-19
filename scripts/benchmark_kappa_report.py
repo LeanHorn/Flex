@@ -3,7 +3,7 @@
 
 For every .lean file in Benchmarks/Liquid-fixpoint/ (and optionally
 Benchmarks/FluxRS/ and Demo/) this script:
-  1. Runs `lake env lean -Dflex.benchPhases=true <file>` (the option makes
+  1. Runs `lake lean <file> -- -Dflex.benchPhases=true` (the option makes
      solve_fixpoint print its κ lines) and captures stdout+stderr.
   2. Passes the output through the kappa classifier.
   3. Prints a summary table.
@@ -64,7 +64,7 @@ LABEL_COLOR = {
 def run_file(path: Path) -> dict:
     start = time.monotonic()
     proc = subprocess.run(
-        ["lake", "env", "lean", "-Dflex.benchPhases=true", str(path)],
+        ["lake", "--log-level=error", "lean", str(path), "--", "-Dflex.benchPhases=true"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,

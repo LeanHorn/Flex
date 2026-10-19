@@ -18,7 +18,7 @@ require auto from git
 require smt from git
   "https://github.com/ufmg-smite/lean-smt.git" @ "79ef7b3d5e06608d031d75b6d015949b90016875"
 
--- Keep the CHC importer on main's shared solver dependencies.
+-- CHC model import uses the same cvc5 parser as the SMT integration.
 require cvc5 from git
   "https://github.com/abdoo8080/lean-cvc5.git" @ "41e47796d4d15712e6064b064ca5d251a1283955"
 
@@ -44,7 +44,7 @@ target chcProcess.o pkg : System.FilePath := do
 -- Declared after Flex so Lake selects this narrower library for the FFI module.
 -- Precompilation makes the native implementation available to tactics and #eval.
 lean_lib FlexCHCNative where
-  roots := #[`Flex.CHC.Process.Native]
+  roots := #[`Flex.CHC.Native]
   precompileModules := true
   moreLinkObjs := #[chcProcess.o]
 

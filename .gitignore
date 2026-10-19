@@ -30,3 +30,4 @@ liquid-fixpoint-develop
 literature/
 docs/
 eval/oracle_results.json
+eval/chc_results*

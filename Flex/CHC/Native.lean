@@ -1,5 +1,4 @@
-/-! Private FFI boundary for the CHC process runner. Only this module is
-precompiled; the rest of Flex keeps its usual compilation settings. -/
+/-! Precompiled FFI boundary for the CHC process runner. -/
 namespace Flex.CHC.Process.Native
 
 /-- All fields are objects, in this order, to match `native/chc_process.cpp`.

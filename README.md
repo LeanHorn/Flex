@@ -77,5 +77,5 @@ solver invariants as Lean predicates and certifies the constraints, returning
 either a complete proof or explicit residual goals. Failed attempts restore the
 original goal. This API is separate from `fix`.
 
-See [Demo/CHC/Goal.lean](Demo/CHC/Goal.lean) for the goal API and
-[Demo/CHC/Certificate.lean](Demo/CHC/Certificate.lean) for manual VC discharge.
+See [Demo/Spacer.lean](Demo/Spacer.lean) for examples, including manual VC discharge.
+Run it with `CHC_ELDARICA=/path/to/eld lake lean Demo/Spacer.lean` to use Eldarica.

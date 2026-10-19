@@ -32,10 +32,7 @@ CYCLIC = ["cyc0"] + [f"Mixed.{name}" for name in [
     "seededCountdown", "mergingSeeds", "strideTwo", "independentLoops",
     "chainedSeed", "counterAndAccumulator", "cyclicBeforeSeed"]]
 BACKENDS = ["fix", "spacer", "eldarica"]
-# The public pipeline separates preparation and certification. Legacy phase
-# columns remain readable when summarizing records from older benchmark runs.
-PHASES = ["prepare", "export", "solver", "import", "certificate",
-          "assign", "vc", "kernel", "fix"]
+PHASES = ["prepare", "export", "solver", "import", "certificate", "kernel", "fix"]
 OBLIGATION_COUNTS = ["remaining_heads", "remaining_queries", "proved_heads", "proved_queries"]
 
 
@@ -104,7 +101,7 @@ def summarize(records: list[dict], expected_runs: int | None = None) -> list[dic
 
 def write_csv(path: Path, rows: list[dict], fields: list[str]) -> None:
     with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer = csv.DictWriter(handle, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -122,7 +119,7 @@ def save_results(output: Path, records: list[dict], metadata: dict) -> None:
     # Keep only three illustrative models instead of retaining every transcript.
     witnesses = {}
     for record in records:
-        if record["success"] and record["case"] in ["cyc0", "pa6", "ex_stress"]:
+        if record["success"] and record["case"] in ["cyc0", "Mixed.counterAndAccumulator", "ex_stress"]:
             if record["witnesses"]:
                 witnesses.setdefault(record["case"] + "/" + record["backend"], record["witnesses"])
     metadata["example_witnesses"] = witnesses
@@ -164,10 +161,8 @@ def main() -> int:
         "sources_sha256": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
                            for name in ["Demo/Basic.lean", "Demo/Fix.lean", "eval/CHCCases.lean",
                                         "scripts/benchmark_chc.py", "lake-manifest.json", "lakefile.lean",
-                                        "Flex/CHC/Process.lean", "Flex/CHC/Process/Native.lean",
-                                        "Flex/CHC/Process/Portable.lean", "Flex/CHC/Process/Types.lean",
-                                        "Flex/CHC/Backend.lean", "Flex/CHC/Spacer.lean",
-                                        "Flex/CHC/Eldarica.lean", "Flex/CHC/Goal.lean",
+                                        "Flex/CHC/Process.lean", "Flex/CHC/Native.lean",
+                                        "Flex/CHC/Backend.lean", "Flex/CHC/Goal.lean",
                                         "Flex/CHC/Certificate.lean", "Flex/CHC/Normalize.lean",
                                         "Flex/CHC/Export.lean",
                                         "Flex/CHC/Witness.lean",

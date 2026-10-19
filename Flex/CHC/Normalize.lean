@@ -1,4 +1,4 @@
-import Flex.CHC.Prepare
+import Flex.CHC.Export
 import Lean.Meta.Tactic.Simp
 
 namespace Flex.CHC
@@ -10,8 +10,7 @@ private def bounded (count limit : Nat) : MetaM Nat := do
     throwError "CHC normalization: expanded constraints exceed the clause limit ({limit})"
   return count
 
-/-- Count branches before duplicating any consequent. Conjunctions multiply
-alternatives; disjunctions add them; existential antecedents add only binders. -/
+/-- Preflight guard expansion: conjunction multiplies, disjunction adds. -/
 private partial def antecedentBranches (input : Expr) (limit : Nat) : MetaM Nat := do
   let input ← Prepare.expose input
   if let some (left, right) := input.and? then
@@ -26,8 +25,7 @@ private partial def antecedentBranches (input : Expr) (limit : Nat) : MetaM Nat 
   else
     return 1
 
-/-- Match the body shape consumed by export: leading binders/guards and a tree
-of conjunctions. This is a conservative bound when simplification removes work. -/
+/-- Bound export's clause count and detect guards requiring normalization. -/
 private partial def expandedClauses (input : Expr) (limit : Nat) : MetaM (Nat × Bool) := do
   let input ← Prepare.expose input
   if input.isConstOf ``True then return (0, false)
@@ -47,16 +45,10 @@ private partial def expandedClauses (input : Expr) (limit : Nat) : MetaM (Nat ×
   else
     return (← bounded 1 limit, false)
 
-/-- Normalize Horn antecedents with proof-producing logical equivalences only:
-`(∃ x, P x) → Q`, `(P ∨ R) → Q`, and `(P ∧ R) → Q`. This makes the
-strongest predicates produced by acyclic elimination usable by CHC export.
-
-The original goal is connected to the returned goal by Lean's simplifier proof.
-Existential predicate slots remain unassigned, and even `True` remains an open
-goal for the ordinary certificate stage. No user definitions or global simp
-lemmas are unfolded. The expansion bound is checked before distributing guards;
-any failure restores the caller's meta state. Export and certification must both
-consume the returned goal so their clause counts and provenance agree. -/
+/-- Normalize existential, disjunctive, and conjunctive Horn guards with proofs.
+Use only the three logical equivalences below, bounding expansion before rewriting.
+Keep predicate slots unassigned and the body open; failures restore entry state.
+Export and certification must both consume the returned goal. -/
 def normalizeGoal (bodyGoal : MVarId) (maxClauses : Nat := 1024) : MetaM MVarId := do
   let saved ← Meta.saveState
   try
@@ -75,12 +67,11 @@ def normalizeGoal (bodyGoal : MVarId) (maxClauses : Nat := 1024) : MetaM MVarId 
         maxSteps := 100000 } #[theorems]
       let (some normalized, _) ← simpTarget bodyGoal context (mayCloseGoal := false)
         | throwError "CHC normalization unexpectedly closed the body goal"
-      -- Keep a postcondition as well as the preflight bound, in case Lean's
-      -- simplifier exposes additional beta/let wrappers while rewriting.
+      -- Recheck after simp exposes any further beta/let wrappers.
       discard <| expandedClauses (← normalized.getType) maxClauses
       return normalized
   catch error =>
-    saved.restore
+    restoreMetaState saved
     throw error
 
 end Flex.CHC

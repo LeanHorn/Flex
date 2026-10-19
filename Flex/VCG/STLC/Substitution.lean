@@ -2646,34 +2646,27 @@ theorem DEnv.caseFacts_noBVar (de : DEnv) (C : String) (j n : Nat) (x : EVar) :
     (fun _ _ _ h => by simp [Term.hasBVar] at h)
     (fun _ _ _ _ h => by simp [Term.hasBVar] at h) _ _ _ h
 
-theorem Ty.WFBVarCtx_strengthenLast {r : Refinement} (hr : ∀ b k, ¬ r.hasBVar b k) :
+theorem Ty.WFBVarCtx_strengthenUnit {r : Refinement} (hr : ∀ b k, ¬ r.hasBVar b k) :
     ∀ (n : Nat) (t : Ty) (ctx : List (Option Base)), Ty.WFBVarCtx ctx t →
-      Ty.WFBVarCtx ctx (t.strengthenLast n r)
+      Ty.WFBVarCtx ctx (t.strengthenUnit n r)
   | 0, .refine b r', ctx, h => by
-    simp only [Ty.strengthenLast, Ty.WFBVarCtx, Refinement.hasBVar] at h ⊢
+    simp only [Ty.strengthenUnit, Ty.WFBVarCtx, Refinement.hasBVar] at h ⊢
     rintro b' k (hk | hk)
     · exact h b' k hk
     · exact absurd hk (hr b' k)
-  | 0, .data C k a r', ctx, h => by
-    simp only [Ty.strengthenLast, Ty.WFBVarCtx, Refinement.hasBVar] at h ⊢
-    refine ⟨?_, h.2⟩
-    rintro b' i (hk | hk)
-    · exact h.1 b' i hk
-    · exact absurd hk (hr b' i)
   | n + 1, .prod s t, ctx, h => by
-    simp only [Ty.strengthenLast, Ty.WFBVarCtx] at h ⊢
-    exact ⟨h.1, Ty.WFBVarCtx_strengthenLast hr n t _ h.2⟩
-  | 0, .arrow _ _, _, h | 0, .forall _ _, _, h | 0, .prod _ _, _, h => by
-    simpa [Ty.strengthenLast] using h
+    simp only [Ty.strengthenUnit, Ty.WFBVarCtx] at h ⊢
+    exact ⟨h.1, Ty.WFBVarCtx_strengthenUnit hr n t _ h.2⟩
+  | 0, .arrow _ _, _, h | 0, .forall _ _, _, h | 0, .prod _ _, _, h | 0, .data _ _ _ _, _, h
   | _ + 1, .refine _ _, _, h | _ + 1, .arrow _ _, _, h | _ + 1, .forall _ _, _, h
   | _ + 1, .data _ _ _ _, _, h => by
-    simpa [Ty.strengthenLast] using h
+    simpa [Ty.strengthenUnit] using h
 
 theorem DEnv.altTy_WFBVars (de : DEnv) (C : String) (j : Nat) (x? : Option EVar) {tz : Ty}
     (h : Ty.WFBVars tz) : Ty.WFBVars (de.altTy C j x? tz) := by
   cases x? with
   | none => exact h
-  | some x => exact Ty.WFBVarCtx_strengthenLast (DEnv.caseFacts_noBVar _ _ _ _ _) _ tz [] h
+  | some x => exact Ty.WFBVarCtx_strengthenUnit (DEnv.caseFacts_noBVar _ _ _ _ _) _ tz [] h
 
 theorem DEnv.instOK_WFBVars {de : DEnv} {C : String} {τs : List Ty} {r : Refinement}
     (h : de.instOK C τs = true) (hr : ∀ b k, ¬ r.hasBVar b k) :

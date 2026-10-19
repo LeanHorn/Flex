@@ -617,15 +617,14 @@ def Ty.skel : Ty → Nat
   field type, `tbvar i` is parameter `i`, and `BVar` levels refer to earlier
   fields; field types have no free term or type variables.
 
-  At runtime a constructor carries a single payload: a unit for no fields, the
-  field itself for one, and nested pairs `(f₀, (f₁, … fₙ₋₁))` for more. Its type
-  is the telescope `Σ f₀:t₀. … tₙ₋₁`; the last field's type — under all the
-  others — is where pattern matching records the measure equations. -/
+  At runtime a constructor carries a single payload: its fields in nested pairs
+  ending in a unit, `(f₀, (f₁, … (fₙ₋₁, ())))`. Its type is the telescope
+  `Σ f₀:t₀. … Σ fₙ₋₁:tₙ₋₁. Int`; pattern matching records the measure equations
+  on the terminal unit, which is under all the fields. -/
 
 /-- The payload type of a constructor with fields `ts`. -/
 def Ty.tuple : List Ty → Ty
   | []      => .refine .int (.fmla .tt)
-  | [t]     => t
   | t :: ts => .prod t (Ty.tuple ts)
 
 /-- A measure's body for one constructor, over that constructor's fields:
@@ -666,13 +665,12 @@ def MBody.idxOK (n : Nat) : MBody → Bool
   | .iteLe a b t e => a.idxOK n && b.idxOK n && t.idxOK n && e.idxOK n
   | .iteB i t e => decide (i < n) && t.idxOK n && e.idxOK n
 
-/-- Conjoin `r` into the refinement of the last component of a payload type
-    with `n + 1` components (types without a refinement are left alone). -/
-def Ty.strengthenLast : Nat → Ty → Refinement → Ty
-  | 0,     .refine b r',     r => .refine b (.conj r' r)
-  | 0,     .data C k a r',   r => .data C k a (.conj r' r)
-  | n + 1, .prod s t,        r => .prod s (Ty.strengthenLast n t r)
-  | _,     t,                _ => t
+/-- Conjoin `r` into the refinement of the terminal unit of a payload type with
+    `n` fields. -/
+def Ty.strengthenUnit : Nat → Ty → Refinement → Ty
+  | 0,     .refine b r', r => .refine b (.conj r' r)
+  | n + 1, .prod s t,    r => .prod s (Ty.strengthenUnit n t r)
+  | _,     t,            _ => t
 
 /-- The variance of a datatype parameter: how subtyping on the datatype
     follows subtyping on the argument. -/
@@ -742,14 +740,14 @@ def DEnv.ctorFacts (de : DEnv) (C : String) (j : Nat) (as : List EVar) : Refinem
         (fun i => if i < as.length then .fvar .bool (as.getD i "") else .const .bool false)
         (fun m' i => if i < as.length then .mfvar m' (as.getD i "") else .const .int 0))))
 
-/-- What matching `x` against `C j` (with `n` fields) reveals, read at the
-    payload's last field — where field `i` is `BVar (n - 1 - i)` — : each
-    measure of `x` equals its body for this constructor. -/
+/-- What matching `x` against `C j` (with `n` fields) reveals: each measure of
+    `x` equals its body for this constructor. Read at the payload's terminal
+    unit, where field `i` is `BVar (n - i)`. -/
 def DEnv.caseFacts (de : DEnv) (C : String) (j n : Nat) (x : EVar) : Refinement :=
   .fmla (Formula.conjAll ((de.ctorMeasures C j).map fun mb =>
     .eq .int (.mfvar mb.1 x)
-      (mb.2.toTerm (fun i => .ibvar (n - 1 - i)) (fun i => .bbvar (n - 1 - i))
-        (fun m' i => .mbvar m' (n - 1 - i)))))
+      (mb.2.toTerm (fun i => .ibvar (n - i)) (fun i => .bbvar (n - i))
+        (fun m' i => .mbvar m' (n - i)))))
 
 /-- The names of the measures of `C`. -/
 def DEnv.measNames (de : DEnv) (C : String) : List String :=
@@ -766,11 +764,10 @@ def Exp.var? : Exp → Option EVar
   | _       => none
 
 /-- The fields of a payload of a constructor with `n` fields, written out as
-    variables: `x` for one field, `(x₀, (x₁, … xₙ₋₁))` for more (none for none). -/
+    variables: `(x₀, (x₁, … (xₙ₋₁, u)))`. -/
 def Exp.tupleVarsN : Nat → Exp → Option (List EVar)
   | 0,     _                 => some []
-  | 1,     .fvar x           => some [x]
-  | n + 2, .pair (.fvar x) e => (Exp.tupleVarsN (n + 1) e).map (x :: ·)
+  | n + 1, .pair (.fvar x) e => (Exp.tupleVarsN n e).map (x :: ·)
   | _,     _                 => none
 
 /-- The refinement a constructor application synthesizes: the measure facts,
@@ -782,10 +779,10 @@ def DEnv.ctorRefine (de : DEnv) (C : String) (j : Nat) (e : Exp) : Refinement :=
 
 /-- The type an alternative of a match on `C` binds its payload at (`tz`, the
     payload at the scrutinee's type arguments): when the scrutinee is a
-    variable `x`, the last field records the measure facts about `x`. -/
+    variable `x`, the terminal unit records the measure facts about `x`. -/
 def DEnv.altTy (de : DEnv) (C : String) (j : Nat) (x? : Option EVar) (tz : Ty) : Ty :=
   match x? with
-  | some x => tz.strengthenLast (de.nFields C j - 1) (de.caseFacts C j (de.nFields C j) x)
+  | some x => tz.strengthenUnit (de.nFields C j) (de.caseFacts C j (de.nFields C j) x)
   | none   => tz
 
 /-! ## Measure semantics
@@ -796,22 +793,19 @@ def DEnv.altTy (de : DEnv) (C : String) (j : Nat) (x? : Option EVar) (tz : Ty) :
 
 /-- The fields of a payload of a constructor with `n` fields. -/
 def Val.fieldsN : Nat → Val → List Val
-  | 0,     _          => []
-  | 1,     w          => [w]
-  | n + 2, .pair a r  => a :: Val.fieldsN (n + 1) r
-  | _ + 2, _          => []
+  | n + 1, .pair a r => a :: Val.fieldsN n r
+  | _,     _         => []
 
 theorem Val.sizeOf_le_of_mem_fieldsN : ∀ {n : Nat} {w f : Val}, f ∈ w.fieldsN n → sizeOf f ≤ sizeOf w
-  | 0, _, _, h => by simp [Val.fieldsN] at h
-  | 1, w, f, h => by simp only [Val.fieldsN, List.mem_singleton] at h; subst h; exact Nat.le_refl _
-  | n + 2, .pair a r, f, h => by
+  | n + 1, .pair a r, f, h => by
     simp only [Val.fieldsN, List.mem_cons] at h
     rcases h with rfl | h
     · simp; omega
     · have := Val.sizeOf_le_of_mem_fieldsN h
       simp; omega
-  | _ + 2, .iconst _, _, h | _ + 2, .bconst _, _, h | _ + 2, .clos _, _, h
-  | _ + 2, .fclos _, _, h | _ + 2, .ctor _ _ _, _, h => by simp [Val.fieldsN] at h
+  | 0, _, _, h => by simp [Val.fieldsN] at h
+  | _ + 1, .iconst _, _, h | _ + 1, .bconst _, _, h | _ + 1, .clos _, _, h
+  | _ + 1, .fclos _, _, h | _ + 1, .ctor _ _ _, _, h => by simp [Val.fieldsN] at h
 
 /-- Evaluate a measure body, given the (integer and boolean) fields and their
     measures. -/

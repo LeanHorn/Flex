@@ -6,7 +6,7 @@ import Flex.VCG.STLC.Soundness
   model fixes it to the structurally recursive function its declaration
   defines (`DEnv.measEval`). The facts the typing rules record — at a
   constructor application (`DEnv.ctorRefine`) and in a match alternative
-  (`DEnv.caseFacts`, at the payload's last field) — are then true by
+  (`DEnv.caseFacts`, at the payload's terminal unit) — are then true by
   unfolding that definition once, on whatever values the fields hold: no typing
   or step-index argument is involved. -/
 
@@ -108,20 +108,6 @@ theorem MBody.eval_congr {n : Nat} {fv gv : Nat → Int} {fb gb : Nat → Bool}
 
 /-! ## Payloads -/
 
-/-- A payload with the fields `vs`: a unit, the field, or nested pairs. -/
-def Val.ofList : List Val → Val
-  | []      => .iconst 0
-  | [v]     => v
-  | v :: vs => .pair v (Val.ofList vs)
-
-theorem Val.fieldsN_ofList : ∀ vs, (Val.ofList vs).fieldsN vs.length = vs
-  | [] => rfl
-  | [v] => rfl
-  | v :: v' :: vs => by
-    have := Val.fieldsN_ofList (v' :: vs)
-    simp only [List.length_cons] at this ⊢
-    simp only [Val.ofList, Val.fieldsN, this]
-
 /-- Push the values `vs` onto the de Bruijn stack, in order. -/
 def REnv.pushAll (γ : REnv) : List Val → REnv
   | []      => γ
@@ -157,32 +143,27 @@ theorem DEnv.payload?_fields {de : DEnv} {C : String} {j : Nat} {P : Ty}
   obtain ⟨c, hc, rfl⟩ := hc'
   exact ⟨d, c, hd, hc, rfl, by simp [DEnv.nFields, DEnv.fields?, hd, hc]⟩
 
-/-! ## Strengthening the last field -/
+/-! ## Strengthening the terminal unit -/
 
-/-- A payload in `t` is in `t` with `r` conjoined into its last component,
-    provided `r` holds with the payload's fields pushed. -/
-theorem TyDenote.strengthenLast {κ : KEnv} {δ : TyEnvSem} {k : Nat} (r : Refinement) :
+/-- A payload in `t` is in `t` with `r` conjoined into its terminal unit,
+    provided `r` holds with the payload's fields (and then the unit) pushed. -/
+theorem TyDenote.strengthenUnit {κ : KEnv} {δ : TyEnvSem} {k : Nat} (r : Refinement) :
     ∀ (n : Nat) (t : Ty) (γ : REnv) (w : Val), TyDenote κ δ k t γ w →
-      ((w.fieldsN (n + 1)).length = n + 1 →
-        Refinement.interp κ r ((γ.withSorts δ.sorts).pushAll (w.fieldsN (n + 1)))) →
-      TyDenote κ δ k (t.strengthenLast n r) γ w
+      ((w.fieldsN n).length = n → ∀ u,
+        Refinement.interp κ r (((γ.withSorts δ.sorts).pushAll (w.fieldsN n)).push u)) →
+      TyDenote κ δ k (t.strengthenUnit n r) γ w
   | 0, .refine b r', γ, w, h, H => by
-    simp only [Ty.strengthenLast, TyDenote, Refinement.interp] at h ⊢
-    exact ⟨h.1, h.2, H rfl⟩
-  | 0, .data C n a r', γ, w, h, H => by
-    simp only [Ty.strengthenLast, TyDenote, Refinement.interp] at h ⊢
-    obtain ⟨h1, h2, h3, h4, h5⟩ := h
-    exact ⟨h1, h2, h3, ⟨h4, H rfl⟩, h5⟩
+    simp only [Ty.strengthenUnit, TyDenote, Refinement.interp] at h ⊢
+    exact ⟨h.1, h.2, H rfl w⟩
   | n + 1, .prod s t, γ, w, h, H => by
-    simp only [Ty.strengthenLast, TyDenote] at h ⊢
+    simp only [Ty.strengthenUnit, TyDenote] at h ⊢
     obtain ⟨v₁, v₂, rfl, h₁, h₂⟩ := h
-    refine ⟨v₁, v₂, rfl, h₁, TyDenote.strengthenLast r n t (γ.push v₁) v₂ h₂ fun hl => ?_⟩
-    exact H (by simp [Val.fieldsN, hl])
-  | 0, .arrow _ _, _, _, h, _ | 0, .forall _ _, _, _, h, _ | 0, .prod _ _, _, _, h, _ => by
-    simpa [Ty.strengthenLast] using h
-  | _ + 1, .refine _ _, _, _, h, _ | _ + 1, .arrow _ _, _, _, h, _ | _ + 1, .forall _ _, _, _, h, _
-  | _ + 1, .data _ _ _ _, _, _, h, _ => by
-    simpa [Ty.strengthenLast] using h
+    refine ⟨v₁, v₂, rfl, h₁, TyDenote.strengthenUnit r n t (γ.push v₁) v₂ h₂ fun hl u => ?_⟩
+    exact H (by simp [Val.fieldsN, hl]) u
+  | 0, .arrow _ _, _, _, h, _ | 0, .forall _ _, _, _, h, _ | 0, .prod _ _, _, _, h, _
+  | 0, .data _ _ _ _, _, _, h, _ | _ + 1, .refine _ _, _, _, h, _ | _ + 1, .arrow _ _, _, _, h, _
+  | _ + 1, .forall _ _, _, _, h, _ | _ + 1, .data _ _ _ _, _, _, h, _ => by
+    simpa [Ty.strengthenUnit] using h
 
 /-! ## The facts are true -/
 
@@ -233,12 +214,12 @@ theorem DEnv.ctorRefine_sound {κ : KEnv} {de : DEnv} {C : String} {j : Nat} {e 
           simp [hi, hi', Term.interp]
   · simp [Refinement.interp, Formula.interp]
 
-/-- What matching `x` against `C j` records at the payload's last field holds. -/
+/-- What matching `x` against `C j` records at the payload's terminal unit holds. -/
 theorem DEnv.caseFacts_sound {κ : KEnv} {de : DEnv} {C : String} {j : Nat} {x : EVar}
     {E : REnv} {w : Val}
     (hmeas : E.sorts.meas = de.measEval) (hx : E.map x = .ctor C j w)
     (hbv : ∀ i (hi : i < de.nFields C j), ∃ h : i < (w.fieldsN (de.nFields C j)).length,
-      E.bv[de.nFields C j - 1 - i]? = some (w.fieldsN (de.nFields C j))[i])
+      E.bv[de.nFields C j - i]? = some (w.fieldsN (de.nFields C j))[i])
     (hnd : ∀ d, de.decl? C = some d → (d.measures.map Prod.fst).Nodup)
     (hidx : ∀ mb ∈ de.ctorMeasures C j, mb.2.idxOK (de.nFields C j) = true) :
     Refinement.interp κ (de.caseFacts C j (de.nFields C j) x) E := by
@@ -268,27 +249,12 @@ theorem DEnv.caseFacts_sound {κ : KEnv} {de : DEnv} {C : String} {j : Nat} {x :
 
 /-! ## Payloads written out as variables -/
 
-theorem Exp.tupleVarsN_length : ∀ {n : Nat} {e : Exp} {as : List EVar},
-    e.tupleVarsN n = some as → as.length = n := by
-  intro n e
-  induction n, e using Exp.tupleVarsN.induct with
-  | case1 => intro as h; simp only [Exp.tupleVarsN, Option.some.injEq] at h; subst h; rfl
-  | case2 => intro as h; simp only [Exp.tupleVarsN, Option.some.injEq] at h; subst h; rfl
-  | case3 n x e ih =>
-    intro as h
-    simp only [Exp.tupleVarsN, Option.map_eq_some_iff] at h
-    obtain ⟨as', h', rfl⟩ := h
-    simp [ih h']
-  | case4 => intro as h; simp_all [Exp.tupleVarsN]
-
 theorem Exp.tupleVarsN_fv : ∀ {n : Nat} {e : Exp} {as : List EVar},
     e.tupleVarsN n = some as → ∀ a ∈ as, a ∈ e.fv := by
   intro n e
   induction n, e using Exp.tupleVarsN.induct with
   | case1 => intro as h; simp only [Exp.tupleVarsN, Option.some.injEq] at h; subst h; simp
-  | case2 x =>
-    intro as h; simp only [Exp.tupleVarsN, Option.some.injEq] at h; subst h; simp [Exp.fv]
-  | case3 n x e ih =>
+  | case2 n x e ih =>
     intro as h a ha
     simp only [Exp.tupleVarsN, Option.map_eq_some_iff] at h
     obtain ⟨as', h', rfl⟩ := h
@@ -297,54 +263,32 @@ theorem Exp.tupleVarsN_fv : ∀ {n : Nat} {e : Exp} {as : List EVar},
     rcases ha with rfl | ha
     · exact Or.inl rfl
     · exact Or.inr (ih h' a ha)
-  | case4 => intro as h; simp_all [Exp.tupleVarsN]
+  | case3 => intro as h; simp_all [Exp.tupleVarsN]
 
-/-- Fields given as variables evaluate to a payload holding their values. -/
-theorem Exp.tupleVarsN_substEnv (γ : REnv) : ∀ {n : Nat} {e : Exp} {as : List EVar},
-    e.tupleVarsN (n + 1) = some as → (∀ a ∈ as, Val.Erased (γ.map a)) →
-    (e.substEnv γ).erase = (Val.ofList (as.map γ.map)).toExp := by
-  intro n
-  induction n with
-  | zero =>
-    intro e as h her
-    cases e <;> simp [Exp.tupleVarsN] at h
-    rename_i x
-    subst h
-    simp only [Exp.substEnv, List.map_cons, List.map_nil, Val.ofList]
-    exact Exp.erase_of_typeFree _ (her x (by simp))
-  | succ n ih =>
-    intro e as h her
+/-- The payload a constructor applied to variables builds has their values as
+    its fields. -/
+theorem Exp.tupleVarsN_eval {γ : REnv} :
+    ∀ {n k m : Nat} {e : Exp} {as : List EVar} {w : Val},
+    e.tupleVarsN n = some as → (∀ a ∈ as, Val.Erased (γ.map a)) →
+    Eval k (e.substEnv γ).erase (.val w m) → w.fieldsN n = as.map γ.map
+  | 0, _, _, _, as, _, h, _, _ => by
+    simp only [Exp.tupleVarsN, Option.some.injEq] at h
+    subst h; simp [Val.fieldsN]
+  | n + 1, k, m, e, as, w, h, her, hev => by
     cases e <;> (try simp [Exp.tupleVarsN] at h)
     rename_i e₁ e₂
     cases e₁ <;> (try simp [Exp.tupleVarsN] at h)
     rename_i x
     obtain ⟨as', h', rfl⟩ := h
-    have hl := Exp.tupleVarsN_length h'
-    obtain ⟨a', as'', rfl⟩ : ∃ a' as'', as' = a' :: as'' := by
-      cases as' with
-      | nil => simp at hl
-      | cons a' as'' => exact ⟨a', as'', rfl⟩
-    have ih' := ih h' (fun a ha => her a (List.mem_cons_of_mem _ ha))
-    simp only [Exp.substEnv, Exp.erase, ih', List.map_cons, Val.ofList, Val.toExp]
-    rw [Exp.erase_of_typeFree _ (her x List.mem_cons_self)]
-
-/-- The payload a constructor applied to variables builds has their values as
-    its fields. -/
-theorem Exp.tupleVarsN_eval {γ : REnv} {n k m : Nat} {e : Exp} {as : List EVar} {w : Val}
-    (h : e.tupleVarsN n = some as) (her : ∀ a ∈ as, Val.Erased (γ.map a))
-    (hev : Eval k (e.substEnv γ).erase (.val w m)) : w.fieldsN n = as.map γ.map := by
-  cases n with
-  | zero =>
-    simp only [Exp.tupleVarsN, Option.some.injEq] at h
-    subst h; rfl
-  | succ n =>
-    rw [Exp.tupleVarsN_substEnv γ h her] at hev
-    have := Eval.toExp_inv hev
-    injection this with hw _
-    subst hw
-    have hl : (as.map γ.map).length = n + 1 := by simp [Exp.tupleVarsN_length h]
-    have := Val.fieldsN_ofList (as.map γ.map)
-    rw [hl] at this
-    exact this
+    simp only [Exp.substEnv, Exp.erase] at hev
+    cases hev with
+    | pair h₁ h₂ =>
+      rename_i v₁ _ v₂
+      rw [Exp.erase_of_typeFree _ (her x List.mem_cons_self)] at h₁
+      have h₁' := Eval.toExp_inv h₁
+      injection h₁' with hv _
+      subst hv
+      simp only [Val.fieldsN, List.map_cons,
+        Exp.tupleVarsN_eval h' (fun a ha => her a (List.mem_cons_of_mem _ ha)) h₂]
 
 end STLC

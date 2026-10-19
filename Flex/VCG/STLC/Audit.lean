@@ -153,6 +153,12 @@ open STLC
 /-- info: 'meas_oneTrue' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms meas_oneTrue
 
+/-- info: 'meas_slength' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms meas_slength
+
+/-- info: 'meas_isSome' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms meas_isSome
+
 /-- info: 'infer_length' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms infer_length
 

@@ -1768,16 +1768,16 @@ theorem hastype_fundamental {de κ Γ e t} (hde : de.wfB = true) (h : Hastype de
                 exact h1.symm
               obtain ⟨d, c, hd, hc, hPc, hnf⟩ := DEnv.payload?_fields hP
               simp only [DEnv.altTy]
-              refine TyDenote.strengthenLast _ _ _ γ w hw fun hl => ?_
-              refine DEnv.caseFacts_sound (w := w) (by simp [REnv.pushAll_sorts, TyEnvSem.sorts, hD])
-                (by simp [REnv.pushAll_map, hxv]) (fun i hi => ?_)
+              refine TyDenote.strengthenUnit _ _ _ γ w hw fun hl u => ?_
+              refine DEnv.caseFacts_sound (w := w)
+                (by simp [REnv.push, REnv.pushAll_sorts, TyEnvSem.sorts, hD])
+                (by simp [REnv.push, REnv.pushAll_map, hxv]) (fun i hi => ?_)
                 (fun d' hd' => (DEnv.wfB_meas hde hd').1) (fun mb hmb => ?_)
-              · have hn : de.nFields C j - 1 + 1 = de.nFields C j := by omega
-                rw [hn] at hl ⊢
-                refine ⟨by omega, ?_⟩
-                have e : de.nFields C j - 1 - i = (w.fieldsN (de.nFields C j)).length - 1 - i := by
+              · refine ⟨by omega, ?_⟩
+                have e : de.nFields C j - i = (w.fieldsN (de.nFields C j)).length - 1 - i + 1 := by
                   omega
                 rw [e]
+                simp only [REnv.push, List.getElem?_cons_succ]
                 exact REnv.pushAll_field _ _ i _
               · simp only [DEnv.ctorMeasures, hd, Option.map_some, Option.getD_some] at hmb
                 rw [hnf]

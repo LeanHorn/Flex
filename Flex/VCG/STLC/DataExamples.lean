@@ -6,8 +6,9 @@ open STLC
 
   A program is a list of datatype declarations (`DEnv`) followed by an
   expression. A datatype has kinded type parameters and constructors, each with
-  one payload type (several fields are a dependent pair `Σ x:t₁. t₂`, so a
-  field may be refined in terms of earlier ones). Constructors are applied at
+  a telescope of fields; the payload is the fields in nested pairs ending in a
+  unit, `(f₀, (f₁, ()))` (a dependent pair `Σ x:t₁. t₂`, so a field may be
+  refined in terms of earlier ones). Constructors are applied at
   explicit type arguments (`Exp.ctor C j τs e`), which may contain κ-templates
   for refinements to infer; `Exp.case` matches with one alternative per
   constructor. -/
@@ -23,7 +24,8 @@ attribute [local simp] Exp.ftv Ty.ftv Refinement.ftv Formula.ftv Term.ftv Base.f
 /-- `case e of alts`, with the alternatives as a list. -/
 abbrev caseL (e : Exp) (alts : List Exp) : Exp := .case e alts.length alts.get
 
-/-- The (trivially refined) unit payload of a nullary constructor. -/
+/-- The (trivially refined) unit that ends every payload (all of a nullary
+    constructor's). -/
 abbrev UnitT : Ty := .refine .int ttR
 abbrev unitE : Exp := .iconst 0
 /-- The `i`-th type parameter of a datatype, refined by `r`. -/
@@ -37,7 +39,7 @@ def optionEnv : DEnv := [("option", optionDecl)]
 
 /-- `fromSome : d:Nat → o:option(Nat) → Nat` -/
 abbrev fromSomeTy : Ty := .arrow NatT (.arrow (.dataL "option" [NatT]) NatT)
-abbrev fromSomeE : Exp := .lam (.lam (caseL (.bvar 0) [.bvar 2, .bvar 0]))
+abbrev fromSomeE : Exp := .lam (.lam (caseL (.bvar 0) [.bvar 2, .split (.bvar 0) (.bvar 1)]))
 
 theorem data_fromSome (κ : KEnv) : topVC κ [] fromSomeE fromSomeTy optionEnv := by
   simp [topVC, fromSomeE, fromSomeTy, optionEnv, optionDecl]
@@ -47,9 +49,6 @@ theorem data_fromSome (κ : KEnv) : topVC κ [] fromSomeE fromSomeTy optionEnv :
   The second field's refinement mentions the first. Construction checks it;
   destruction assumes it. -/
 
-/-- `Σ x:Int. Int{x ≤ ν}` (`x` is `BVar 1` inside the second component). -/
-abbrev ordPayload : Ty :=
-  .prod TT (.refine .int (.fmla (.leqI (.bvar .int 1) (.bvar .int 0))))
 def ordDecl : DataDecl :=
   { params := [], ctorFields := [("MkOrd", [TT, .refine .int (.fmla (.leqI (.bvar .int 1) (.bvar .int 0)))])] }
 def ordEnv : DEnv := [("ord", ordDecl)]
@@ -57,21 +56,24 @@ abbrev OrdT : Ty := .dataL "ord" []
 
 abbrev TrueB : Ty := .refine .bool (.fmla (.eq .bool (.bvar .bool 0) (.const .bool true)))
 
-/-- `ordOK : ord → Bool{ν = true}`: `case p of MkOrd q => let (x, y) = q in x ≤ y`. -/
-abbrev ordOKE : Exp := .lam (caseL (.bvar 0) [.split (.bvar 0) (.leq (.bvar 1) (.bvar 0))])
+/-- `ordOK : ord → Bool{ν = true}`:
+    `case p of MkOrd q => let (x, q') = q in let (y, u) = q' in x ≤ y`. -/
+abbrev ordOKE : Exp :=
+  .lam (caseL (.bvar 0) [.split (.bvar 0) (.split (.bvar 0)    -- u=0 y=1 q'=2 x=3
+    (.leq (.bvar 3) (.bvar 1)))])
 
 theorem data_ordOK (κ : KEnv) : topVC κ [] ordOKE (.arrow OrdT TrueB) ordEnv := by
   simp [topVC, ordOKE, ordEnv, ordDecl]
 
 /-- `let a = 3; let b = 5; MkOrd (a, b)` is an `ord` … -/
 theorem data_mkOrd (κ : KEnv) : topVC κ []
-    (.letin (.iconst 3) (.letin (.iconst 5) (.ctor "ord" 0 [] (.pair (.bvar 1) (.bvar 0)))))
+    (.letin (.iconst 3) (.letin (.iconst 5) (.ctor "ord" 0 [] (.pair (.bvar 1) (.pair (.bvar 0) unitE)))))
     OrdT ordEnv := by
   simp [topVC, ordEnv, ordDecl]
 
 /-- … but `MkOrd (b, a)` is rejected: its verification condition is false. -/
 theorem data_mkOrd_bad (κ : KEnv) : ¬ topVC κ []
-    (.letin (.iconst 3) (.letin (.iconst 5) (.ctor "ord" 0 [] (.pair (.bvar 0) (.bvar 1)))))
+    (.letin (.iconst 3) (.letin (.iconst 5) (.ctor "ord" 0 [] (.pair (.bvar 0) (.pair (.bvar 1) unitE)))))
     OrdT ordEnv := by
   simp [topVC, ordEnv, ordDecl]
   exact ⟨REnv.empty, trivial⟩
@@ -86,18 +88,18 @@ def listDecl : DataDecl :=
 def listEnv : DEnv := [("list", listDecl)]
 
 abbrev nilE (τ : Ty) : Exp := .ctor "list" 0 [τ] unitE
-/-- `Cons[τ] (h, t)` (ANF: `h` a variable). -/
-abbrev consE (τ : Ty) (h t : Exp) : Exp := .ctor "list" 1 [τ] (.pair h t)
+/-- `Cons[τ] (h, t)`, with payload `(h, (t, ()))` (ANF: `h`, `t` variables). -/
+abbrev consE (τ : Ty) (h t : Exp) : Exp := .ctor "list" 1 [τ] (.pair h (.pair t unitE))
 
 /-- `sumList : list(Nat) → Nat`:
-    `fix sum. λxs. case xs of Nil _ => 0 | Cons p => let (h, t) = p in h + sum t` -/
+    `fix sum. λxs. case xs of Nil _ => 0 | Cons p => let (h, (t, _)) = p in h + sum t` -/
 abbrev sumListTy : Ty := .arrow (ListT NatT) NatT
 abbrev sumListE : Exp :=
   .fix (caseL (.bvar 0)                                    -- xs=0 self=1
     [ .iconst 0
-    , .split (.bvar 0)                                     -- p=0 xs=1 self=2
-        (.letin (.app (.bvar 4) (.bvar 0))                 -- t=0 h=1 p=2 xs=3 self=4
-          (.add (.bvar 2) (.bvar 0))) ])                   -- r=0 t=1 h=2
+    , .split (.bvar 0) (.split (.bvar 0)                   -- p=0 xs=1 self=2
+        (.letin (.app (.bvar 6) (.bvar 1))                 -- u=0 t=1 q=2 h=3 p=4 xs=5 self=6
+          (.add (.bvar 4) (.bvar 0)))) ])                  -- r=0 u=1 t=2 q=3 h=4
 
 theorem data_sumList (κ : KEnv) : topVC κ [] sumListE sumListTy listEnv := by
   simp [topVC, sumListE, sumListTy, listEnv, listDecl]
@@ -127,13 +129,13 @@ abbrev mapTy : Ty := .forall .star (.forall .star
 
 /-- `Λα. Λβ. λf. fix go. λxs. case xs of
       Nil _  => Nil[β]
-      Cons p => let (h, t) = p in let y = f h in let r = go t in Cons[β] (y, r)` -/
+      Cons p => let (h, (t, _)) = p in let y = f h in let r = go t in Cons[β] (y, r)` -/
 abbrev mapE : Exp := .tabs .star (.tabs .star (.lam (.fix (caseL (.bvar 0)
   [ nilE (Par 0)
-  , .split (.bvar 0)                            -- t=0 h=1 p=2 xs=3 go=4 f=5
-      (.letin (.app (.bvar 5) (.bvar 1))        -- y = f h
-      (.letin (.app (.bvar 5) (.bvar 1))        -- r = go t      (y=0 t=1 … go=5)
-      (consE (Par 0) (.bvar 1) (.bvar 0)))) ]))))
+  , .split (.bvar 0) (.split (.bvar 0)          -- u=0 t=1 q=2 h=3 p=4 xs=5 go=6 f=7
+      (.letin (.app (.bvar 7) (.bvar 3))        -- y = f h
+      (.letin (.app (.bvar 7) (.bvar 2))        -- r = go t      (y=0 u=1 t=2 … go=7)
+      (consE (Par 0) (.bvar 1) (.bvar 0))))) ]))))
 
 theorem data_map (κ : KEnv) : topVC κ [] mapE mapTy listEnv := by
   simp [topVC, mapE, mapTy, listEnv, listDecl]
@@ -267,20 +269,20 @@ abbrev filterGeTy : Ty :=
 
 /-- `λlo. fix go. λxs. case xs of
       Nil _  => Nil[Int{false}]
-      Cons p => let (h, t) = p; let r = go t; let c = lo ≤ h;
+      Cons p => let (h, (t, _)) = p; let r = go t; let c = lo ≤ h;
                 if c then (let h' = h; Cons[Int{k(lo, ν)}] (h', r)) else r` -/
 abbrev filterGeE : Exp :=
   .lam (.fix (caseL (.bvar 0)
     [ nilE FalseInt
-    , .split (.bvar 0)                                  -- t=0 h=1 p=2 xs=3 go=4 lo=5
-        (.letin (.app (.bvar 4) (.bvar 0))              -- r     t=1 h=2 … go=5 lo=6
-        (.letin (.leq (.bvar 6) (.bvar 2))              -- c     r=1 t=2 h=3 … lo=7
+    , .split (.bvar 0) (.split (.bvar 0)                -- u=0 t=1 q=2 h=3 p=4 xs=5 go=6 lo=7
+        (.letin (.app (.bvar 6) (.bvar 1))              -- r     u=1 t=2 q=3 h=4 … go=7 lo=8
+        (.letin (.leq (.bvar 8) (.bvar 4))              -- c     r=1 u=2 t=3 q=4 h=5 … lo=9
         (.ite (.bvar 0)
-          (.letin (.bvar 3)                             -- h'    c=1 r=2 t=3 h=4 … lo=8
-            -- in the instance: ν=0 h'=1 c=2 r=3 t=4 h=5 p=6 xs=7 go=8 lo=9
-            (consE (.refine .int (.kapp "k" [⟨.int, .bvar .int 9⟩, ⟨.int, .bvar .int 0⟩]))
+          (.letin (.bvar 5)                             -- h'    c=1 r=2 … h=6 … lo=10
+            -- in the instance: ν=0 h'=1 c=2 r=3 u=4 t=5 q=6 h=7 p=8 xs=9 go=10 lo=11
+            (consE (.refine .int (.kapp "k" [⟨.int, .bvar .int 11⟩, ⟨.int, .bvar .int 0⟩]))
               (.bvar 0) (.bvar 2)))
-          (.bvar 1)))) ]))
+          (.bvar 1))))) ]))
 
 theorem data_filterGe : ∃ κ : KEnv, Check listEnv κ [] filterGeE filterGeTy := by
   simp only [listEnv, listDecl]
@@ -299,14 +301,14 @@ abbrev appendTy : Ty :=
 
 /-- `Λα. fix go. λxs. λys. case xs of
       Nil _  => ys
-      Cons p => let (h, t) = p; let g = go t; let r = g ys; Cons[α] (h, r)` -/
+      Cons p => let (h, (t, _)) = p; let g = go t; let r = g ys; Cons[α] (h, r)` -/
 abbrev appendE : Exp :=
   .tabs .star (.fix (.lam (caseL (.bvar 1)
     [ .bvar 1
-    , .split (.bvar 0)                                  -- t=0 h=1 p=2 ys=3 xs=4 go=5
-        (.letin (.app (.bvar 5) (.bvar 0))              -- g = go t
-        (.letin (.app (.bvar 0) (.bvar 4))              -- r = g ys   (g=0 t=1 h=2 p=3 ys=4)
-        (consE (Par 0) (.bvar 3) (.bvar 0)))) ])))
+    , .split (.bvar 0) (.split (.bvar 0)                -- u=0 t=1 q=2 h=3 p=4 ys=5 xs=6 go=7
+        (.letin (.app (.bvar 7) (.bvar 1))              -- g = go t
+        (.letin (.app (.bvar 0) (.bvar 6))              -- r = g ys   (g=0 u=1 t=2 q=3 h=4 p=5 ys=6)
+        (consE (Par 0) (.bvar 5) (.bvar 0))))) ])))
 
 theorem data_append (κ : KEnv) : topVC κ [] appendE appendTy listEnv := by
   simp [topVC, appendE, appendTy, listEnv, listDecl]

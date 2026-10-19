@@ -9,8 +9,8 @@ open STLC
   `len (Cons h t) = 1 + len t`. In refinements it is an uninterpreted function
   of a variable (`Term.mbvar`/`Term.mfvar`): verification conditions only know
   the equations recorded where a value is built (`Cons(h, t) : list{len ν = 1 + len t}`)
-  and where it is matched (in `case xs of Cons p ⇒ …` with `p = (h, t)`,
-  `t : list{len xs = 1 + len ν}`). -/
+  and where it is matched (in `case xs of Cons p ⇒ …`, the payload
+  `p = (h, (t, u))` ends in a unit `u : Int{len xs = 1 + len t}`). -/
 
 attribute [local simp] Exp.ftv Ty.ftv Refinement.ftv Formula.ftv Term.ftv Base.ftv TEnv.ftv TVar.fresh
   Exp.openTv Ty.openTv Refinement.substB Formula.substB Term.substB Base.substB BSubst.openAt
@@ -41,14 +41,15 @@ abbrev ListLen (τ : Ty) (t : Term .int) : Ty := .dataL "list" [τ] (.fmla (.eq 
 abbrev lengthTy : Ty :=
   .forall .star (.arrow (ListT (Par 0)) (.refine .int (.fmla (.eq .int (.bvar .int 0) (lenB 1)))))
 
-/-- `Λα. fix go. λxs. case xs of Nil _ => 0 | Cons p => let (h, t) = p; let r = go t; 1 + r` -/
+/-- `Λα. fix go. λxs. case xs of Nil _ => 0
+                  | Cons p => let (h, (t, _)) = p; let r = go t; 1 + r` -/
 abbrev lengthE : Exp :=
   .tabs .star (.fix (caseL (.bvar 0)                      -- xs=0 go=1
     [ .iconst 0
-    , .split (.bvar 0)                                    -- t=0 h=1 p=2 xs=3 go=4
-        (.letin (.app (.bvar 4) (.bvar 0))                -- r = go t
+    , .split (.bvar 0) (.split (.bvar 0)                  -- u=0 t=1 q=2 h=3 p=4 xs=5 go=6
+        (.letin (.app (.bvar 6) (.bvar 1))                -- r = go t
         (.letin (.iconst 1)                               -- one   (r=1 …)
-        (.add (.bvar 0) (.bvar 1)))) ]))
+        (.add (.bvar 0) (.bvar 1))))) ]))
 
 /-- The verification condition is the two equations a `case` on `xs` reveals,
     with `len` uninterpreted:
@@ -78,7 +79,7 @@ abbrev headTy : Ty :=
   .forall .star (.arrow (.dataL "list" [Par 0] (.fmla (.not (.leqI (lenB 0) (.const .int 0)))))
     (Par 0))
 
-/-- `Λα. λxs. case xs of Nil _ => unreachable | Cons p => let (h, t) = p; h` -/
+/-- `Λα. λxs. case xs of Nil _ => unreachable | Cons p => let (h, _) = p; h` -/
 abbrev headE : Exp :=
   .tabs .star (.lam (caseL (.bvar 0) [.unreach, .split (.bvar 0) (.bvar 1)]))
 
@@ -176,29 +177,22 @@ theorem meas_headClient_safe (n : Nat) :
 
 /-! ## Lemmas as programs: `len ≥ 0`
 
-  With `len` uninterpreted, nothing says a length is non-negative — that takes
-  induction over lists. Induction is recursion: the program `nonneg` below
-  checks against `xs:list α → Int{0 ≤ len xs}`, and its verification condition
-  is exactly the inductive argument (`len xs = 0` in the `Nil` case;
-  `len xs = 1 + len t` and `0 ≤ len t`, from the recursive call, in the `Cons`
-  case). A client calls the lemma where it needs the fact: `let _ = nonneg t`
-  puts `0 ≤ len t` into the context.
-
-  This is sound under partial correctness without proving that the lemma
-  terminates: the call is executed, so if it diverged the rest of the program
-  would never run, and a non-terminating program promises nothing. (Assuming
-  the lemma's statement *without* calling it would need termination — a
-  diverging function checks against any type.) -/
+  With `len` uninterpreted, `0 ≤ len xs` takes induction, i.e. recursion: the
+  program `nonneg` checks against `xs:list α → Int{0 ≤ len xs}`. A client calls
+  it where it needs the fact (`let _ = nonneg t`). This is sound under partial
+  correctness without proving that `nonneg` terminates, because the call is
+  executed; assuming the statement without the call would need termination. -/
 
 /-- `nonneg : ∀α. xs:list α → Int{0 ≤ len xs}` -/
 abbrev nonnegTy : Ty :=
   .forall .star (.arrow (ListT (Par 0)) (.refine .int (.fmla (.leqI (.const .int 0) (lenB 1)))))
 
-/-- `Λα. fix go. λxs. case xs of Nil _ => 0 | Cons p => let (h, t) = p; go t` -/
+/-- `Λα. fix go. λxs. case xs of Nil _ => 0 | Cons p => let (h, (t, _)) = p; go t` -/
 abbrev nonnegE : Exp :=
   .tabs .star (.fix (caseL (.bvar 0)                      -- xs=0 go=1
     [ .iconst 0
-    , .split (.bvar 0) (.app (.bvar 4) (.bvar 0)) ]))    -- t=0 h=1 p=2 xs=3 go=4: go t
+    , .split (.bvar 0) (.split (.bvar 0)                  -- u=0 t=1 q=2 h=3 p=4 xs=5 go=6
+        (.app (.bvar 6) (.bvar 1))) ]))                   -- go t
 
 /-- The lemma's verification condition is the induction. -/
 theorem meas_nonneg : ∃ κ : KEnv, Check lenEnv κ [] nonnegE nonnegTy := by
@@ -258,15 +252,15 @@ theorem iteBOnInt_wf_bad :
   decide
 
 /-- `sumList : xs:ilist → Int{ν = sum xs}`:
-    `fix go. λxs. case xs of INil _ => 0 | ICons p => let (h, t) = p; let r = go t; h + r` -/
+    `fix go. λxs. case xs of INil _ => 0 | ICons p => let (h, (t, _)) = p; let r = go t; h + r` -/
 abbrev sumIListTy : Ty :=
   .arrow (.dataL "ilist" []) (.refine .int (.fmla (.eq .int (.bvar .int 0) (.mbvar "sum" 1))))
 abbrev sumIListE : Exp :=
   .fix (caseL (.bvar 0)                                   -- xs=0 go=1
     [ .iconst 0
-    , .split (.bvar 0)                                    -- t=0 h=1 p=2 xs=3 go=4
-        (.letin (.app (.bvar 4) (.bvar 0))                -- r = go t
-        (.add (.bvar 2) (.bvar 0))) ])                    -- h + r
+    , .split (.bvar 0) (.split (.bvar 0)                  -- u=0 t=1 q=2 h=3 p=4 xs=5 go=6
+        (.letin (.app (.bvar 6) (.bvar 1))                -- r = go t
+        (.add (.bvar 4) (.bvar 0)))) ])                   -- h + r
 
 /-- The match records `sum xs = h + sum t`, reading the field `h`. -/
 theorem meas_sumIList : ∃ κ : KEnv, Check ilistEnv κ [] sumIListE sumIListTy := by
@@ -296,15 +290,14 @@ abbrev mirrorTy : Ty :=
 
 /-- `Λα. fix go. λt. case t of
       Leaf _ => Leaf
-      Node p => let (l, q) = p; let (x, r) = q; let l' = go l; let r' = go r; Node(r', x, l')` -/
+      Node p => let (l, (x, (r, _))) = p; let l' = go l; let r' = go r; Node(r', x, l')` -/
 abbrev mirrorE : Exp :=
   .tabs .star (.fix (caseL (.bvar 0)                                  -- t=0 go=1
     [ .ctor "tree" 0 [Par 0] unitE
-    , .split (.bvar 0)                                                -- q=0 l=1 p=2 t=3 go=4
-        (.split (.bvar 0)                                             -- r=0 x=1 q=2 l=3 … go=6
-          (.letin (.app (.bvar 6) (.bvar 3))                          -- l' = go l
-          (.letin (.app (.bvar 7) (.bvar 1))                          -- r' = go r  (l'=0 r=1 x=2)
-          (.ctor "tree" 1 [Par 0] (.pair (.bvar 0) (.pair (.bvar 3) (.bvar 1))))))) ]))
+    , .split (.bvar 0) (.split (.bvar 0) (.split (.bvar 0)            -- u=0 r=1 q'=2 x=3 q=4 l=5 p=6 t=7 go=8
+          (.letin (.app (.bvar 8) (.bvar 5))                          -- l' = go l
+          (.letin (.app (.bvar 9) (.bvar 2))                          -- r' = go r  (l'=0 u=1 r=2)
+          (.ctor "tree" 1 [Par 0] (.pair (.bvar 0) (.pair (.bvar 5) (.pair (.bvar 1) unitE)))))))) ]))
 
 theorem meas_mirror : ∃ κ : KEnv, Check treeEnv κ [] mirrorE mirrorTy := by
   simp only [mirrorE, treeEnv, treeDecl]
@@ -314,16 +307,15 @@ theorem meas_mirror : ∃ κ : KEnv, Check treeEnv κ [] mirrorE mirrorTy := by
 /-- The lemma `sizeNonneg : ∀α. t:tree α → Int{0 ≤ size t}`: the recursion
     makes one call per subtree (two induction hypotheses).
     `Λα. fix go. λt. case t of Leaf _ => 0
-                     | Node p => let (l, q) = p; let (x, r) = q; let a = go l; go r` -/
+                     | Node p => let (l, (x, (r, _))) = p; let a = go l; go r` -/
 abbrev sizeNonnegTy : Ty :=
   .forall .star (.arrow (TreeT (Par 0)) (.refine .int (.fmla (.leqI (.const .int 0) (sizeB 1)))))
 abbrev sizeNonnegE : Exp :=
   .tabs .star (.fix (caseL (.bvar 0)                                  -- t=0 go=1
     [ .iconst 0
-    , .split (.bvar 0)                                                -- q=0 l=1 p=2 t=3 go=4
-        (.split (.bvar 0)                                             -- r=0 x=1 q=2 l=3 … go=6
-          (.letin (.app (.bvar 6) (.bvar 3))                          -- a = go l
-          (.app (.bvar 7) (.bvar 1)))) ]))                            -- go r   (a=0 r=1)
+    , .split (.bvar 0) (.split (.bvar 0) (.split (.bvar 0)            -- u=0 r=1 q'=2 x=3 q=4 l=5 p=6 t=7 go=8
+          (.letin (.app (.bvar 8) (.bvar 5))                          -- a = go l
+          (.app (.bvar 9) (.bvar 2))))) ]))                           -- go r   (a=0 u=1 r=2)
 
 theorem meas_sizeNonneg : ∃ κ : KEnv, Check treeEnv κ [] sizeNonnegE sizeNonnegTy := by
   simp only [sizeNonnegE, treeEnv, treeDecl]
@@ -339,7 +331,7 @@ abbrev nodeTy : Ty :=
 abbrev nodeE : Exp :=
   .tabs .star (.lam (.lam (.lam                                               -- r=0 x=1 l=2
     (.letin (.app (.tapp (.ann sizeNonnegE sizeNonnegTy) (Par 0)) (.bvar 0))  -- _ = sizeNonneg[α] r
-      (.ctor "tree" 1 [Par 0] (.pair (.bvar 3) (.pair (.bvar 2) (.bvar 1))))))))
+      (.ctor "tree" 1 [Par 0] (.pair (.bvar 3) (.pair (.bvar 2) (.pair (.bvar 1) unitE))))))))
 
 theorem meas_node : ∃ κ : KEnv, Check treeEnv κ [] nodeE nodeTy := by
   simp only [nodeE, sizeNonnegE, sizeNonnegTy, treeEnv, treeDecl]
@@ -411,7 +403,7 @@ theorem meas_mirrorHeight : ∃ κ : KEnv, Check htreeEnv κ [] mirrorE mirrorHT
 /-- A lemma relating two measures, `0 ≤ height t ≤ size t`, by recursion on
     both subtrees:
     `Λα. fix go. λt. case t of Leaf _ => 0
-                     | Node p => let (l, q) = p; let (x, r) = q; let a = go l; go r` -/
+                     | Node p => let (l, (x, (r, _))) = p; let a = go l; go r` -/
 abbrev heightLeSizeTy : Ty :=
   .forall .star (.arrow (TreeT (Par 0))
     (.refine .int (.fmla (.and (.leqI (.const .int 0) (heightB 1)) (.leqI (heightB 1) (sizeB 1))))))
@@ -440,17 +432,17 @@ abbrev countB (i : Nat) : Term .int := .mbvar "countTrue" i
 
 /-- `count : xs:blist → Int{ν = countTrue xs}`:
     `fix go. λxs. case xs of BNil _ => 0
-                  | BCons p => let (b, t) = p; let r = go t; if b then 1 + r else r` -/
+                  | BCons p => let (b, (t, _)) = p; let r = go t; if b then 1 + r else r` -/
 abbrev countTy : Ty :=
   .arrow (.dataL "blist" []) (.refine .int (.fmla (.eq .int (.bvar .int 0) (countB 1))))
 abbrev countE : Exp :=
   .fix (caseL (.bvar 0)                                   -- xs=0 go=1
     [ .iconst 0
-    , .split (.bvar 0)                                    -- t=0 b=1 p=2 xs=3 go=4
-        (.letin (.app (.bvar 4) (.bvar 0))                -- r = go t     (r=0 t=1 b=2)
-        (.ite (.bvar 2)
+    , .split (.bvar 0) (.split (.bvar 0)                  -- u=0 t=1 q=2 b=3 p=4 xs=5 go=6
+        (.letin (.app (.bvar 6) (.bvar 1))                -- r = go t     (r=0 u=1 t=2 q=3 b=4)
+        (.ite (.bvar 4)
           (.letin (.iconst 1) (.add (.bvar 0) (.bvar 1))) -- 1 + r
-          (.bvar 0))) ])                                  -- r
+          (.bvar 0)))) ])                                 -- r
 
 /-- The match records `countTrue xs = (if b then 1 + countTrue t else countTrue t)`;
     the branch on `b` picks the matching side. -/
@@ -464,10 +456,62 @@ theorem meas_count : ∃ κ : KEnv, Check blistEnv κ [] countE countTy := by
 abbrev oneTrueE : Exp :=
   .letin (.bconst true) (.letin (.bconst false)           -- ff=0 tt=1
   (.letin (.ctor "blist" 0 [] unitE)                      -- n
-  (.letin (.ctor "blist" 1 [] (.pair (.bvar 1) (.bvar 0)))  -- l = BCons(ff, n)
-  (.ctor "blist" 1 [] (.pair (.bvar 3) (.bvar 0))))))       -- BCons(tt, l)
+  (.letin (.ctor "blist" 1 [] (.pair (.bvar 1) (.pair (.bvar 0) unitE)))  -- l = BCons(ff, n)
+  (.ctor "blist" 1 [] (.pair (.bvar 3) (.pair (.bvar 0) unitE))))))       -- BCons(tt, l)
 
 theorem meas_oneTrue : ∃ κ : KEnv, Check blistEnv κ [] oneTrueE (.dataL "blist" [] (.fmla (.eq .int (countB 0) (.const .int 1)))) := by
   simp only [oneTrueE, blistEnv, blistDecl]
+  generate
+  solve
+
+/-! ## Facts whatever the fields' types
+
+  The match facts sit on the payload's terminal unit, so they are recorded even
+  when the last field has no refinement of its own (here, the ⋆-kinded `α`). -/
+
+/-- Snoc lists `slist α = SNil | Snoc (slist α, α)`, with `slen`. -/
+def slistDecl : DataDecl :=
+  { params := [.star], ctorFields := [("SNil", []), ("Snoc", [.dataL "slist" [Par 0], Par 0])],
+    variances := [.co],
+    measures := [("slen", [.const 0, .add (.const 1) (.meas "slen" 0)])] }
+def slistEnv : DEnv := [("slist", slistDecl)]
+
+theorem slistEnv_wf : slistEnv.wfB = true := by decide
+
+/-- `slength : ∀α. xs:slist α → Int{ν = slen xs}` -/
+abbrev slengthTy : Ty :=
+  .forall .star (.arrow (.dataL "slist" [Par 0])
+    (.refine .int (.fmla (.eq .int (.bvar .int 0) (.mbvar "slen" 1)))))
+
+/-- `Λα. fix go. λxs. case xs of SNil _ => 0
+                  | Snoc p => let (t, (x, _)) = p; let r = go t; 1 + r` -/
+abbrev slengthE : Exp :=
+  .tabs .star (.fix (caseL (.bvar 0)                      -- xs=0 go=1
+    [ .iconst 0
+    , .split (.bvar 0) (.split (.bvar 0)                  -- u=0 x=1 q=2 t=3 p=4 xs=5 go=6
+        (.letin (.app (.bvar 6) (.bvar 3))                -- r = go t
+        (.letin (.iconst 1)
+        (.add (.bvar 0) (.bvar 1))))) ]))
+
+theorem meas_slength : ∃ κ : KEnv, Check slistEnv κ [] slengthE slengthTy := by
+  simp only [slengthE, slistEnv, slistDecl]
+  generate
+  solve
+
+/-- `option α` with `isSome None = 0`, `isSome (Some x) = 1`. -/
+def optMeasEnv : DEnv := [("option", { optionDecl with measures := [("isSome", [.const 0, .const 1])] })]
+
+theorem optMeasEnv_wf : optMeasEnv.wfB = true := by decide
+
+/-- `isSome : ∀α. o:option α → Int{ν = isSome o}`:
+    `Λα. λo. case o of None _ => 0 | Some p => let (x, _) = p; 1` -/
+abbrev isSomeTy : Ty :=
+  .forall .star (.arrow (.dataL "option" [Par 0])
+    (.refine .int (.fmla (.eq .int (.bvar .int 0) (.mbvar "isSome" 1)))))
+abbrev isSomeE : Exp :=
+  .tabs .star (.lam (caseL (.bvar 0) [.iconst 0, .split (.bvar 0) (.iconst 1)]))
+
+theorem meas_isSome : ∃ κ : KEnv, Check optMeasEnv κ [] isSomeE isSomeTy := by
+  simp only [isSomeE, optMeasEnv, optionDecl]
   generate
   solve

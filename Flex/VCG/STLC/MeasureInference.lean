@@ -6,12 +6,9 @@ open STLC
 
   The specifications of the recursive functions in `MeasureExamples` are left
   as κ-templates over measures (`k(len ν, len xs)`, …) and inferred from what a
-  client needs. Each κ sits on a recursive function, so it is *cyclic*: `fix`
-  (certifying predicate abstraction, `pa_cert`) finds the strongest
-  conjunction of `@[qualif]` instances that is inductive, certifies every
-  κ-head in the kernel, and `grind` closes the κ-free residual. Measures are
-  plain integer atoms to the solver. A false client — `append` returning
-  `len xs` elements — leaves an unprovable residual. -/
+  client needs. The κs are cyclic, so `fix` (predicate abstraction over the
+  `@[qualif]` qualifiers, then `grind`) solves them; to the solver, measures are
+  plain integer atoms. -/
 
 attribute [local simp] Exp.ftv Ty.ftv Refinement.ftv Formula.ftv Term.ftv Base.ftv TEnv.ftv TVar.fresh
   Exp.openTv Ty.openTv Refinement.substB Formula.substB Term.substB Base.substB BSubst.openAt
@@ -138,7 +135,7 @@ theorem infer_node : ∃ κ : KEnv, Check treeEnv κ []
     (.letin (.ann sizeNonnegE (.forall .star (.arrow (TreeT (Par 0)) (.refine .int (.kapp "k" [sizeA 1])))))
       (.tabs .star (.lam (.lam (.lam                                   -- r=0 x=1 l=2 lemma=3
         (.letin (.app (.tapp (.bvar 3) (Par 0)) (.bvar 0))
-          (.ctor "tree" 1 [Par 0] (.pair (.bvar 3) (.pair (.bvar 2) (.bvar 1))))))))))
+          (.ctor "tree" 1 [Par 0] (.pair (.bvar 3) (.pair (.bvar 2) (.pair (.bvar 1) unitE))))))))))
     nodeTy := by
   simp only [sizeNonnegE, nodeTy, treeEnv, treeDecl]
   generate

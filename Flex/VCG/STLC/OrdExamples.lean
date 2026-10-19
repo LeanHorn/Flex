@@ -86,8 +86,8 @@ def olistDecl : DataDecl :=
 def olistEnv : DEnv := [("olist", olistDecl)]
 
 abbrev onilE (τ : Ty) : Exp := .ctor "olist" 0 [τ] unitE
-/-- `OCons[τ] (h, t)` (ANF: `h` a variable). -/
-abbrev oconsE (τ : Ty) (h t : Exp) : Exp := .ctor "olist" 1 [τ] (.pair h t)
+/-- `OCons[τ] (h, t)`, with payload `(h, (t, ()))` (ANF: `h`, `t` variables). -/
+abbrev oconsE (τ : Ty) (h t : Exp) : Exp := .ctor "olist" 1 [τ] (.pair h (.pair t unitE))
 
 theorem olistEnv_wf : olistEnv.wfB = true := by decide
 
@@ -128,7 +128,7 @@ abbrev insTy : Ty := .forall .B (.arrow (Par 0) (.arrow (OListT (Par 0)) (OListT
 /-- Fig. 7.1:
     `Λα. fix ins. λx. λys. case ys of
        ONil _ => let tl = ONil[α{x ≤ ν}]; OCons[α] (x, tl)
-       OCons p => let (y, ys') = p; let c = x ≤ y;
+       OCons p => let (y, (ys', _)) = p; let c = x ≤ y;
                   if c then let tl = OCons[α{x ≤ ν}] (y, ys'); OCons[α] (x, tl)
                   else let g = ins[α{y ≤ ν}] x; let tl = g ys'; OCons[α] (y, tl)`
     The recursive call is at `α{y ≤ ν}`: the tail's elements are all `≥ y`. -/
@@ -137,16 +137,16 @@ abbrev insE : Exp := .tabs .B (.fix (.lam                    -- ys=0 x=1 ins=2
     [ -- in the instance: ν=0 u=1 ys=2 x=3
       .letin (onilE (Par 0 (geR (.tbvar 0) 3)))              -- tl     u=1 ys=2 x=3
         (oconsE (Par 0) (.bvar 3) (.bvar 0))
-    , .split (.bvar 0)                                       -- ys'=0 y=1 p=2 ys=3 x=4 ins=5
-        (.letin (.leq (.bvar 4) (.bvar 1))                   -- c      ys'=1 y=2 … x=5 ins=6
+    , .split (.bvar 0) (.split (.bvar 0)                     -- u=0 ys'=1 q=2 y=3 p=4 ys=5 x=6 ins=7
+        (.letin (.leq (.bvar 6) (.bvar 3))                   -- c      u=1 ys'=2 q=3 y=4 … x=7 ins=8
           (.ite (.bvar 0)
-            -- in the instance: ν=0 c=1 ys'=2 y=3 p=4 ys=5 x=6
-            (.letin (oconsE (Par 0 (geR (.tbvar 0) 6)) (.bvar 2) (.bvar 1))   -- tl
-              (oconsE (Par 0) (.bvar 6) (.bvar 0)))
-            -- in the instance: ν=0 c=1 ys'=2 y=3
-            (.letin (.app (.tapp (.bvar 6) (Par 0 (geR (.tbvar 0) 3))) (.bvar 5))  -- g
-              (.letin (.app (.bvar 0) (.bvar 2))             -- tl     g=1 c=2 ys'=3 y=4
-                (oconsE (Par 0) (.bvar 4) (.bvar 0)))))) ])))
+            -- in the instance: ν=0 c=1 u=2 ys'=3 q=4 y=5 p=6 ys=7 x=8
+            (.letin (oconsE (Par 0 (geR (.tbvar 0) 8)) (.bvar 4) (.bvar 2))   -- tl
+              (oconsE (Par 0) (.bvar 8) (.bvar 0)))
+            -- in the instance: ν=0 c=1 u=2 ys'=3 q=4 y=5
+            (.letin (.app (.tapp (.bvar 8) (Par 0 (geR (.tbvar 0) 5))) (.bvar 7))  -- g
+              (.letin (.app (.bvar 0) (.bvar 3))             -- tl     g=1 c=2 u=3 ys'=4 q=5 y=6
+                (oconsE (Par 0) (.bvar 6) (.bvar 0))))))) ])))
 
 /-- The VC is totality and transitivity of `≤`, at `Int` and at `Bool`. -/
 theorem ord_insert (κ : KEnv) : topVC κ [] insE insTy olistEnv := by
@@ -159,14 +159,14 @@ abbrev insMonoE : Exp := .tabs .B (.fix (.lam
   (caseL (.bvar 0)
     [ .letin (onilE (Par 0 (geR (.tbvar 0) 3)))
         (oconsE (Par 0) (.bvar 3) (.bvar 0))
-    , .split (.bvar 0)
-        (.letin (.leq (.bvar 4) (.bvar 1))
+    , .split (.bvar 0) (.split (.bvar 0)
+        (.letin (.leq (.bvar 6) (.bvar 3))
           (.ite (.bvar 0)
-            (.letin (oconsE (Par 0 (geR (.tbvar 0) 6)) (.bvar 2) (.bvar 1))
-              (oconsE (Par 0) (.bvar 6) (.bvar 0)))
-            (.letin (.app (.bvar 6) (.bvar 5))
-              (.letin (.app (.bvar 0) (.bvar 2))
-                (oconsE (Par 0) (.bvar 4) (.bvar 0)))))) ])))
+            (.letin (oconsE (Par 0 (geR (.tbvar 0) 8)) (.bvar 4) (.bvar 2))
+              (oconsE (Par 0) (.bvar 8) (.bvar 0)))
+            (.letin (.app (.bvar 8) (.bvar 7))
+              (.letin (.app (.bvar 0) (.bvar 3))
+                (oconsE (Par 0) (.bvar 6) (.bvar 0))))))) ])))
 
 theorem ord_insert_mono_bad (κ : KEnv) : ¬ topVC κ [] insMonoE insTy olistEnv := by
   simp [topVC, olistEnv, olistDecl]
@@ -182,16 +182,16 @@ abbrev isortTy : Ty := .forall .B (.arrow (ListT (Par 0)) (OListT (Par 0)))
 /-- `let ins = (insE : insTy) in
      Λα. fix sort. λxs. case xs of
        Nil _  => ONil[α]
-       Cons p => let (h, t) = p; let s = sort t; let g = ins[α] h; g s` -/
+       Cons p => let (h, (t, _)) = p; let s = sort t; let g = ins[α] h; g s` -/
 abbrev isortE : Exp :=
   .letin (.ann insE insTy)                                   -- ins
   (.tabs .B (.fix                                            -- xs=0 sort=1 ins=2
      (caseL (.bvar 0)
        [ onilE (Par 0)
-       , .split (.bvar 0)                                    -- t=0 h=1 p=2 xs=3 sort=4 ins=5
-           (.letin (.app (.bvar 4) (.bvar 0))                -- s
-             (.letin (.app (.tapp (.bvar 6) (Par 0)) (.bvar 2))   -- g    s=1 t=2 h=3 … ins=7
-               (.app (.bvar 0) (.bvar 1)))) ])))
+       , .split (.bvar 0) (.split (.bvar 0)                  -- u=0 t=1 q=2 h=3 p=4 xs=5 sort=6 ins=7
+           (.letin (.app (.bvar 6) (.bvar 1))                -- s
+             (.letin (.app (.tapp (.bvar 8) (Par 0)) (.bvar 4))   -- g    s=1 u=2 t=3 q=4 h=5 … ins=9
+               (.app (.bvar 0) (.bvar 1))))) ])))
 
 theorem ord_isort (κ : KEnv) : topVC κ [] isortE isortTy sortEnv := by
   simp [topVC, sortEnv, olistDecl, listDecl]
@@ -205,15 +205,15 @@ theorem ord_isort (κ : KEnv) : topVC κ [] isortE isortTy sortEnv := by
 abbrev headsTy : Ty := .forall .B (.arrow (OListT (Par 0)) TrueB)
 
 /-- `Λα. λl. case l of ONil _ => true
-                     | OCons p => let (x, r) = p in case r of
+                     | OCons p => let (x, (r, _)) = p in case r of
                          ONil _ => true | OCons q => let (y, _) = q in x ≤ y` -/
 abbrev headsOrderedE : Exp := .tabs .B (.lam
   (caseL (.bvar 0)
     [ .bconst true
-    , .split (.bvar 0)                                       -- r=0 x=1 p=2 l=3
-        (caseL (.bvar 0)
+    , .split (.bvar 0) (.split (.bvar 0)                     -- u=0 r=1 q=2 x=3 p=4 l=5
+        (caseL (.bvar 1)
           [ .bconst true
-          , .split (.bvar 0) (.leq (.bvar 4) (.bvar 1)) ]) ]))  -- r'=0 y=1 q=2 r=3 x=4
+          , .split (.bvar 0) (.leq (.bvar 6) (.bvar 1)) ])) ]))  -- rest=0 y=1 q'=2 u=3 r=4 q=5 x=6
 
 theorem ord_headsOrdered (κ : KEnv) : topVC κ [] headsOrderedE headsTy olistEnv := by
   simp [topVC, olistEnv, olistDecl]

@@ -4,13 +4,9 @@ open STLC
 
 /-! # The earlier examples, through Flex
 
-  The programs of `Examples`, `DataExamples` and `OrdExamples` that are proved
-  there by computing `topVC` and closing it with `omega`/`grind`/`split_sorts`,
-  restated as `∃ κ, Check …` and handed to the Flex pipeline unchanged:
-  `generate` computes the verification condition (reifying the κ's, if any —
-  these programs have none), and `solve` (`zap`, then `fix`) closes what is
-  left. Some VCs are already closed by `generate`'s simplification, hence
-  `all_goals`. -/
+  Programs of `Examples`, `DataExamples` and `OrdExamples` proved there via
+  `topVC`, restated as `∃ κ, Check …` and proved by `generate; solve`. Some VCs
+  are already closed by `generate`, hence `all_goals`. -/
 
 attribute [local simp] Exp.ftv Ty.ftv Refinement.ftv Formula.ftv Term.ftv Base.ftv TEnv.ftv TVar.fresh
   Exp.openTv Ty.openTv Refinement.substB Formula.substB Term.substB Base.substB BSubst.openAt
@@ -68,7 +64,7 @@ theorem flex_data_ordOK : ∃ κ : KEnv, Check ordEnv κ [] ordOKE (.arrow OrdT 
   generate
   all_goals solve
 
-theorem flex_data_mkOrd : ∃ κ : KEnv, Check ordEnv κ [] (.letin (.iconst 3) (.letin (.iconst 5) (.ctor "ord" 0 [] (.pair (.bvar 1) (.bvar 0))))) OrdT := by
+theorem flex_data_mkOrd : ∃ κ : KEnv, Check ordEnv κ [] (.letin (.iconst 3) (.letin (.iconst 5) (.ctor "ord" 0 [] (.pair (.bvar 1) (.pair (.bvar 0) unitE))))) OrdT := by
   simp only [ordEnv, ordDecl]
   generate
   all_goals solve

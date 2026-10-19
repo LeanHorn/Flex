@@ -1,9 +1,9 @@
-import Flex.VCG.STLC.Examples
+import Flex.VCG.STLC.Examples.Basic
 import Flex.VCG.STLC.Notation
 
 /-! # Examples restated using `<| ... |>` notation
 
-  Same programs as `Examples.lean`, but written with the surface syntax from
+  Same programs as `Examples/Basic.lean`, but written with the surface syntax from
   `Notation.lean` instead of raw locally-nameless constructor application.
 -/
 

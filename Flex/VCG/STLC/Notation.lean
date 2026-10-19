@@ -1,4 +1,4 @@
-import Flex.VCG.STLC.Syntax
+import Flex.VCG.STLC.Spec.Syntax
 
 /-! # Surface Syntax for STLC Programs
 
@@ -12,14 +12,14 @@ import Flex.VCG.STLC.Syntax
   * the `Exp`-level stack, pushed by `λ x, ...` and `let x = ... in ...`;
   * the refinement-level stack, pushed by `{ν : ...}` and `(x : s) -> t`,
     since ν, `Formula` quantifiers, and `Ty.arrow` binders share one index
-    space (see `Syntax.lean`).
+    space (see `Spec/Syntax.lean`).
 
   A refinement type names its base explicitly, `int { v : ... }` or
   `bool { v : ... }`, since `Term` is `Base`-indexed (and `Ty.refine` records
   the base) — it cannot otherwise be inferred from the surface syntax. `Term.add` is
   int-only and `Term.not`/`Term.and` are bool-only; `Formula.leqI` is always
   over `Term .int` regardless of the enclosing refinement's base, matching
-  `Syntax.lean`.
+  `Spec/Syntax.lean`.
 
   Grammar (informal):
   ```

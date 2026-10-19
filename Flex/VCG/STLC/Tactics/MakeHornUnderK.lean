@@ -1,4 +1,5 @@
-import Flex.VCG.STLC.Soundness
+import Flex.VCG.STLC.Proofs.Soundness
+import Flex.VCG.STLC.Tactics.KEnv
 import Flex.Tactic
 
 -- Applies `under_exists` once, then dispatches `check_sound` inside it.

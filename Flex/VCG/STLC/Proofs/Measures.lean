@@ -1,4 +1,4 @@
-import Flex.VCG.STLC.Soundness
+import Flex.VCG.STLC.Proofs.Soundness
 
 /-! # Measures: the facts constructors and matches reveal are true
 

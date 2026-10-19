@@ -1,4 +1,4 @@
-import Flex.VCG.STLC.MeasureInference
+import Flex.VCG.STLC.Examples.MeasureInference
 
 open STLC
 

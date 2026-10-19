@@ -1,4 +1,4 @@
-import Flex.VCG.STLC.DataExamples
+import Flex.VCG.STLC.Examples.Data
 
 open STLC
 

@@ -1,9 +1,34 @@
-import Flex.VCG.STLC.Syntax
-import Flex.VCG.STLC.Substitution
-import Flex.VCG.STLC.Typing
-import Flex.VCG.STLC.Notation
+import Flex.VCG.STLC.Checker.Typing
 
 open STLC
+
+namespace STLC
+
+/-! ## Syntactic constraints (CHC tree)
+
+  A verification condition, produced by VC generation (below), as a
+  Constrained Horn Clause tree. -/
+
+inductive Cstr where
+  | head : Refinement → Cstr             -- goal refinement `r`
+  | imp  : Refinement → Cstr → Cstr      -- hypothesis `r ⇒ c`
+  | all  : EVar → Base → Cstr → Cstr     -- `∀ x:b. c`
+  | conj : Cstr → Cstr → Cstr            -- `c₁ ∧ c₂`
+
+/-- The trivially-true constraint (used for synthesis leaves). -/
+@[simp] def Cstr.triv : Cstr := .head (.fmla .tt)
+
+@[simp] def Cstr.ff : Cstr := .head (.fmla .ff)
+
+/-- Interpret a syntactic constraint as a `κ`-indexed `REnv` predicate. -/
+def Cstr.interp : Cstr → KEnv → REnv → Prop
+  | .head r,     κ, γ => Refinement.interp κ r γ
+  | .imp r c,    κ, γ => Refinement.interp κ r γ → c.interp κ γ
+  | .all x b c,  κ, γ => ∀ v : b.sem γ.sorts, c.interp κ (REnv.update b γ x v)
+  | .conj c₁ c₂, κ, γ => c₁.interp κ γ ∧ c₂.interp κ γ
+
+end STLC
+
 
 /-! # VC Generation for STLC (LN + deep Formula + κ)
 
@@ -12,6 +37,7 @@ open STLC
 -/
 
 namespace STLC
+
 
 def implyBindCstr (x : EVar) (t : Ty) (c : Cstr) : Cstr :=
   match t.hyp? with
@@ -32,26 +58,8 @@ def Cstr.conjAll {α : Type} (f : α → Option Cstr) : List α → Option Cstr
       | some c, some cs => some (.conj c cs)
       | _, _ => none
 
-theorem Cstr.conjAll_some {α : Type} {f : α → Option Cstr} :
-    ∀ {l : List α} {c : Cstr}, Cstr.conjAll f l = some c →
-      ∀ a ∈ l, ∃ ca, f a = some ca ∧ ∀ κ γ, c.interp κ γ → ca.interp κ γ
-  | [], _, _, a, ha => by simp at ha
-  | b :: bs, c, h, a, ha => by
-    simp only [Cstr.conjAll] at h
-    cases hb : f b with
-    | none => simp [hb] at h
-    | some cb =>
-      cases hbs : Cstr.conjAll f bs with
-      | none => simp [hb, hbs] at h
-      | some cs =>
-        simp only [hb, hbs, Option.some.injEq] at h
-        subst h
-        rcases List.mem_cons.mp ha with rfl | ha
-        · exact ⟨cb, hb, fun κ γ hc => hc.1⟩
-        · obtain ⟨ca, hfa, himp⟩ := Cstr.conjAll_some hbs a ha
-          exact ⟨ca, hfa, fun κ γ hc => himp κ γ hc.2⟩
-
 end STLC
+
 
 /-! ## Algorithmic subtyping / bidirectional checking -/
 
@@ -270,6 +278,7 @@ mutual
       | (have := Exp.skel_case_lt e m alts j
          simp only [Exp.skel_openVar]; omega))
 end
+
 
 /-- Top-level: produce a closed Lean `Prop` (parameterized by a κ-assignment)
     to hand to `solve_fixpoint`. The user writes `∃ κ, topVC κ [] e t`. -/

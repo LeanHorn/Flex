@@ -1,4 +1,4 @@
-import Flex.VCG.STLC.Substitution
+import Flex.VCG.STLC.Proofs.Substitution
 
 /-! # Semantics of type-variable substitution
 

@@ -1,61 +1,16 @@
-import Flex.VCG.STLC.Syntax
-import Flex.VCG.STLC.Semantics
+import Flex.VCG.STLC.Spec.Logic
+import Flex.VCG.STLC.Spec.Semantics
+
+open STLC
+
+/-! # The meaning of types
+
+  `TyDenote κ δ k t γ v`: the value `v` belongs to type `t` at step index `k`,
+  with type variables interpreted by `δ` and the refinements' free variables by
+  `γ`. This is the conclusion of every headline theorem. -/
 
 namespace STLC
 
-/-- Interpret a term under the single environment `γ`. `fvar` resolves through
-    the name map (`REnv.get`); `bvar` resolves through the de Bruijn stack
-    (`REnv.getBV`) — the values of ν and the enclosing quantifier/arrow binders
-    live there.. -/
-def Term.interp (γ : REnv) : {b : Base} → Term b → b.sem γ.sorts
-  | _, .const b c   => Base.ofConst γ.sorts b c
-  | _, .bvar b k    => REnv.getBV b γ k
-  | _, .fvar b x    => REnv.get b γ x
-  | _, .add t₁ t₂   => Term.interp γ t₁ + Term.interp γ t₂
-  | _, .mbvar m k   => γ.sorts.meas m (γ.bv[k]?.getD (.iconst 0))
-  | _, .mfvar m x   => γ.sorts.meas m (γ.map x)
-  | _, .ibvar k     => Val.proj .int (γ.bv[k]?.getD (.iconst 0))
-  | _, .bbvar k     => Val.proj .bool (γ.bv[k]?.getD (.iconst 0))
-  | _, .not t       => !Term.interp γ t
-  | _, .and t₁ t₂   => Term.interp γ t₁ && Term.interp γ t₂
-  | _, .leqI t₁ t₂  => decide (Term.interp γ t₁ ≤ Term.interp γ t₂)
-  | _, .ite _ c t e => if Term.interp γ c then Term.interp γ t else Term.interp γ e
-
-/-- Interpret a (now κ-free) formula under `γ`. Each quantifier binds `BVar 0`,
-    so it `push`es its witness value as the new innermost de Bruijn slot of `γ`
-    and recurses. -/
-def Formula.interp (γ : REnv) : Formula → Prop
-  | .tt           => True
-  | .ff           => False
-  | .eq _ t₁ t₂   => Term.interp γ t₁ = Term.interp γ t₂
-  | .leq b t₁ t₂   => BSort.le (b.resolve γ.sorts) (Term.interp γ t₁) (Term.interp γ t₂)
-  | .and φ₁ φ₂    => Formula.interp γ φ₁ ∧ Formula.interp γ φ₂
-  | .or φ₁ φ₂     => Formula.interp γ φ₁ ∨ Formula.interp γ φ₂
-  | .not φ        => ¬ Formula.interp γ φ
-  | .imp φ₁ φ₂    => Formula.interp γ φ₁ → Formula.interp γ φ₂
-  | .ex b φ       => ∃ x : b.sem γ.sorts, Formula.interp (γ.push (Val.inj (b.resolve γ.sorts) x)) φ
-  | .all b φ      => ∀ x : b.sem γ.sorts, Formula.interp (γ.push (Val.inj (b.resolve γ.sorts) x)) φ
-
-/-- Package a κ-argument: a term of sort `b` is passed as a value of the base
-    `b` stands for, tagged with that base. -/
-@[simp, reducible] def Base.canonArg (σ : SortEnv) (b : Base) (v : b.sem σ) : (Σ b : Base, b.interp) :=
-  Val.tag (b.resolve σ) v
-
-/-- Interpret a refinement under `γ`. This is the *only* interpretation
-    that consults the κ-assignment. -/
-def Refinement.interp (κ : KEnv) (r : Refinement) (γ : REnv) : Prop :=
-  match r with
-  | .fmla φ       => Formula.interp γ φ
-  | .kapp kn args =>
-      κ kn (args.map (fun a => Base.canonArg γ.sorts a.1 (Term.interp γ a.2)))
-  | .conj r₁ r₂   => Refinement.interp κ r₁ γ ∧ Refinement.interp κ r₂ γ
-
-/-- Interpret a syntactic constraint as a `κ`-indexed `REnv` predicate. -/
-def Cstr.interp : Cstr → KEnv → REnv → Prop
-  | .head r,     κ, γ => Refinement.interp κ r γ
-  | .imp r c,    κ, γ => Refinement.interp κ r γ → c.interp κ γ
-  | .all x b c,  κ, γ => ∀ v : b.sem γ.sorts, c.interp κ (REnv.update b γ x v)
-  | .conj c₁ c₂, κ, γ => c₁.interp κ γ ∧ c₂.interp κ γ
 
 /-! ## Semantic types for type variables
 
@@ -88,11 +43,6 @@ def SemTy.ints : SemTy :=
   ⟨fun _ v => ∃ n, v = .iconst n, fun _ h => h,
    fun h => by obtain ⟨n, rfl⟩ := h; exact ⟨trivial, rfl, trivial⟩, .int⟩
 
-theorem SemTy.ints_fits (k : Kind) : SemTy.ints.Fits k := by
-  cases k with
-  | B => exact fun _ v ⟨n, h⟩ => by subst h; rfl
-  | star => trivial
-
 /-- A semantic type that agrees with `R` up to index `i` (and is empty above).
     Downward closed and well-formed by construction, so it can be built inside
     the definition of `TyDenote` without any proof obligations. -/
@@ -119,23 +69,13 @@ def TyEnvSem.empty (de : DEnv := []) : TyEnvSem :=
 def TyEnvSem.sorts (δ : TyEnvSem) : SortEnv :=
   { bv := δ.bv.map SemTy.sort, fv := fun a => (δ.fv a).sort, meas := δ.denv.measEval }
 
+@[simp] def TyEnvSem.push (δ : TyEnvSem) (R : SemTy) : TyEnvSem := { δ with bv := R :: δ.bv }
+
 /-- The base a refined type's values have under `δ` (`int`, arbitrarily, for
     other types). -/
 def Ty.semSort (δ : TyEnvSem) : Ty → BSort
   | .refine b _ => b.resolve δ.sorts
   | _           => .int
-
-/-- Well-kindedness: every free type variable is interpreted by a semantic type
-    fitting its kind (the kind is carried on the name). -/
-def TyEnvSem.WK (δ : TyEnvSem) : Prop := ∀ a : TVar, (δ.fv a).Fits a.2
-
-theorem TyEnvSem.empty_WK (de : DEnv := []) : (TyEnvSem.empty de).WK := by
-  intro a
-  rcases a with ⟨n, _ | _⟩
-  · exact SemTy.ints_fits _
-  · trivial
-
-@[simp] def TyEnvSem.push (δ : TyEnvSem) (R : SemTy) : TyEnvSem := { δ with bv := R :: δ.bv }
 
 /-- Denotation of a base sort at step index `k`. -/
 def BaseDen (δ : TyEnvSem) (k : Nat) : Base → Val → Prop
@@ -166,6 +106,7 @@ def BaseDen (δ : TyEnvSem) (k : Nat) : Base → Val → Prop
   under the empty environment. Unfolding one step per match is what makes
   recursive datatypes well-founded: the definition recurses on `(k, t.skel)`
   lexicographically. -/
+
 def TyDenote : KEnv → TyEnvSem → Nat → Ty → REnv → Val → Prop
   | κ, δ, k, .refine b r, γ, v =>
       BaseDen δ k b v ∧ Refinement.interp κ r ((γ.withSorts δ.sorts).push v)
@@ -195,41 +136,5 @@ decreasing_by
     | (apply Prod.Lex.right' <;> omega)
     | (apply Prod.Lex.right; omega)
     | (apply Prod.Lex.left; have := j'.isLt; omega)
-
-/-- Expression relation: with exactly `k` fuel, `e` does not get stuck, and any
-    value it returns with `m` fuel left is good at index `m`. -/
-def ExpDenote (κ : KEnv) (δ : TyEnvSem) (k : Nat) (t : Ty) (γ : REnv) (e : Exp) : Prop :=
-  ∃ o, Eval k e o ∧ ∀ v m, o = .val v m → TyDenote κ δ m t γ v
-
-/-- Downward closure of base denotations. -/
-theorem BaseDen.mono {δ : TyEnvSem} {j k : Nat} {b : Base} {v : Val}
-    (hjk : j ≤ k) (h : BaseDen δ k b v) : BaseDen δ j b v := by
-  cases b with
-  | int | bool => exact h
-  | tbvar i => exact SemTy.mono _ hjk h
-  | tfvar a => exact SemTy.mono _ hjk h
-
-/-- Downward closure: a value good for `k` steps is good for fewer. -/
-theorem TyDenote.mono {κ : KEnv} {δ : TyEnvSem} {j k : Nat} {t : Ty} {γ : REnv} {v : Val}
-    (hjk : j ≤ k) (h : TyDenote κ δ k t γ v) : TyDenote κ δ j t γ v := by
-  induction t generalizing δ γ v with
-  | refine b r =>
-    simp only [TyDenote] at h ⊢
-    exact ⟨BaseDen.mono hjk h.1, h.2⟩
-  | arrow s t =>
-    simp only [TyDenote] at h ⊢
-    obtain ⟨hf, hlc, hcl, her, hLR⟩ := h
-    exact ⟨hf, hlc, hcl, her, fun i hi => hLR i (by omega)⟩
-  | «forall» kd t ih =>
-    simp only [TyDenote] at h ⊢
-    exact fun R hR => ih (h R hR)
-  | prod s t ihs iht =>
-    simp only [TyDenote] at h ⊢
-    obtain ⟨v₁, v₂, rfl, h₁, h₂⟩ := h
-    exact ⟨v₁, v₂, rfl, ihs h₁, iht h₂⟩
-  | data C n args r =>
-    simp only [TyDenote] at h ⊢
-    obtain ⟨hlc, hcl, her, hr, j, w, P, hv, hP, hpay⟩ := h
-    exact ⟨hlc, hcl, her, hr, j, w, P, hv, hP, fun i hi => hpay i (by omega)⟩
 
 end STLC

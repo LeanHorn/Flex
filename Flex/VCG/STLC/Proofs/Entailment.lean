@@ -1,80 +1,46 @@
-import Flex.VCG.STLC.Syntax
-import Flex.VCG.STLC.Substitution
+import Flex.VCG.STLC.Checker.Entailment
+import Flex.VCG.STLC.Proofs.Substitution
 
 open STLC
 
-/-! ## Entailment
-
-  Refinements / formulas / models are all parameterized by a κ-assignment
-  `κ : KEnv` (the interpretation of uninterpreted predicate symbols). The
-  user typically writes `∃ κ : KEnv, Entail κ ...` and lets the solver pick.
-
-  `Entail κ Γ c` (with `c : REnv → Prop`) is the entailment used by
-  VCGen-produced `Constraint`s. Refinement subtyping is expressed semantically
-  (see `Subtyp.refine` in `Typing.lean`), so no `Formula`-form entailment is
-  needed now that κ lives at the `Refinement` level.
--/
-
-/-- The refined hypothesis a binding of type `t` contributes to a model, if
-    any: `x : {ν:b | r}` contributes `r` at sort `b`. Function and polymorphic
-    types contribute nothing, and neither do ⋆-kinded type variables (they are
-    refined only with `true`, and may hold closures, which have no base sort)
-    or unopened (`tbvar`) type variables. -/
-def STLC.Ty.hyp? : Ty → Option (Base × Refinement)
-  | .refine (.tfvar (_, .star)) _ => none
-  -- an unopened type variable never occurs in a well-formed context
-  | .refine (.tbvar _) _          => none
-  | .refine b r                   => some (b, r)
-  | .arrow _ _                    => none
-  | .forall _ _                   => none
-  | .prod _ _                     => none
-  | .data _ _ _ _                 => none
+/-! # Lemmas about hypotheses and entailment -/
 
 @[simp] theorem Ty.hyp?_int (r : Refinement) : (Ty.refine .int r).hyp? = some (.int, r) := rfl
+
 @[simp] theorem Ty.hyp?_bool (r : Refinement) : (Ty.refine .bool r).hyp? = some (.bool, r) := rfl
+
 @[simp] theorem Ty.hyp?_tfvarB (a : String) (r : Refinement) :
     (Ty.refine (.tfvar (a, .B)) r).hyp? = some (.tfvar (a, .B), r) := rfl
+
 @[simp] theorem Ty.hyp?_tfvarStar (a : String) (r : Refinement) :
     (Ty.refine (.tfvar (a, .star)) r).hyp? = none := rfl
+
 @[simp] theorem Ty.hyp?_tbvar (j : Nat) (r : Refinement) :
     (Ty.refine (.tbvar j) r).hyp? = none := rfl
+
 @[simp] theorem Ty.hyp?_arrow (s t : Ty) : (Ty.arrow s t).hyp? = none := rfl
+
 @[simp] theorem Ty.hyp?_forall (k : Kind) (t : Ty) : (Ty.forall k t).hyp? = none := rfl
+
 @[simp] theorem Ty.hyp?_prod (s t : Ty) : (Ty.prod s t).hyp? = none := rfl
+
 @[simp] theorem Ty.hyp?_data (C : String) (n : Nat) (args : Fin n → Ty) (r : Refinement) :
     (Ty.data C n args r).hyp? = none := rfl
 
-/-- The hypothesis a datatype binding contributes: its refinement, which reads
-    the bound value only through measures (no sort, so no `HasBase`). -/
-def STLC.Ty.dhyp? : Ty → Option Refinement
-  | .data _ _ _ r => some r
-  | _             => none
-
 @[simp] theorem Ty.dhyp?_data (C : String) (n : Nat) (args : Fin n → Ty) (r : Refinement) :
     (Ty.data C n args r).dhyp? = some r := rfl
+
 @[simp] theorem Ty.dhyp?_refine (b : Base) (r : Refinement) : (Ty.refine b r).dhyp? = none := rfl
+
 @[simp] theorem Ty.dhyp?_arrow (s t : Ty) : (Ty.arrow s t).dhyp? = none := rfl
+
 @[simp] theorem Ty.dhyp?_forall (k : Kind) (t : Ty) : (Ty.forall k t).dhyp? = none := rfl
+
 @[simp] theorem Ty.dhyp?_prod (s t : Ty) : (Ty.prod s t).dhyp? = none := rfl
 
 /-- A binding never has both kinds of hypothesis. -/
 theorem Ty.hyp?_of_dhyp? {t : Ty} {r : Refinement} (h : t.dhyp? = some r) : t.hyp? = none := by
   cases t <;> simp_all [Ty.dhyp?]
-
-/-- A model for Γ under κ-assignment: every binding with a refined hypothesis
-    stores a value of the binding's sort (`HasBase`) satisfying it. The
-    `HasBase` conjunct is what lets `Entail.ext` round-trip a refined slot
-    through `b.interp`. -/
-def ModelsEnv (κ : KEnv) : REnv → TEnv → Prop
-  | _, []           => True
-  | γ, (x, t) :: Γ  =>
-      (match t.hyp? with
-       | some (b, r) => REnv.HasBase γ x b ∧ Refinement.interp κ r (γ.push (γ.lookup x))
-       | none        =>
-         match t.dhyp? with
-         | some r => Refinement.interp κ r (γ.push (γ.lookup x))
-         | none   => True)
-      ∧ ModelsEnv κ γ Γ
 
 @[simp] theorem ModelsEnv.nil (κ : KEnv) (γ : REnv) : ModelsEnv κ γ [] := trivial
 
@@ -100,12 +66,6 @@ theorem ModelsEnv.cons_data {κ : KEnv} {γ : REnv} {x : EVar} {t : Ty} {Γ : TE
 /-- A model of an extended context is a model of the context. -/
 theorem ModelsEnv.tail {κ : KEnv} {γ : REnv} {x : EVar} {t : Ty} {Γ : TEnv}
     (h : ModelsEnv κ γ ((x, t) :: Γ)) : ModelsEnv κ γ Γ := h.2
-
-/-- `κ; Γ ⊢ c`: `c` (as a Lean predicate over `REnv`) holds in every model of
-    Γ under κ. VCGen-produced constraints use this. -/
-@[simp]
-def Entail (κ : KEnv) (Γ : TEnv) (c : REnv → Prop) : Prop :=
-  ∀ γ, ModelsEnv κ γ Γ → c γ
 
 /-- Under `HasBase`, the raw stored `Val` *is* the injected base-`b` read:
     `γ.lookup x = Val.inj b (get b γ x)`. Bridges `ModelsEnv`'s `push (γ.lookup x)`

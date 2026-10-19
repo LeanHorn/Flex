@@ -1,11 +1,10 @@
-import Flex.VCG.STLC.VCGen
-import Flex.VCG.STLC.Declarative
+import Flex.VCG.STLC.Tactics.Setup
+import Flex.VCG.STLC.Proofs.Soundness
+import Flex.VCG.STLC.Spec.Theorems
 import Flex.Tactic
-import Flex.VCG.STLC.Soundness
-import Flex.VCG.STLC.MakeHornUnderK
-import Flex.VCG.STLC.Safety
 
 open STLC
+
 
 /-! # Examples — full port of pre-refactor suite, LN + deep Formula + κ
 
@@ -55,6 +54,7 @@ abbrev ty_xk (k : STLC.KVar) : Ty := .arrow TT (IntR k)
 /-! ## Example 1: `5 ⇐ Pos` -/
 
 def ex1Exp : Exp := .iconst 5
+
 def ex1Ty  : Ty  := Pos
 
 example (κ : KEnv) : topVC κ [] ex1Exp ex1Ty := by
@@ -67,6 +67,7 @@ example (κ : KEnv) : topVC κ [] ex1Exp ex1Ty := by
 /-! ## Example 2: identity `λx. x ⇐ Pos → Pos` -/
 
 def ex2Exp : Exp := exId
+
 def ex2Ty  : Ty  := .arrow Pos Pos
 
 set_option maxHeartbeats 800000 in
@@ -81,6 +82,7 @@ example (κ : KEnv) : topVC κ [] ex2Exp ex2Ty := by
 /-! ## Example 3: `let z = 5 in z ⇐ Pos` -/
 
 def ex3Exp : Exp := .letin (.iconst 5) (.bvar 0)
+
 def ex3Ty  : Ty  := Pos
 
 example (κ : KEnv) : topVC κ [] ex3Exp ex3Ty := by
@@ -95,17 +97,6 @@ example (κ : KEnv) : topVC κ [] ex3Exp ex3Ty := by
   Original used `make_horn_under_k [List.lookup]; solve_fixpoint`.
   Here the κ surfaces from `Refinement.interp`'s `.kapp` case (post-stratification)
   and is discharged via the now fully-proven `check_sound` + `solve_fixpoint`. -/
-
-attribute [simp] check synth sub EVar.fresh implyBindCstr prim self Refinement.interp Formula.interp TEnv.dom
-attribute [simp] Cstr.interp Cstr.triv Refinement.openBVar Formula.openBVar Term.openBVar REnv.update REnv.write
-attribute [simp] Term.interp REnv.get Exp.openVar Ty.openVar Exp.fv Refinement.fv Formula.fv Term.fv Ty.fv
-attribute [simp] Refinement.openBVar Formula.openBVar Term.openBVar String.length EVar.maxLen
-attribute [simp] List.lookup TEnv.tyFv
-attribute [simp] DataDecl.ctors Ty.tuple DEnv.ctorRefine DEnv.nFields DEnv.fields? Exp.tupleVarsN
-  DEnv.ctorFacts DEnv.ctorMeasures DataDecl.ctorMeasures DEnv.altTy Exp.var? Ty.strengthenUnit
-  DEnv.caseFacts Formula.conjAll MBody.toTerm DEnv.measEqs DEnv.measNames
-
-macro "generate" : tactic => `(tactic| (vc_generate ; all_goals vc_reify))
 
 @[qualif]
 def Ge1 (i : Int) : Prop := 1 ≤ i
@@ -219,6 +210,7 @@ def exAddExp : Exp :=
   .letin (.iconst 3)
     (.letin (.iconst 4)
       (.add (.bvar 1) (.bvar 0)))
+
 def exAddTy : Ty := IntN 7
 
 example (κ : KEnv) : topVC κ [] exAddExp exAddTy := by
@@ -356,6 +348,7 @@ example (κ : KEnv) :
   without getting stuck is to time out — at *every* fuel budget. -/
 
 def loopTy : Ty := .arrow TT (.refine .int (.fmla .ff))
+
 def loop : Exp := .fix (.app (.bvar 1) (.bvar 0))
 
 example (κ : KEnv) : topVC κ [] loop loopTy := by
@@ -403,6 +396,7 @@ example (n : Nat) : ¬ ∃ v m, Run n loopMain (.val v m) := by
   the false client claim `16 ≤ sum 5` is rejected.) -/
 
 @[qualif] def QGe0 (a : Int) : Prop := 0 ≤ a
+
 @[qualif] def QLe (a b : Int) : Prop := a ≤ b
 
 /-- `sum : n:Int → {ν | k(n, ν)}`: output refinement left for the solver. -/
@@ -435,7 +429,9 @@ attribute [local simp] Exp.ftv Ty.ftv Refinement.ftv Formula.ftv Term.ftv Base.f
 
 /-- `α{r}` for the innermost bound type variable. -/
 abbrev TV (r : Refinement) : Ty := .refine (.tbvar 0) r
+
 abbrev ttR : Refinement := .fmla .tt
+
 abbrev BoolT : Ty := .refine .bool ttR
 
 /-! ### `id : ∀α:B. x:α → α{ν = x}` — refinement strengthening at instantiation -/
@@ -443,6 +439,7 @@ abbrev BoolT : Ty := .refine .bool ttR
 abbrev idTy : Ty :=
   .forall .B (.arrow (TV ttR)
     (TV (.fmla (.eq (.tbvar 0) (.bvar (.tbvar 0) 0) (.bvar (.tbvar 0) 1)))))
+
 abbrev idPoly : Exp := .tabs .B (.lam (.bvar 0))
 
 theorem poly_id (κ : KEnv) : topVC κ [] idPoly idTy := by
@@ -465,6 +462,7 @@ theorem poly_id_client : ∃ κ : KEnv, Check [] κ []
   `0 < r + 1`. -/
 
 abbrev chooseTy : Ty := .forall .B (.arrow BoolT (.arrow (TV ttR) (.arrow (TV ttR) (TV ttR))))
+
 abbrev choosePoly : Exp := .tabs .B (.lam (.lam (.lam (.ite (.bvar 2) (.bvar 1) (.bvar 0)))))
 
 theorem poly_choose (κ : KEnv) : topVC κ [] choosePoly chooseTy := by
@@ -488,6 +486,7 @@ theorem poly_choose_client : ∃ κ : KEnv, Check [] κ []
 /-! ### Impredicative instantiation: `idF[∀β:⋆. β → β] idF` -/
 
 abbrev idFTy : Ty := .forall .star (.arrow (TV ttR) (TV ttR))
+
 abbrev idF : Exp := .tabs .star (.lam (.bvar 0))
 
 theorem poly_impredicative (κ : KEnv) : topVC κ []
@@ -527,6 +526,7 @@ theorem poly_iter (κ : KEnv) : topVC κ [] iterPoly iterTy := by
 /-- `inc : x:Int → {ν = x + 1}` -/
 abbrev incTy : Ty :=
   .arrow TT (.refine .int (.fmla (.eq .int (.bvar .int 0) (.add (.bvar .int 1) (.const .int 1)))))
+
 abbrev incE : Exp := .lam (.letin (.iconst 1) (.add (.bvar 1) (.bvar 0)))
 
 /-- `let inc = …; let three = 3; let zero = 0; iter[int{k}] inc three zero ⇐ {0 ≤ ν}`. -/
@@ -565,6 +565,7 @@ theorem poly_tapp_var (κ : KEnv) : topVC κ []
 attribute [local simp] TEnv.genVars Ty.closeTv BSubst.closeAt List.eraseDups_cons
 
 abbrev NatTy : Ty := .refine .int (.fmla (.leqI (.const .int 0) (.bvar .int 0)))
+
 abbrev nestTy : Ty := .forall .star (.arrow (TV ttR) (.arrow TT NatTy))
 
 /-- `Λα. fix f. λx. λn. let z = 0; let c = n ≤ z;

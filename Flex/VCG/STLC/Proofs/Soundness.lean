@@ -1,5 +1,7 @@
-import Flex.VCG.STLC.VCGen
-import Flex.VCG.STLC.Declarative
+import Flex.VCG.STLC.Checker.VCGen
+import Flex.VCG.STLC.Checker.Declarative
+import Flex.VCG.STLC.Proofs.Entailment
+import Flex.VCG.STLC.Proofs.Declarative
 
 open STLC
 
@@ -11,6 +13,25 @@ open STLC
 -/
 
 namespace STLC
+
+theorem Cstr.conjAll_some {α : Type} {f : α → Option Cstr} :
+    ∀ {l : List α} {c : Cstr}, Cstr.conjAll f l = some c →
+      ∀ a ∈ l, ∃ ca, f a = some ca ∧ ∀ κ γ, c.interp κ γ → ca.interp κ γ
+  | [], _, _, a, ha => by simp at ha
+  | b :: bs, c, h, a, ha => by
+    simp only [Cstr.conjAll] at h
+    cases hb : f b with
+    | none => simp [hb] at h
+    | some cb =>
+      cases hbs : Cstr.conjAll f bs with
+      | none => simp [hb, hbs] at h
+      | some cs =>
+        simp only [hb, hbs, Option.some.injEq] at h
+        subst h
+        rcases List.mem_cons.mp ha with rfl | ha
+        · exact ⟨cb, hb, fun κ γ hc => hc.1⟩
+        · obtain ⟨ca, hfa, himp⟩ := Cstr.conjAll_some hbs a ha
+          exact ⟨ca, hfa, fun κ γ hc => himp κ γ hc.2⟩
 
 /-- A binding type with a refined hypothesis is that refinement type. -/
 theorem Ty.hyp?_eq_some {t : Ty} {b : Base} {r : Refinement}

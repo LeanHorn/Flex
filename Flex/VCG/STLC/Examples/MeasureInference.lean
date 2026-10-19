@@ -1,4 +1,4 @@
-import Flex.VCG.STLC.MeasureExamples
+import Flex.VCG.STLC.Examples.Measure
 
 open STLC
 

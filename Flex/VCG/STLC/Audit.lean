@@ -1,31 +1,19 @@
-import Flex.VCG.STLC.Safety
-import Flex.VCG.STLC.Examples
-import Flex.VCG.STLC.DataExamples
-import Flex.VCG.STLC.OrdExamples
-import Flex.VCG.STLC.MeasureExamples
-import Flex.VCG.STLC.MeasureInference
-import Flex.VCG.STLC.FlexExamples
+import Flex.VCG.STLC.Spec.Theorems
+import Flex.VCG.STLC.Examples.Basic
+import Flex.VCG.STLC.Examples.Data
+import Flex.VCG.STLC.Examples.Ord
+import Flex.VCG.STLC.Examples.Measure
+import Flex.VCG.STLC.Examples.MeasureInference
+import Flex.VCG.STLC.Examples.Flex
 
 open STLC
 
 /-! # Axiom audit
 
-  Fails the build if any headline result depends on anything beyond Lean's
-  three standard axioms — in particular `sorryAx` (a `sorry`, anywhere in the
+  Fails the build if a key lemma or example depends on anything beyond Lean's
+  three standard axioms (the headline theorems are checked in `Spec/Theorems`) — in particular `sorryAx` (a `sorry`, anywhere in the
   dependency cone), compiler-trusting axioms from `native_decide`
   (`Lean.ofReduceBool` / `…._native…`), or user-declared `axiom`s. -/
-
-/-- info: 'vcgen_safety' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms vcgen_safety
-
-/-- info: 'vcgen_no_stuck' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms vcgen_no_stuck
-
-/-- info: 'vcgen_partial_correct' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms vcgen_partial_correct
-
-/-- info: 'type_safety' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms type_safety
 
 /-- info: 'hastype_fundamental' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms hastype_fundamental

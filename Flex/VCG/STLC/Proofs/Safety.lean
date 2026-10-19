@@ -1,19 +1,19 @@
-import Flex.VCG.STLC.Semantics
-import Flex.VCG.STLC.Declarative
-import Flex.VCG.STLC.Soundness
-import Flex.VCG.STLC.Model
-import Flex.VCG.STLC.TypeSubst
-import Flex.VCG.STLC.Measures
+import Flex.VCG.STLC.Spec.Denotation
+import Flex.VCG.STLC.Proofs.Soundness
+import Flex.VCG.STLC.Proofs.Model
+import Flex.VCG.STLC.Proofs.TypeSubst
+import Flex.VCG.STLC.Proofs.Measures
 
 open STLC
+
 
 /-! # Refinement Type Safety for STLC (LN + deep refinements + κ + recursion + ∀)
 
   With general recursion (`Exp.fix`) programs may diverge, so safety is stated
   *partially* but *fuel-indexed*, against the semantics `Eval` of
-  `Semantics.lean`: for every fuel budget, a well-typed closed program either
+  `Spec/Semantics.lean`: for every fuel budget, a well-typed closed program either
   times out or returns a value in its type's denotation — and it never gets
-  stuck. The logical relation (`TyDenote`, `Model.lean`) is step-indexed by the
+  stuck. The logical relation (`TyDenote`, `Spec/Denotation.lean`) is step-indexed by the
   remaining fuel and parameterized by an interpretation `δ` of type variables.
 
     (T1) `subtyp_sound`         — Subtyping is semantic inclusion of denotations.
@@ -26,6 +26,7 @@ open STLC
 -/
 
 namespace STLC
+
 
 private theorem mem_TEnv_dom {Γ : TEnv} {x : EVar} {t : Ty} (h : (x, t) ∈ Γ) :
     x ∈ TEnv.dom Γ := by
@@ -45,6 +46,7 @@ theorem REnv.HasBase_congr {γ γ' : REnv} {y : EVar} {b : Base} (h : γ.map y =
   simp [REnv.HasBase, h, hs]
 
 end STLC
+
 
 /-! ## Value invariants -/
 
@@ -387,6 +389,7 @@ theorem TyDenote.toDHyp {κ : KEnv} {δ : TyEnvSem} {k : Nat} {t : Ty} {γ : REn
   `EnvCloses κ δ k Γ γ` says: `γ` assigns each Γ-binding a value in that
   binding's logical relation at index `k`. Duplicate keys are tolerated
   (head-shadowed entries from `ite`'s context). -/
+
 def EnvCloses : KEnv → TyEnvSem → Nat → TEnv → REnv → Prop
   | _, _, _, [],          _ => True
   | κ, δ, k, (x, t) :: Γ, γ => TyDenote κ δ k t γ (γ.map x) ∧ EnvCloses κ δ k Γ γ
@@ -573,7 +576,7 @@ theorem TyDenote.of_extendBy_fresh {κ : KEnv} {δ : TyEnvSem} {k : Nat} {t : Ty
 
   `TyDenote` threads arrow-binder values through the de Bruijn stack (`γ.push
   va`). Relating that to `openVar` uses the premise-free model bridge
-  `Refinement.interp_openBVar` (Substitution.lean). -/
+  `Refinement.interp_openBVar` (`Proofs/Substitution.lean`). -/
 
 /-- Master bridge (push ↔ openVar): interpreting `t` with `va` inserted at de
     Bruijn level `ρ.length` equals interpreting `t.openVar` with `x ↦ va` written
@@ -729,10 +732,13 @@ theorem STLC.RelVar.resolve {vs : List Variance} {ρ ρ' inner : List SemTy} {η
 
 theorem STLC.Pol.comp_ne_neg {p : Pol} {v : Variance} (hp : p ≠ .neg) (hv : v ≠ .contra) :
     p.comp v ≠ .neg := by cases v <;> cases p <;> simp_all [Pol.comp, Pol.flip]
+
 theorem STLC.Pol.comp_ne_pos {p : Pol} {v : Variance} (hp : p ≠ .neg) (hv : v ≠ .co) :
     p.comp v ≠ .pos := by cases v <;> cases p <;> simp_all [Pol.comp, Pol.flip]
+
 theorem STLC.Pol.comp_ne_pos' {p : Pol} {v : Variance} (hp : p ≠ .pos) (hv : v ≠ .contra) :
     p.comp v ≠ .pos := by cases v <;> cases p <;> simp_all [Pol.comp, Pol.flip]
+
 theorem STLC.Pol.comp_ne_neg' {p : Pol} {v : Variance} (hp : p ≠ .pos) (hv : v ≠ .co) :
     p.comp v ≠ .neg := by cases v <;> cases p <;> simp_all [Pol.comp, Pol.flip]
 
@@ -1804,71 +1810,3 @@ theorem hastype_fundamental {de κ Γ e t} (hde : de.wfB = true) (h : Hastype de
               Exp.erase_openExp, Exp.erase_of_typeFree _ (TyDenote.erased hw)] at hev
           exact ⟨o, Eval.case hj hev₀ hev, fun vr m' ho =>
             TyDenote.of_extendBy_fresh _ w hzt (hres vr m' ho)⟩
-
-/-! ## T3 — Closed-term type safety (corollary of T2) -/
-
-namespace STLC
-
-/-- The operational semantics of a program: run its type erasure. (Types never
-    influence evaluation; erasing them first is what makes type abstraction and
-    application, and the opening of type binders during checking, invisible at
-    runtime.) -/
-def Run (n : Nat) (e : Exp) (o : Outcome) : Prop := Eval n e.erase o
-
-end STLC
-
-/-- A well-typed closed program never gets stuck: for every fuel budget `n` it
-    either times out or returns a value, and every returned value (with `m`
-    fuel left) is in its type's denotation at index `m`. -/
-theorem type_safety {de : DEnv} {κ : KEnv} {e : Exp} {t : Ty} (hde : de.wfB = true)
-    (h : Hastype de κ [] e t) :
-    ∀ n, ∃ o, Run n e o ∧
-      ∀ v m, o = .val v m → TyDenote κ (TyEnvSem.empty de) m t REnv.empty v := by
-  intro n
-  have hfv : e.fv = [] :=
-    List.eq_nil_iff_forall_not_mem.mpr fun z hz => by
-      obtain ⟨t', ht'⟩ := h.fv_subset z hz; simp at ht'
-  have hden := hastype_fundamental hde h (TyEnvSem.empty_WK de) rfl (k := n) (γ := REnv.empty)
-    (by simp [EnvCloses])
-  rw [Exp.substEnv_closed REnv.empty e hfv] at hden
-  exact hden
-
-/-! ## T4 — End-to-end VCGen safety
-
-  VCGen soundness composes with the logical-relations fundamental lemma to give
-  end-to-end (fuel-indexed, partial) refinement type safety for `topVC`. -/
-
-theorem vcgen_safety {κ : KEnv} {e : Exp} {t : Ty} {de : DEnv} (hde : de.wfB = true)
-    (hE : Exp.WFBVars e) (ht : Ty.WFBVars t) (h : topVC κ [] e t de) :
-    ∀ n, ∃ o, Run n e o ∧
-      ∀ v m, o = .val v m → TyDenote κ (TyEnvSem.empty de) m t REnv.empty v :=
-  type_safety hde (topVC_decl_sound κ e t hE ht h)
-
-/-- Progress: a program accepted by VCGen never gets stuck. -/
-theorem vcgen_no_stuck {κ : KEnv} {e : Exp} {t : Ty} {de : DEnv} (hde : de.wfB = true)
-    (hE : Exp.WFBVars e) (ht : Ty.WFBVars t) (h : topVC κ [] e t de) :
-    ∀ n, ∃ o, Run n e o := fun n =>
-  let ⟨o, hev, _⟩ := vcgen_safety hde hE ht h n
-  ⟨o, hev⟩
-
-/-- Partial correctness at base type: if a program accepted by VCGen terminates
-    (under any fuel budget), its value has the result sort and satisfies the
-    result refinement. -/
-theorem vcgen_partial_correct {κ : KEnv} {e : Exp} {b : Base} {r : Refinement} {de : DEnv}
-    (hde : de.wfB = true)
-    (hE : Exp.WFBVars e) (ht : Ty.WFBVars (.refine b r)) (h : topVC κ [] e (.refine b r) de)
-    {n m : Nat} {v : Val} (hev : Run n e (.val v m)) :
-    BaseDen (TyEnvSem.empty de) m b v ∧
-      Refinement.interp κ r ({ REnv.empty with sorts := { meas := de.measEval } }.push v) := by
-  obtain ⟨o, hev', hres⟩ := vcgen_safety hde hE ht h n
-  cases Eval.det hev hev'
-  have e : REnv.empty.withSorts (TyEnvSem.empty de).sorts =
-      { REnv.empty with sorts := { meas := de.measEval } } := by
-    apply REnv.ext <;> try rfl
-    simp only [REnv.empty, TyEnvSem.sorts, TyEnvSem.empty]
-    congr 1
-    funext a
-    rcases a with ⟨_, _ | _⟩ <;> rfl
-  have := hres v m rfl
-  simp only [TyDenote, e] at this
-  exact this

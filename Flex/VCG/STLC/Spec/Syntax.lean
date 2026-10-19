@@ -1,21 +1,15 @@
+
+/-! # Syntax
+
+  What the theorems talk about: the refinement logic (`Term`, `Formula`,
+  `Refinement`), types (`Ty`), expressions (`Exp`), runtime values (`Val`), and
+  datatype declarations with their measures (`DataDecl`). Everything is locally
+  nameless: ν, the `Formula` quantifiers, the `Ty.arrow` binders and the
+  expression binders are de Bruijn `BVar`s. Also here: opening an expression
+  with a value (used by evaluation) and type erasure (`Run` evaluates the
+  erasure). -/
+
 namespace STLC
-
-/-! # STLC Syntax (locally nameless + deeply embedded refinements)
-
-  Layout:
-
-  1. **Variables, bases, runtime envs** — `EVar`, `Base`, `REnv`.
-  2. **Deep-embedded refinement language** — `Term`, `Formula`, `Refinement`.
-     Fully LN: ν, the `Formula` quantifiers, and the `Ty.arrow` binders are all
-     de Bruijn `BVar`s.
-  3. **Types (LN)** — `Ty`. `arrow s t` carries no binder name; `t` is a body
-     with `BVar 0` standing for the function argument.
-  4. **Expressions (LN)** — `Exp`. Binding forms (`lam`, `letin`) carry no
-     binder name; the body has `BVar 0` for the innermost binder.
-
-  All substitution / opening / closing / freshness machinery lives in
-  `Substitution.lean`. This file declares data only.
--/
 
 abbrev EVar := String
 
@@ -163,7 +157,7 @@ inductive Formula where
     atom — so κ can never be negated/disjoined/nested. Every VC the generator
     emits then has the shape `(⋀ refinement-hyps) → refinement-head`, i.e. it is
     a Constrained Horn Clause by construction. `Refinement.interp` (in
-    `Substitution.lean`) is the only interpretation that needs the κ-assignment.
+    `Spec/Logic.lean`) is the only interpretation that needs the κ-assignment.
     (The κ name is an `EVar`; see `KVar` below, defined to be `EVar`.) -/
 inductive Refinement where
   | fmla : Formula → Refinement
@@ -172,20 +166,6 @@ inductive Refinement where
       `α{r}[α := b{r'}] = b{r' ∧ r}`. Still Horn — refinements never occur
       under negation, and a conjunctive head splits into one clause per conjunct. -/
   | conj : Refinement → Refinement → Refinement
-
-/-! ## Syntactic constraints (CHC tree)
-
-  A verification condition, produced by VC generation (`VCGen.lean`), as a
-  Constrained Horn Clause tree. -/
-inductive Cstr where
-  | head : Refinement → Cstr             -- goal refinement `r`
-  | imp  : Refinement → Cstr → Cstr      -- hypothesis `r ⇒ c`
-  | all  : EVar → Base → Cstr → Cstr     -- `∀ x:b. c`
-  | conj : Cstr → Cstr → Cstr            -- `c₁ ∧ c₂`
-
-/-- The trivially-true constraint (used for synthesis leaves). -/
-@[simp] def Cstr.triv : Cstr := .head (.fmla .tt)
-@[simp] def Cstr.ff : Cstr := .head (.fmla .ff)
 
 /-! ## κ-assignments
 
@@ -198,47 +178,6 @@ abbrev KVar : Type := EVar
 /-- κ-assignment: maps each `KVar` to a Lean predicate over its (heterogeneous)
     base-typed argument list. -/
 abbrev KEnv : Type := KVar → List (Σ b : Base, b.interp) → Prop
-
-/-! ## KEnv construction helpers
-
-  `KPred n` is the type of n-ary curried Int predicates.
-  `liftKPred n` lifts a `KPred n` into the heterogeneous-list form expected
-  by `KEnv`: it peels Int values off the front of the arg list one at a time.
-  `mkKEnv` builds a `KEnv` from a finite name→predicate list, defaulting to
-  `True` for unmentioned keys. `exists_kenv_curried` is the sufficiency lemma
-  used by `intro_kenv` to replace `∃ κ : KEnv, P κ` with individual curried
-  existentials. -/
-
-/-- `KPred n` = `Int → Int → … → Int → Prop` (n arguments, curried). -/
-@[reducible]
-def KPred : Nat → Type
-  | 0     => Prop
-  | n + 1 => Int → KPred n
-
-/-- Lift a curried `KPred n` to operate on a heterogeneous arg list.
-    Returns `True` on arity or type mismatch. -/
-def liftKPred : (n : Nat) → KPred n → List (Σ b : Base, b.interp) → Prop
-  | 0,     p, []                    => p
-  | 0,     _, _                     => True
-  | _ + 1, _, []                    => True
-  | n + 1, f, (⟨.int,  v⟩ :: rest) => liftKPred n (f v) rest
-  | _ + 1, _, _                     => True
-
-@[simp] theorem liftKPred_zero (p : Prop) :
-    liftKPred 0 p [] = p := rfl
-
-@[simp] theorem liftKPred_succ_int (n : Nat) (f : Int → KPred n) (v : Int)
-    (rest : List (Σ b : Base, b.interp)) :
-    liftKPred (n + 1) f (⟨.int, v⟩ :: rest) = liftKPred n (f v) rest := rfl
-
-
-def mkKEnv (ks : List (KVar × (List (Σ b : Base, b.interp) → Prop))) : KEnv :=
-  fun name => (ks.lookup name).getD (fun _ => True)
-
-theorem exists_kenv_curried {P : KEnv → Prop}
-    (ks : List (KVar × (List (Σ b : Base, b.interp) → Prop)))
-    (h : P (mkKEnv ks)) : ∃ κ : KEnv, P κ :=
-  ⟨mkKEnv ks, h⟩
 
 /-! ## Types — locally nameless -/
 
@@ -288,21 +227,10 @@ inductive Exp where
       payload as BVar 0. -/
   | case   : Exp → (n : Nat) → (Fin n → Exp) → Exp
 
-/-- Typing context: a list of free-name × type pairs. Names are unique by convention. -/
-@[simp]
-abbrev TEnv := List (EVar × Ty)
-
-/-- Get all free names declared in a typing context. -/
-def TEnv.dom : TEnv → List EVar
-  | []          => []
-  | (x, _) :: Γ => x :: TEnv.dom Γ
-
-
 /-! ## Runtime values
 
   Locally nameless closures: `clos body` carries an `Exp` body whose `BVar 0`
-  represents the parameter. Operations on `Val` (`fv`, `lc`, etc.) live in
-  `Substitution.lean` alongside the corresponding `Exp` operations.
+  represents the parameter.
 -/
 
 inductive Val where
@@ -383,170 +311,7 @@ def Exp.openExp (k : Nat) (u : Exp) (e : Exp) : Exp :=
 /-- Open `bvar k` with a value (via `Val.toExp`). Handy for big-step. -/
 def Exp.openVal (k : Nat) (v : Val) : Exp → Exp := Exp.openExp k v.toExp
 
-/-- A sort assignment: the base each type variable stands for (the bound ones
-    by de Bruijn index, the free ones by name) — and the interpretation of the
-    measures (`meas m v`: the value of measure `m` on `v`). Verification
-    conditions hold for *every* assignment, so in them measures are
-    uninterpreted; the semantic model fixes them to the measures' definitions. -/
-structure SortEnv where
-  bv : List BSort := []
-  fv : TVar → BSort := fun _ => .int
-  meas : String → Val → Int := fun _ _ => 0
-
-/-- The base a sort stands for under `σ`. -/
-@[simp, reducible] def Base.resolve (σ : SortEnv) : Base → BSort
-  | .int     => .int
-  | .bool    => .bool
-  | .tbvar j => σ.bv.getD j .int
-  | .tfvar a => σ.fv a
-
-/-- The carrier of sort `b` under `σ`. -/
-@[simp, reducible] def Base.sem (σ : SortEnv) (b : Base) : Type := (b.resolve σ).ty
-
-/-- A literal, read at its sort. -/
-@[simp, reducible] def Base.ofConst (σ : SortEnv) : (b : Base) → b.interp → b.sem σ
-  | .int,     n => n
-  | .bool,    c => c
-  | .tbvar _, e => e.elim
-  | .tfvar _, e => e.elim
-
-/-! ## Runtime environment
-
-  `REnv` bundles two things threaded as a single environment `γ`:
-
-  * `map : EVar → Val` — the total name map for *free* variables. The
-    base-indexed `get`/`update` are thin views over the lossless Val-level
-    `lookup`/`write`: `get` projects the stored `Val` down to `b.interp`
-    (defaulting on a tag mismatch, never hit on a well-typed read), and
-    `update` injects a `b.interp` value back into a `Val`.
-  * `bv : List Val` — the de Bruijn stack for *bound* variables (ν and the
-    refinement-formula quantifier binders), innermost = index 0. `Term.interp`
-    resolves a `BVar k` through `bv[k]` exactly as it resolves an `fvar`
-    through `map`. `push` enters a binder; `getBV` reads one. Outside of
-    refinement interpretation `bv` is empty, and `write`/`update` preserve it.
-
-  Because a single `map` cell can no longer be int- and bool-typed at once,
-  "read at base `b` then write back" only round-trips when the cell actually
-  holds a base-`b` value — captured by `REnv.HasBase`. -/
-@[ext]
-structure REnv where
-  map : EVar → Val
-  bv  : List Val := []
-  /-- The base each type-variable sort stands for. -/
-  sorts : SortEnv := {}
-
-@[simp] def REnv.empty : REnv := { map := fun _ => .iconst 0 }
-
-/-- Reinterpret the type-variable sorts. -/
-@[simp, reducible] def REnv.withSorts (γ : REnv) (σ : SortEnv) : REnv := { γ with sorts := σ }
-
-/-- Project a stored `Val` to a value of base `s`. The mismatch cases
-    (`0`/`false`) are unreachable for well-typed reads. -/
-@[simp, reducible]
-def Val.proj : (s : BSort) → Val → s.ty
-  | .int,  .iconst n => n
-  | .bool, .bconst c => c
-  | .int,  _ => 0
-  | .bool, _ => false
-
-/-- Inject a value of base `s` into `Val`. -/
-@[simp, reducible]
-def Val.inj : (s : BSort) → s.ty → Val
-  | .int,  n => .iconst n
-  | .bool, c => .bconst c
-
-/-- Tag a value with its base, as a κ argument. -/
-@[simp, reducible]
-def Val.tag : (s : BSort) → s.ty → (Σ b : Base, b.interp)
-  | .int,  n => ⟨.int, n⟩
-  | .bool, c => ⟨.bool, c⟩
-
-/-- The base a `Val` carries (`none` for a closure). Mirrors `Ty.optBase`:
-    a value inhabiting a refinement type `{ν:b|…}` has `optBase = some b`. -/
-@[simp] def Val.optBase : Val → Option Base
-  | .iconst _ => some .int
-  | .bconst _ => some .bool
-  | .clos _   => none
-  | .fclos _  => none
-  | .pair _ _ => none
-  | .ctor _ _ _ => none
-
-/-- The runtime comparison: defined on two base values of the same sort (it
-    reads only their runtime tags, so it needs no type information), stuck on
-    anything else. -/
-def Val.leb? : Val → Val → Option Bool
-  | .iconst a, .iconst b => some (decide (a ≤ b))
-  | .bconst a, .bconst b => some (decide (a ≤ b))
-  | _, _ => none
-
-/-- Val-level (lossless) lookup. -/
-@[simp, reducible]
-def REnv.lookup (γ : REnv) (x : EVar) : Val := γ.map x
-
-/-- Val-level (lossless) update of the name map: `write γ x (lookup γ x) = γ`
-    unconditionally. Preserves the de Bruijn stack `bv`. -/
-@[simp, reducible]
-def REnv.write (γ : REnv) (x : EVar) (v : Val) : REnv :=
-  { γ with map := fun y => if x == y then v else γ.map y }
-
-/-- Enter a binder: push value `v` as the new innermost de Bruijn slot (index 0),
-    shifting the existing stack up one. The name map is untouched. -/
-@[simp] def REnv.push (γ : REnv) (v : Val) : REnv := { γ with bv := v :: γ.bv }
-
-/-- Insert value `v` at de Bruijn index `k` (shifting indices `≥ k` up one).
-    `insertBV 0 = push`. Used to bridge `push`-style `TyDenote` with `openVar`:
-    putting a value into the stack at level `k` mirrors opening `BVar k` to a
-    fresh name bound to that value. -/
-def REnv.insertBV (k : Nat) (v : Val) (γ : REnv) : REnv := { γ with bv := γ.bv.insertIdx k v }
-
-@[simp] theorem REnv.insertBV_zero (v : Val) (γ : REnv) : γ.insertBV 0 v = γ.push v := rfl
-
-@[simp] theorem REnv.insertBV_map (k : Nat) (v : Val) (γ : REnv) :
-    (γ.insertBV k v).map = γ.map := rfl
-
-@[simp] theorem REnv.insertBV_bv (k : Nat) (v : Val) (γ : REnv) :
-    (γ.insertBV k v).bv = γ.bv.insertIdx k v := rfl
-
-@[simp] theorem REnv.insertBV_sorts (k : Nat) (v : Val) (γ : REnv) :
-    (γ.insertBV k v).sorts = γ.sorts := rfl
-
-/-- Pushing then inserting deeper = inserting then pushing: `push` is `insertBV 0`,
-    and inserting at `k+1` after a `push` is the same as inserting at `k` first. -/
-theorem REnv.push_insertBV_comm (γ : REnv) (w v : Val) (k : Nat) :
-    (γ.insertBV k v).push w = (γ.push w).insertBV (k+1) v := rfl
-
-/-- Read the `b`-typed value of the de Bruijn `BVar k` from the stack. Out of
-    range (never on a well-formed read) defaults per base via `Val.proj`. -/
-@[simp, reducible]
-def REnv.getBV (b : Base) (γ : REnv) (k : Nat) : b.sem γ.sorts :=
-  Val.proj (b.resolve γ.sorts) (γ.bv[k]?.getD (.iconst 0))
-
-/-- Look up the `b`-typed value of variable `x` in `γ` (base-indexed view). -/
-@[simp, reducible]
-def REnv.get (b : Base) (γ : REnv) (x : EVar) : b.sem γ.sorts :=
-  (γ.lookup x).proj (b.resolve γ.sorts)
-
-/-- Update the `b`-typed slot for `x` in `γ` to `v` (base-indexed view). -/
-@[simp, reducible]
-def REnv.update (b : Base) (γ : REnv) (x : EVar) (v : b.sem γ.sorts) : REnv :=
-  γ.write x (Val.inj (b.resolve γ.sorts) v)
-
-/-- Derived accessors mirroring the old two-field layout. -/
-@[simp, reducible] def REnv.bools (γ : REnv) (x : EVar) : Bool := REnv.get .bool γ x
-
-/-- `v` is a value of base `s`. -/
-@[simp] def Val.HasSort : BSort → Val → Prop
-  | .int,  v => ∃ n, v = .iconst n
-  | .bool, v => ∃ c, v = .bconst c
-
-/-- The cell for `x` stores a value of the base sort `b` stands for. Holds for
-    every slot bound at sort `b` in a well-typed model; needed to know
-    `update b _ x (get b _ x)` round-trips. -/
-@[simp] def REnv.HasBase (γ : REnv) (x : EVar) (b : Base) : Prop :=
-  Val.HasSort (b.resolve γ.sorts) (γ.map x)
-
-
-/-! ## 5b. Val operations (depend on Exp.* declared above) -/
+/-! ## Free variables, local closure and type-freeness of values -/
 
 def Exp.fv : Exp → List EVar
   | .bvar _        => []
@@ -594,17 +359,6 @@ def Exp.TypeFree : Exp → Prop
 /-- A value is erased when its syntax carries no types. -/
 def Val.Erased (v : Val) : Prop := v.toExp.TypeFree
 
-/-- Structural skeleton of `Ty`: counts arrow nesting, ignoring refinement
-    bodies. Preserved by `openVar` / `openVarAt`. Used as a termination
-    measure for the algorithmic subtyping function in `VCGen.lean`. -/
-@[simp]
-def Ty.skel : Ty → Nat
-  | .refine _ _ => 0
-  | .arrow s t  => 1 + s.skel + t.skel
-  | .forall _ t => 1 + t.skel
-  | .prod s t   => 1 + s.skel + t.skel
-  | .data _ _ args _ => 1 + (List.ofFn fun i => (args i).skel).sum
-
 /-- `Ty.data` from a list of type arguments. -/
 @[simp, reducible] def Ty.dataL (C : String) (τs : List Ty) (r : Refinement := .fmla .tt) : Ty :=
   .data C τs.length (fun i => τs[i]) r
@@ -643,35 +397,6 @@ inductive MBody where
 /-- `max a b`, as a conditional. -/
 @[reducible] def MBody.max (a b : MBody) : MBody := .iteLe a b b a
 
-/-- A measure body as a refinement term, given terms for the (`Int` and
-    `Bool`) fields and for the fields' measures. -/
-def MBody.toTerm (fld : Nat → Term .int) (fldB : Nat → Term .bool) (msr : String → Nat → Term .int) :
-    MBody → Term .int
-  | .const n  => .const .int n
-  | .field i  => fld i
-  | .meas m i => msr m i
-  | .add a b  => .add (a.toTerm fld fldB msr) (b.toTerm fld fldB msr)
-  | .iteLe a b t e =>
-      .ite .int (.leqI (a.toTerm fld fldB msr) (b.toTerm fld fldB msr))
-        (t.toTerm fld fldB msr) (e.toTerm fld fldB msr)
-  | .iteB i t e => .ite .int (fldB i) (t.toTerm fld fldB msr) (e.toTerm fld fldB msr)
-
-/-- Every field a body reads is one of the `n` fields. -/
-def MBody.idxOK (n : Nat) : MBody → Bool
-  | .const _  => true
-  | .field i  => decide (i < n)
-  | .meas _ i => decide (i < n)
-  | .add a b  => a.idxOK n && b.idxOK n
-  | .iteLe a b t e => a.idxOK n && b.idxOK n && t.idxOK n && e.idxOK n
-  | .iteB i t e => decide (i < n) && t.idxOK n && e.idxOK n
-
-/-- Conjoin `r` into the refinement of the terminal unit of a payload type with
-    `n` fields. -/
-def Ty.strengthenUnit : Nat → Ty → Refinement → Ty
-  | 0,     .refine b r', r => .refine b (.conj r' r)
-  | n + 1, .prod s t,    r => .prod s (Ty.strengthenUnit n t r)
-  | _,     t,            _ => t
-
 /-- The variance of a datatype parameter: how subtyping on the datatype
     follows subtyping on the argument. -/
 inductive Variance where
@@ -694,10 +419,6 @@ structure DataDecl where
 def DataDecl.ctors (d : DataDecl) : List (String × Ty) :=
   d.ctorFields.map fun c => (c.1, Ty.tuple c.2)
 
-/-- The measures of constructor `j`, with their bodies for it. -/
-def DataDecl.ctorMeasures (d : DataDecl) (j : Nat) : List (String × MBody) :=
-  d.measures.filterMap fun mb => (mb.2[j]?).map fun b => (mb.1, b)
-
 /-- The body of measure `m` for constructor `j`. -/
 def DataDecl.measBody? (d : DataDecl) (m : String) (j : Nat) : Option MBody :=
   (d.measures.lookup m).bind fun bs => bs[j]?
@@ -707,10 +428,6 @@ abbrev DEnv := List (String × DataDecl)
 /-- The declaration of datatype `C`. -/
 def DEnv.decl? (de : DEnv) (C : String) : Option DataDecl := de.lookup C
 
-/-- The declared variance of parameter `i` of `C` (invariant by default). -/
-def DEnv.var (de : DEnv) (C : String) (i : Nat) : Variance :=
-  ((de.decl? C).bind fun d => d.variances[i]?).getD .inv
-
 /-- The payload type of constructor `j` of `C`. -/
 def DEnv.payload? (de : DEnv) (C : String) (j : Nat) : Option Ty :=
   (de.decl? C).bind fun d => (d.ctors[j]?).map Prod.snd
@@ -719,135 +436,50 @@ def DEnv.payload? (de : DEnv) (C : String) (j : Nat) : Option Ty :=
 def DEnv.fields? (de : DEnv) (C : String) (j : Nat) : Option (List Ty) :=
   (de.decl? C).bind fun d => (d.ctorFields[j]?).map Prod.snd
 
-/-- The measures of constructor `j` of `C`, with their bodies for it. -/
-def DEnv.ctorMeasures (de : DEnv) (C : String) (j : Nat) : List (String × MBody) :=
-  ((de.decl? C).map fun d => d.ctorMeasures j).getD []
-
-/-- A conjunction of formulas. -/
-def Formula.conjAll : List Formula → Formula
-  | []      => .tt
-  | φ :: φs => .and φ (Formula.conjAll φs)
-
 /-- The number of fields of constructor `j` of `C`. -/
 def DEnv.nFields (de : DEnv) (C : String) (j : Nat) : Nat := ((de.fields? C j).map List.length).getD 0
 
-/-- What constructing `C j` from the fields `as` reveals about the result ν
-    (`BVar 0`): each measure equals its body for this constructor. -/
-def DEnv.ctorFacts (de : DEnv) (C : String) (j : Nat) (as : List EVar) : Refinement :=
-  .fmla (Formula.conjAll ((de.ctorMeasures C j).map fun mb =>
-    .eq .int (.mbvar mb.1 0)
-      (mb.2.toTerm (fun i => if i < as.length then .fvar .int (as.getD i "") else .const .int 0)
-        (fun i => if i < as.length then .fvar .bool (as.getD i "") else .const .bool false)
-        (fun m' i => if i < as.length then .mfvar m' (as.getD i "") else .const .int 0))))
+/-! ### Type erasure
 
-/-- What matching `x` against `C j` (with `n` fields) reveals: each measure of
-    `x` equals its body for this constructor. Read at the payload's terminal
-    unit, where field `i` is `BVar (n - i)`. -/
-def DEnv.caseFacts (de : DEnv) (C : String) (j n : Nat) (x : EVar) : Refinement :=
-  .fmla (Formula.conjAll ((de.ctorMeasures C j).map fun mb =>
-    .eq .int (.mfvar mb.1 x)
-      (mb.2.toTerm (fun i => .ibvar (n - i)) (fun i => .bbvar (n - i))
-        (fun m' i => .mbvar m' (n - i)))))
+  Types never influence evaluation, so programs are run after erasing them
+  (`Run`, `Spec/Semantics.lean`). Erasure is what makes opening a type binder
+  (`Exp.openTv`) invisible at runtime. -/
 
-/-- The names of the measures of `C`. -/
-def DEnv.measNames (de : DEnv) (C : String) : List String :=
-  ((de.decl? C).map fun d => d.measures.map Prod.fst).getD []
+/-- Erase all type information: annotations, type abstractions and type
+    applications. -/
+def Exp.erase : Exp → Exp
+  | .bvar j        => .bvar j
+  | .fvar y        => .fvar y
+  | .iconst n      => .iconst n
+  | .bconst b      => .bconst b
+  | .lam body      => .lam body.erase
+  | .letin e₁ e₂   => .letin e₁.erase e₂.erase
+  | .app e₁ e₂     => .app e₁.erase e₂.erase
+  | .ann e _       => e.erase
+  | .and e₁ e₂     => .and e₁.erase e₂.erase
+  | .not e         => .not e.erase
+  | .leq e₁ e₂     => .leq e₁.erase e₂.erase
+  | .ite e₀ e₁ e₂  => .ite e₀.erase e₁.erase e₂.erase
+  | .add e₁ e₂     => .add e₁.erase e₂.erase
+  | .unreach       => .unreach
+  | .fix body      => .fix body.erase
+  | .tabs _ e      => e.erase
+  | .tapp e _      => e.erase
+  | .pair e₁ e₂    => .pair e₁.erase e₂.erase
+  | .split e₁ e₂   => .split e₁.erase e₂.erase
+  | .ctor C j _ e  => .ctor C j [] e.erase
+  | .case e n alts => .case e.erase n (fun j => (alts j).erase)
 
-/-- Selfification at a datatype (which has no equality in the logic): every
-    measure of ν equals that measure of `x`. -/
-def DEnv.measEqs (de : DEnv) (C : String) (x : EVar) : Refinement :=
-  .fmla (Formula.conjAll ((de.measNames C).map fun m => .eq .int (.mbvar m 0) (.mfvar m x)))
-
-/-- The scrutinee of a `case`, when it is a variable. -/
-def Exp.var? : Exp → Option EVar
-  | .fvar x => some x
-  | _       => none
-
-/-- The fields of a payload of a constructor with `n` fields, written out as
-    variables: `(x₀, (x₁, … (xₙ₋₁, u)))`. -/
-def Exp.tupleVarsN : Nat → Exp → Option (List EVar)
-  | 0,     _                 => some []
-  | n + 1, .pair (.fvar x) e => (Exp.tupleVarsN n e).map (x :: ·)
-  | _,     _                 => none
-
-/-- The refinement a constructor application synthesizes: the measure facts,
-    when its fields are given as variables. -/
-def DEnv.ctorRefine (de : DEnv) (C : String) (j : Nat) (e : Exp) : Refinement :=
-  match e.tupleVarsN (de.nFields C j) with
-  | some as => de.ctorFacts C j as
-  | none    => .fmla .tt
-
-/-- The type an alternative of a match on `C` binds its payload at (`tz`, the
-    payload at the scrutinee's type arguments): when the scrutinee is a
-    variable `x`, the terminal unit records the measure facts about `x`. -/
-def DEnv.altTy (de : DEnv) (C : String) (j : Nat) (x? : Option EVar) (tz : Ty) : Ty :=
-  match x? with
-  | some x => tz.strengthenUnit (de.nFields C j) (de.caseFacts C j (de.nFields C j) x)
-  | none   => tz
-
-/-! ## Measure semantics
-
-  A measure is the structurally recursive function its bodies define, on
-  runtime values: on `C j w` it is the body for `j`, read on the fields of the
-  payload `w`; on anything else it is `0`. -/
-
-/-- The fields of a payload of a constructor with `n` fields. -/
-def Val.fieldsN : Nat → Val → List Val
-  | n + 1, .pair a r => a :: Val.fieldsN n r
-  | _,     _         => []
-
-theorem Val.sizeOf_le_of_mem_fieldsN : ∀ {n : Nat} {w f : Val}, f ∈ w.fieldsN n → sizeOf f ≤ sizeOf w
-  | n + 1, .pair a r, f, h => by
-    simp only [Val.fieldsN, List.mem_cons] at h
-    rcases h with rfl | h
-    · simp; omega
-    · have := Val.sizeOf_le_of_mem_fieldsN h
-      simp; omega
-  | 0, _, _, h => by simp [Val.fieldsN] at h
-  | _ + 1, .iconst _, _, h | _ + 1, .bconst _, _, h | _ + 1, .clos _, _, h
-  | _ + 1, .fclos _, _, h | _ + 1, .ctor _ _ _, _, h => by simp [Val.fieldsN] at h
-
-/-- Evaluate a measure body, given the (integer and boolean) fields and their
-    measures. -/
-def MBody.eval (fv : Nat → Int) (fb : Nat → Bool) (fm : Nat → String → Int) : MBody → Int
-  | .const n  => n
-  | .field i  => fv i
-  | .meas m i => fm i m
-  | .add a b  => a.eval fv fb fm + b.eval fv fb fm
-  | .iteLe a b t e => if a.eval fv fb fm ≤ b.eval fv fb fm then t.eval fv fb fm else e.eval fv fb fm
-  | .iteB i t e => if fb i then t.eval fv fb fm else e.eval fv fb fm
-
-/-- The value of measure `m` on `v`. -/
-def DEnv.measEval (de : DEnv) (m : String) : Val → Int
-  | .ctor C j w =>
-    match (de.decl? C).bind fun d => d.measBody? m j with
-    | some body =>
-      body.eval
-        (fun i => if h : i < (w.fieldsN (de.nFields C j)).length then
-          Val.proj .int (w.fieldsN (de.nFields C j))[i] else 0)
-        (fun i => if h : i < (w.fieldsN (de.nFields C j)).length then
-          Val.proj .bool (w.fieldsN (de.nFields C j))[i] else false)
-        (fun i m' => if h : i < (w.fieldsN (de.nFields C j)).length then
-          DEnv.measEval de m' (w.fieldsN (de.nFields C j))[i] else 0)
-    | none => 0
-  | _ => 0
-termination_by v => sizeOf v
-decreasing_by
-  have := Val.sizeOf_le_of_mem_fieldsN (List.getElem_mem h)
-  simp; omega
-
-theorem DEnv.measEval_ctor (de : DEnv) (m : String) (C : String) (j : Nat) (w : Val) :
-    de.measEval m (.ctor C j w) =
-      match (de.decl? C).bind fun d => d.measBody? m j with
-      | some body => body.eval
-          (fun i => if h : i < (w.fieldsN (de.nFields C j)).length then
-            Val.proj .int (w.fieldsN (de.nFields C j))[i] else 0)
-          (fun i => if h : i < (w.fieldsN (de.nFields C j)).length then
-            Val.proj .bool (w.fieldsN (de.nFields C j))[i] else false)
-          (fun i m' => if h : i < (w.fieldsN (de.nFields C j)).length then
-            de.measEval m' (w.fieldsN (de.nFields C j))[i] else 0)
-      | none => 0 := by
-  rw [DEnv.measEval]
+/-- Structural skeleton of `Ty`: counts arrow nesting, ignoring refinement
+    bodies. Preserved by `openVar` / `openVarAt`. Used as a termination
+    measure for the algorithmic subtyping function in `Checker/VCGen.lean`. -/
+@[simp]
+def Ty.skel : Ty → Nat
+  | .refine _ _ => 0
+  | .arrow s t  => 1 + s.skel + t.skel
+  | .forall _ t => 1 + t.skel
+  | .prod s t   => 1 + s.skel + t.skel
+  | .data _ _ args _ => 1 + (List.ofFn fun i => (args i).skel).sum
 
 /-- Every element of a list of naturals is at most its sum. -/
 theorem List.le_sum_of_mem_nat : ∀ {l : List Nat} {x : Nat}, x ∈ l → x ≤ l.sum
@@ -861,5 +493,6 @@ theorem Ty.skel_data_lt (C : String) (n : Nat) (args : Fin n → Ty) (r : Refine
   have := List.le_sum_of_mem_nat (List.mem_ofFn.mpr ⟨i, rfl⟩ :
     (args i).skel ∈ List.ofFn fun i => (args i).skel)
   simp only [Ty.skel]; omega
+
 
 end STLC

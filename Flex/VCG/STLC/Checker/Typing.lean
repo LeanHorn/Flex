@@ -1,6 +1,4 @@
-import Flex.VCG.STLC.Syntax
-import Flex.VCG.STLC.Substitution
-import Flex.VCG.STLC.Entailment
+import Flex.VCG.STLC.Checker.Entailment
 import Flex.VCG.STLC.Notation
 
 open STLC

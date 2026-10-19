@@ -19,19 +19,16 @@ import Flex.VCG.While.Types
 import Flex.VCG.While.Semantics
 
 --  Sound verified gen for λᵣ
-import Flex.VCG.STLC.Syntax
-import Flex.VCG.STLC.Substitution
-import Flex.VCG.STLC.Entailment
-import Flex.VCG.STLC.Typing
-import Flex.VCG.STLC.VCGen
-import Flex.VCG.STLC.Declarative
-import Flex.VCG.STLC.Semantics
-import Flex.VCG.STLC.TypeSubst
-import Flex.VCG.STLC.Safety
-import Flex.VCG.STLC.Examples
-import Flex.VCG.STLC.DataExamples
-import Flex.VCG.STLC.OrdExamples
-import Flex.VCG.STLC.MeasureExamples
-import Flex.VCG.STLC.MeasureInference
-import Flex.VCG.STLC.FlexExamples
+import Flex.VCG.STLC.Spec
+import Flex.VCG.STLC.Checker.Typing
+import Flex.VCG.STLC.Checker.VCGen
+import Flex.VCG.STLC.Checker.Declarative
+import Flex.VCG.STLC.Proofs.Safety
+import Flex.VCG.STLC.Examples.Basic
+import Flex.VCG.STLC.Examples.Data
+import Flex.VCG.STLC.Examples.Ord
+import Flex.VCG.STLC.Examples.Measure
+import Flex.VCG.STLC.Examples.MeasureInference
+import Flex.VCG.STLC.Examples.Flex
+import Flex.VCG.STLC.Examples.Notation
 import Flex.VCG.STLC.Audit

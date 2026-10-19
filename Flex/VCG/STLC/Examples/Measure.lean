@@ -1,4 +1,4 @@
-import Flex.VCG.STLC.OrdExamples
+import Flex.VCG.STLC.Examples.Ord
 
 open STLC
 

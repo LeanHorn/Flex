@@ -204,7 +204,13 @@ partial def atom (input : Expr) : MetaM Expr := do
   if e.beq?.isSome || e.bne?.isSome then
     throwError "CHC export: BEq comparisons are unsupported; use propositional equality"
   match e with
-  | .forallE .. | .lam .. =>
+  | .forallE name domain body bi =>
+    unless (← isProp domain) && !body.hasLooseBVar 0 do
+      throwError "CHC export: quantifiers must be clause binders; proof-dependent guards are unsupported"
+    let domain' ← atom domain
+    withLocalDecl name bi domain fun proof => do
+      mkArrow domain' (← atom (body.instantiate1 proof))
+  | .lam .. =>
     throwError "CHC export: quantifiers must be clause binders; higher-order terms are unsupported"
   | .app .. =>
     let head := e.getAppFn

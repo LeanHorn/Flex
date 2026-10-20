@@ -83,8 +83,8 @@ def prepareGoal (goal : MVarId) (maxClauses : Nat := 1024)
           bodyGoal.withContext do
             let copy ← Meta.mkFreshExprMVar (some (← bodyGoal.getType))
               (kind := .syntheticOpaque)
-            normalizeGoal copy.mvarId! maxClauses
-        else normalizeGoal bodyGoal maxClauses
+            normalizeGoal copy.mvarId! kvars maxClauses
+        else normalizeGoal bodyGoal kvars maxClauses
       return { kvars, bodyGoal := if headsOnly then bodyGoal else exportGoal, exportGoal }
     committed.set true
     return prepared

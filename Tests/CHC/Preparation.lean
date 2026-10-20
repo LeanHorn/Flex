@@ -44,7 +44,14 @@ run_elab do
       let target ← mkAppM ``Exists #[← mkLambdaFVars #[select] (mkConst ``True)]
       expectRejected target "theory-model parameter"
   let target ← elabTerm
-    (← `(∃ k : Int → Prop, ((0 : Int) = 0 ∨ 0 = 1) → k 0)) none
+    (← `(∃ k : Int → Prop, ((0 : Int) = 0 ∨ (0 : Int) = 1) → k 0)) none
+  synthesizeSyntheticMVarsNoPostponing
+  let target ← instantiateMVars target
+  let compact ← prepareGoal (← mkFreshExprMVar target).mvarId! 1
+  unless (← exportConstraints compact.kvars (← compact.exportGoal.getType)).clauseCount == 1 do
+    throwError "theory disjunction should remain one clause"
+  let target ← elabTerm
+    (← `(∃ k : Int → Prop, (k 0 ∨ k 1) → k 2)) none
   expectRejected target "clause limit" 1
   let goal ← mkFreshExprMVar target
   let prepared ← prepareGoal goal.mvarId! (headsOnly := true)

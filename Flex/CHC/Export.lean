@@ -118,6 +118,55 @@ end Fragment
 
 namespace Prepare
 
+/-- Existential symbol roles are determined by their Lean types. -/
+private inductive WitnessKind where
+  | predicate | carrier | constant | function | theoryParameter
+
+private def witnessKind (type : Expr) : MetaM WitnessKind := do
+  let type ← whnf type
+  if type.isProp then return .predicate
+  if type.isSort then return .carrier
+  for id in (collectFVars {} type).fvarIds do
+    let dependency ← whnf (← inferType (mkFVar id))
+    if dependency.isSort && !dependency.isProp then return .theoryParameter
+  forallTelescopeReducing type fun parameters result => do
+    if result.isProp then return .predicate
+    return if parameters.isEmpty then .constant else .function
+
+private def checkPredicateType (name : Name) (type : Expr) : MetaM Unit := do
+  if type.hasFVar || type.hasMVar || type.hasLooseBVars || type.hasLevelMVar then
+    throwError "CHC preparation: predicate '{name}' has an open or unresolved signature"
+  forallTelescopeReducing type fun parameters _ =>
+    for parameter in parameters, i in [:parameters.size] do
+      let domain ← inferType parameter
+      if domain.hasFVar then
+        throwError "CHC preparation: predicate '{name}' has a dependent argument {i + 1}"
+      try discard <| Fragment.valueSort domain
+      catch error =>
+        if error.isInterrupt then throw error
+        throwError "CHC preparation: predicate '{name}' argument {i + 1} has unsupported type {domain}; expected Int, Bool, or Prop"
+
+/-- Validate the existential prefix before creating predicate witness slots. -/
+partial def checkPredicatePrefix (input : Expr) : MetaM Unit := do
+  let input ← whnf input
+  unless input.isAppOfArity ``Exists 2 do return
+  let type := input.getArg! 0
+  let predicate ← whnf (input.getArg! 1)
+  let .lam name _ body bi := predicate
+    | throwError "CHC preparation: expected a lambda in an existential binder"
+  match ← witnessKind type with
+  | .predicate => checkPredicateType name type
+  | .carrier =>
+    throwError "CHC preparation: unsupported theory wrapper: existential carrier '{name}' : {type}; array and other abstract theory models require an interpretation before predicate synthesis"
+  | .theoryParameter =>
+    throwError "CHC preparation: unsupported theory-model parameter '{name}' : {type}; its type depends on an abstract carrier"
+  | .constant =>
+    throwError "CHC preparation: unsupported existential background constant '{name}' : {type}; only Prop-valued predicates can be synthesized"
+  | .function =>
+    throwError "CHC preparation: unsupported existential background function '{name}' : {type}; only Prop-valued predicates can be synthesized"
+  withLocalDecl name bi type fun parameter =>
+    checkPredicatePrefix (body.instantiate1 parameter)
+
 /-- Reduce beta/let/metadata wrappers, preserving arithmetic operators. -/
 partial def expose (expression : Expr) : MetaM Expr := do
   let expression := expression.consumeMData.headBeta

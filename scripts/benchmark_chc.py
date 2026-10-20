@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Compare CHC-generated witnesses with the current Flex pipeline on demo goals.
+"""Benchmark CHC-generated witnesses on demo goals or a translated CHC corpus.
 
-Run serially after building dependencies. Each case/backend has an unreported
+Corpus parity: benchmark_chc.py --corpus PATH --output /tmp/chc-parity
+Use --corpus PATH --help for corpus selection, budgets, and solver options.
+
+Demo mode runs serially after building dependencies. Each case/backend has an unreported
 warm-up, followed by shuffled measured repetitions. Lean imports and builds are
 outside the timers; each solver call includes starting a fresh process.
 """
@@ -21,6 +24,7 @@ import shutil
 import signal
 import statistics
 import subprocess
+import sys
 import tempfile
 import threading
 
@@ -127,6 +131,9 @@ def save_results(output: Path, records: list[dict], metadata: dict) -> None:
 
 
 def main() -> int:
+    if any(arg == "--corpus" or arg.startswith("--corpus=") for arg in sys.argv[1:]):
+        from chc_parity import main as parity_main
+        return parity_main()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", nargs="+", choices=BASIC + CYCLIC, default=BASIC + CYCLIC)
     parser.add_argument("--backends", nargs="+", choices=BACKENDS, default=BACKENDS)

@@ -58,6 +58,39 @@ private def requireModel (result : SolverResult) : TermElabM Unit := do
   | .timedOut => throwError "CHC solver exceeded its wall-clock timeout"
   | .error message => throwError message
 
+/-- Predicate slots and the goals used for certification and export. -/
+structure PreparedGoal where
+  kvars : List KVar
+  bodyGoal : MVarId
+  exportGoal : MVarId
+
+/-- Validate and peel predicate witnesses, then normalize for export.
+With `headsOnly`, preserve the original body for certification. Failures restore entry state. -/
+def prepareGoal (goal : MVarId) (maxClauses : Nat := 1024)
+    (headsOnly : Bool := false) : TermElabM PreparedGoal := do
+  let saved ← Term.saveState
+  let committed ← IO.mkRef false
+  try
+    let prepared : PreparedGoal ← goal.withContext do
+      if ← goal.isAssignedOrDelayedAssigned then
+        throwError "CHC preparation: goal is already assigned"
+      let target ← instantiateMVars (← goal.getType)
+      unless ← isProp target do
+        throwError "CHC preparation: goal must be a proposition"
+      Prepare.checkPredicatePrefix target
+      let (_, kvars, bodyGoal) ← peelExistentialsAndIntro goal
+      let exportGoal ← if headsOnly then
+          bodyGoal.withContext do
+            let copy ← Meta.mkFreshExprMVar (some (← bodyGoal.getType))
+              (kind := .syntheticOpaque)
+            normalizeGoal copy.mvarId! maxClauses
+        else normalizeGoal bodyGoal maxClauses
+      return { kvars, bodyGoal := if headsOnly then bodyGoal else exportGoal, exportGoal }
+    committed.set true
+    return prepared
+  finally
+    unless ← committed.get do restoreTermState saved
+
 /-- Normalize, export, solve, and certify one existential constraint goal.
 `solved` proves the goal; `partial` retains witnesses and reported obligations.
 Failures restore all entry state; interrupts propagate. The tactic goal list is
@@ -78,22 +111,9 @@ def solveGoal (goal : MVarId) (config : Config := {})
   let size ← IO.mkRef (0, 0)
   try
     goal.withContext do
-      let (kvars, bodyGoal, exportGoal) ← measure phase timings .prepare do
-        if ← goal.isAssignedOrDelayedAssigned then
-          throwError "CHC goal is already assigned"
-        unless ← isProp (← goal.getType) do
-          throwError "CHC goal must be a proposition"
-        let (_, kvars, bodyGoal) ← peelExistentialsAndIntro goal
-        -- Normalize a copy for export when the residual must preserve the source VC.
-        let exportGoal ← if headsOnly then
-            bodyGoal.withContext do
-              let copy ← Meta.mkFreshExprMVar (some (← bodyGoal.getType))
-                (kind := .syntheticOpaque)
-              normalizeGoal copy.mvarId! maxClauses
-          else normalizeGoal bodyGoal maxClauses
-        return (kvars, if headsOnly then bodyGoal else exportGoal, exportGoal)
+      let prepared ← measure phase timings .prepare <| prepareGoal goal maxClauses headsOnly
       let problem ← measure phase timings .exporting do
-        exportConstraints kvars (← exportGoal.getType)
+        exportConstraints prepared.kvars (← prepared.exportGoal.getType)
       size.set (problem.relations.size, problem.clauseCount)
       let solver ← measure phase timings .solver do
         let result ← run problem config
@@ -104,7 +124,7 @@ def solveGoal (goal : MVarId) (config : Config := {})
       let witnesses ← measure phase timings .importing do
         importWitnesses problem solver
       let certificate ← measure phase timings .certificate do
-        certifyWitnesses problem witnesses bodyGoal oracle headsOnly
+        certifyWitnesses problem witnesses prepared.bodyGoal oracle headsOnly
       let report : GoalReport := {
         problem, solver, witnesses, certificate, timings := ← timings.get }
       return if certificate.goals.isEmpty then .solved report else .partial report

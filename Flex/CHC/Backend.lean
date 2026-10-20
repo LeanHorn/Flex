@@ -54,15 +54,19 @@ structure Config where
   timeoutMs : Nat := 10000
   deriving Inhabited
 
-/-- Run Spacer on a checked export. `-model` prints definitions only after `sat`,
-avoiding the protocol error from `get-model` after `unsat` or `unknown`. -/
-def run (problem : ExportedProblem) (config : Config := {}) : IO SolverResult := do
-  let process ← Process.run {
+/-- `-model` requests interpretations without issuing `get-model` after unsat. -/
+def Config.toProcessConfig (config : Config) : Process.Config :=
+  {
     executable := config.executable
     args := #["-in", "-smt2", "-model", "fp.engine=spacer"]
-    timeoutMs := config.timeoutMs
-  } problem.toSMTLib
+    timeoutMs := config.timeoutMs }
+
+def runScript (input : String) (config : Config := {}) : IO SolverResult := do
+  let process ← Process.run config.toProcessConfig input
   return SolverResult.ofProcess process
+
+def run (problem : ExportedProblem) (config : Config := {}) : IO SolverResult :=
+  runScript problem.toSMTLib config
 
 end Spacer
 
@@ -74,14 +78,19 @@ structure Config where
   timeoutMs : Nat := 10000
   deriving Inhabited
 
-/-- Run Eldarica with SMT-LIB Horn input and SMT-LIB predicate interpretations. -/
-def run (problem : ExportedProblem) (config : Config := {}) : IO SolverResult := do
-  let process ← Process.run {
+/-- Use SMT-LIB Horn input and request predicate interpretations. -/
+def Config.toProcessConfig (config : Config) : Process.Config :=
+  {
     executable := config.executable
     args := #["-in", "-hsmt", "-ssol"]
-    timeoutMs := config.timeoutMs
-  } problem.toSMTLib
+    timeoutMs := config.timeoutMs }
+
+def runScript (input : String) (config : Config := {}) : IO SolverResult := do
+  let process ← Process.run config.toProcessConfig input
   return SolverResult.ofProcess process
+
+def run (problem : ExportedProblem) (config : Config := {}) : IO SolverResult :=
+  runScript problem.toSMTLib config
 
 end Eldarica
 
@@ -99,15 +108,22 @@ structure Config where
   timeoutMs : Nat := 10000
   deriving Inhabited, Repr
 
-/-- Run the selected solver and retain its transcript. Importing candidates and
-proving the original constraints are separate operations. -/
-def run (problem : ExportedProblem) (config : Config := {}) : IO SolverResult :=
+/-- The same invocation is used for original and Flex-exported benchmark queries. -/
+def Config.toProcessConfig (config : Config) : Process.Config :=
   match config.backend with
-  | .spacer => Spacer.run problem {
+  | .spacer => Spacer.Config.toProcessConfig {
       executable := config.executable.getD ({} : Spacer.Config).executable
       timeoutMs := config.timeoutMs }
-  | .eldarica => Eldarica.run problem {
+  | .eldarica => Eldarica.Config.toProcessConfig {
       executable := config.executable.getD ({} : Eldarica.Config).executable
       timeoutMs := config.timeoutMs }
+
+/-- Run a script without assigning Lean witnesses or trusting the solver's answer. -/
+def runScript (input : String) (config : Config := {}) : IO SolverResult := do
+  return SolverResult.ofProcess (← Process.run config.toProcessConfig input)
+
+/-- Run the selected solver, retaining its transcript for import and certification. -/
+def run (problem : ExportedProblem) (config : Config := {}) : IO SolverResult :=
+  runScript problem.toSMTLib config
 
 end Flex.CHC

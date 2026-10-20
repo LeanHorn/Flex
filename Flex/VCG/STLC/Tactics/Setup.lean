@@ -1,5 +1,6 @@
 import Flex.VCG.STLC.Tactics.MakeHornUnderK
 import Flex.VCG.STLC.Checker.VCGen
+import Flex.VCG.STLC.Proofs.WFDecide
 
 open STLC
 

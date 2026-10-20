@@ -151,10 +151,7 @@ theorem meas_headClient_vc : ∃ κ : KEnv, Check lenEnv κ [] headClientE TT :=
 theorem meas_headClient_safe (n : Nat) :
     ∃ o, Run n headClientE o ∧ ∀ v m, o = .val v m → ∃ i : Int, v = .iconst i := by
   obtain ⟨κ, hc⟩ := meas_headClient_vc
-  have hh := check_to_hastype TEnv.WFBVars.empty
-    (by simp [Exp.WFBVars, Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar,
-              Term.hasBVar])
-    (by simp [Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar]) hc
+  have hh := check_to_hastype ?_ ?_ ?_ hc <;> try decide
   obtain ⟨o, hrun, hres⟩ := type_safety lenEnv_wf hh n
   refine ⟨o, hrun, fun v m ho => ?_⟩
   have := hres v m ho

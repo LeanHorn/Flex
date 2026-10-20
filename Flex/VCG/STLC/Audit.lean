@@ -5,6 +5,7 @@ import Flex.VCG.STLC.Examples.Ord
 import Flex.VCG.STLC.Examples.Measure
 import Flex.VCG.STLC.Examples.MeasureInference
 import Flex.VCG.STLC.Examples.Flex
+import Flex.VCG.STLC.Interp
 
 open STLC
 
@@ -191,3 +192,20 @@ open STLC
 
 /-- info: 'flex_ord_isort' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms flex_ord_isort
+
+/-! ## The interpreter and the well-formedness deciders -/
+
+/-- info: 'STLC.interp_iff' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms interp_iff
+
+/-- info: 'STLC.interp_stuck' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms interp_stuck
+
+/-- info: 'STLC.Ty.bvOK_iff' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms Ty.bvOK_iff
+
+/-- info: 'STLC.Exp.bvOK_iff' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms Exp.bvOK_iff
+
+/-- info: 'STLC.TEnv.WFBVars_iff' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms TEnv.WFBVars_iff

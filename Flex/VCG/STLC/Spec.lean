@@ -36,7 +36,8 @@ import Flex.VCG.STLC.Spec.Theorems
 
   **Untrusted.** `Checker/` (operations, well-formedness, measure facts, typing
   rules, VC generation), `Proofs/`, and `Tactics/` (Flex's tactics build proofs
-  the kernel checks).
+  the kernel checks). So are `Interp` (a definitional interpreter, proved to
+  agree with `Eval`) and `Tests/`, which exercise the semantics and the rules.
 
   Dependencies: `Spec/*` imports only `Spec/*`, except `Spec/Theorems`, which
   imports the proofs it composes; `Checker/*` imports no proofs. `Notation` is

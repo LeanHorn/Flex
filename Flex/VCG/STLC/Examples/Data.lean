@@ -158,10 +158,7 @@ abbrev sumClientE : Exp :=
 theorem data_sumList_safe (n : Nat) :
     ∃ o, Run n sumClientE o ∧ ∀ v m, o = .val v m → ∃ i : Int, v = .iconst i ∧ 0 ≤ i := by
   obtain ⟨κ, h⟩ := data_sumList_client
-  have hh := check_to_hastype TEnv.WFBVars.empty
-    (by simp [Exp.WFBVars, Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar,
-              Term.hasBVar])
-    (by simp [Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar, Term.hasBVar]) h
+  have hh := check_to_hastype ?_ ?_ ?_ h <;> try decide
   obtain ⟨o, hrun, hres⟩ := type_safety listEnv_wf hh n
   refine ⟨o, hrun, fun v m ho => ?_⟩
   have := hres v m ho

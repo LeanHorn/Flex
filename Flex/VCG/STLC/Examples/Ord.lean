@@ -197,11 +197,8 @@ theorem ord_sortClient_vc (κ : KEnv) : topVC κ [] sortClientE TrueB sortEnv :=
 
 theorem ord_sortClient_safe (n : Nat) :
     ∃ o, Run n sortClientE o ∧ ∀ v m, o = .val v m → v = .bconst true := by
-  have hh := topVC_decl_sound (fun _ _ => True) sortClientE TrueB
-    (by simp [Exp.WFBVars, Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar,
-              Term.hasBVar])
-    (by simp [Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar, Term.hasBVar])
-    (ord_sortClient_vc _)
+  have hh := topVC_decl_sound (fun _ _ => True) sortClientE TrueB ?_ ?_ (ord_sortClient_vc _)
+    <;> try decide
   obtain ⟨o, hrun, hres⟩ := type_safety sortEnv_wf hh n
   refine ⟨o, hrun, fun v m ho => ?_⟩
   have := hres v m ho

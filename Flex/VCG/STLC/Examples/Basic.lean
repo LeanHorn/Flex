@@ -206,22 +206,15 @@ example (n : Nat) : ¬ ∃ o, Eval n .unreach o := by
 
 -- Identity (λx. x) is declaratively typeable at Pos → Pos.
 example (κ : KEnv) : Hastype [] κ [] ex2Exp ex2Ty := by
-  apply topVC_decl_sound
-    <;> simp [topVC, ex2Exp, exId, ex2Ty, Pos]
-  · simp [Exp.WFBVars]
-  · unfold Ty.WFBVars
-    simp [Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar, Term.hasBVar]
+  apply topVC_decl_sound <;> try decide
+  simp [topVC, ex2Exp, exId, ex2Ty, Pos]
 
 
 
 -- let z = 5 in z is declaratively typeable at Pos.
 example (κ : KEnv) : Hastype [] κ [] ex3Exp ex3Ty := by
-  apply topVC_decl_sound <;>
-  simp [topVC, check, synth, sub, implyBindCstr, Cstr.interp, Cstr.triv,
-        Refinement.openBVar, Formula.openBVar, Term.openBVar, ex3Exp, ex3Ty, Pos,
-        prim, self, Refinement.interp, Formula.interp, Term.interp, REnv.get,
-        Exp.openVar, Exp.WFBVars, Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar,
-        Formula.hasBVar, Term.hasBVar]
+  apply topVC_decl_sound <;> try decide
+  simp [topVC, ex3Exp, ex3Ty]
 
 /-! ## Declarative-side: direct constructor derivations -/
 
@@ -232,7 +225,7 @@ example (κ : KEnv) : Hastype [] κ [] (.bconst true) (primBool true) := .bool_c
 example (κ : KEnv) : Hastype [] κ [] (.ann (.iconst 5) (prim 5)) (prim 5) := by
   constructor
   constructor
-  simp [Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar, Term.hasBVar]
+  decide
 
 example (κ : KEnv) (Γ : TEnv) (x y : EVar) (r₁ r₂ : Refinement)
     (hx : Γ.lookup x = some (.refine .int r₁))
@@ -313,11 +306,9 @@ theorem loopMain_vc (κ : KEnv) : topVC κ [] loopMain <ty| Int{ν : ⊥} |> := 
 /-- By `vcgen_partial_correct`, `loop 0` never returns a value, whatever the fuel. -/
 example (n : Nat) : ¬ ∃ v m, Run n loopMain (.val v m) := by
   rintro ⟨v, m, hev⟩
-  obtain ⟨_, hr⟩ := vcgen_partial_correct (κ := fun _ _ => True) rfl
-    (by simp [loopMain, loop, loopTy, Exp.WFBVars, Ty.WFBVars, Ty.WFBVarCtx,
-              Refinement.hasBVar, Formula.hasBVar])
-    (by simp [Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar, Formula.hasBVar])
-    (loopMain_vc _) hev
+  have h := vcgen_partial_correct (κ := fun _ _ => True) rfl ?_ ?_ (loopMain_vc _) hev
+    <;> try decide
+  obtain ⟨_, hr⟩ := h
   simp [Refinement.interp, Formula.interp] at hr
 
 /-! ### Recursion + refinement inference: `sum` with an inferred spec

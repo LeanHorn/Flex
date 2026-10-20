@@ -86,6 +86,10 @@ private def numeral : Smt.Term → Bool
   | .appT (.symbolT "-") (.literalT text) => !text.isEmpty && text.toList.all Char.isDigit
   | _ => false
 
+private def positiveNumeral : Smt.Term → Bool
+  | .literalT text => text.toNat?.any (· > 0)
+  | _ => false
+
 /-- Check supported operators and arities; the native parser subsequently checks sorts. -/
 partial def checkTerm (term : Smt.Term) (symbols : Array String) : MetaM Unit := do
   match term with
@@ -106,11 +110,14 @@ partial def checkTerm (term : Smt.Term) (symbols : Array String) : MetaM Unit :=
         | "not" => args.size == 1
         | "-" => args.size == 1 || args.size == 2
         | "ite" => args.size == 3
-        | "and" | "or" | "xor" | "=>" | "=" | "distinct" | "+" | "*" | "<" | "<=" | ">" | ">=" => args.size == 2
+        | "and" | "or" | "xor" | "=>" | "=" | "distinct" | "+" | "*" | "div" | "mod"
+        | "<" | "<=" | ">" | ">=" => args.size == 2
         | _ => false
       unless valid do throwError "CHC export: unsupported SMT operator '{name}' or arity"
       if name == "*" && !args.any numeral then
         throwError "CHC export: nonlinear multiplication; one operand must be an integer literal"
+      if (name == "div" || name == "mod") && !positiveNumeral args[1]! then
+        throwError "CHC export: {name} requires a positive integer literal divisor"
     for argument in args do checkTerm argument symbols
   | _ => throwError "CHC export: unsupported SMT term {term}"
 
@@ -188,18 +195,25 @@ private def checkIntegerInstance (e : Expr) : MetaM Unit := do
     canonical e q(-$a)
   else
     let operators := #[e.hAddOf? int int, e.hSubOf? int int, e.hMulOf? int int,
+      e.hDivOf? int int, e.hModOf? int int,
       e.leOf? int, e.ltOf? int, e.geOf? int, e.gtOf? int]
     for arguments in operators, i in [:operators.size] do
       if let some (a, b) := arguments then
         let a : Q(Int) := a
         let b : Q(Int) := b
-        let expected := #[q($a + $b), q($a - $b), q($a * $b),
+        let expected := #[q($a + $b), q($a - $b), q($a * $b), q($a / $b), q($a % $b),
           q($a ≤ $b), q($a < $b), q($a ≥ $b), q($a > $b)][i]!
         canonical e expected
 
 /-- Normalize theory terms, rejecting hidden quantifiers and higher-order expressions. -/
 partial def atom (input : Expr) : MetaM Expr := do
   let e ← expose input
+  -- lean-smt recognizes the notation's typeclass applications, not these direct functions.
+  let e ← if e.isAppOfArity ``Int.ediv 2 || e.isAppOfArity ``Int.emod 2 then do
+      let a : Q(Int) := e.getArg! 0
+      let b : Q(Int) := e.getArg! 1
+      pure (if e.isAppOfArity ``Int.ediv 2 then q($a / $b) else q($a % $b))
+    else pure e
   checkIntegerInstance e
   if e.beq?.isSome || e.bne?.isSome then
     throwError "CHC export: BEq comparisons are unsupported; use propositional equality"
@@ -278,8 +292,8 @@ private def validate (problem : ExportedProblem) : MetaM Unit := do
           throw (.error s!"CHC export: wrong argument sort for '{expected.symbol}'")
   ).runIO
 
-/-- Export a body closed except for its unassigned κs. Supports first-order Bool/Int linear
-arithmetic and local lets; unsupported terms fail before solving. No witnesses are assigned. -/
+/-- Export Bool/Int linear arithmetic, positive-literal div/mod, and local lets.
+The body must be closed except for its unassigned κs. No witnesses are assigned. -/
 def exportConstraints (kvars : List KVar) (body : Expr) : MetaM ExportedProblem := do
   let saved ← Meta.saveState
   try

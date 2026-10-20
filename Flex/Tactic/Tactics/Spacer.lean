@@ -24,7 +24,8 @@ def solverTactic (config : Config) : TacticM Unit := withMainContext do
       throwError "{name}: {failure.message}"
   withOptions (·.setBool `pp.funBinderTypes true) do
     let entries := (report.problem.relations.zip report.witnesses).toList.map fun (relation, witness) =>
-      m!"  {relation.kvar.name} := {witness.value}"
+      let source := if witness.defaulted then " (unused; completed by Flex)" else ""
+      m!"  {relation.kvar.name} := {witness.value}{source}"
     logInfo (MessageData.joinSep (m!"{name}: instantiated invariants" :: entries) "\n")
   replaceMainGoal report.certificate.goals.toList
 

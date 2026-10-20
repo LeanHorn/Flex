@@ -191,7 +191,8 @@ private def runFlex (cfg : Settings) (name : Name) : TermElabM Unit := do
         | emit cfg "result" ("solver_" ++ outcomeName result.outcome); return
       stage.set "import"
       let witnesses ← phase cfg (← stage.get) (importWitnesses problem result)
-        (fun ws => [("witnesses", toJson ws.size)])
+        (fun ws => [("witnesses", toJson ws.size),
+          ("defaulted_witnesses", toJson (ws.filter (·.defaulted)).size)])
       stage.set "certificate"
       let oracle : ProofOracle := fun goal => do
         let saved ← saveState

@@ -11,6 +11,8 @@ structure Witness where
   symbol : String
   mvarId : MVarId
   value : Expr
+  /-- Flex supplied True for an unused predicate omitted from the model. -/
+  defaulted : Bool := false
   deriving Inhabited
 
 private def requireClosed (expression : Expr) (description : String) : MetaM Unit := do
@@ -65,6 +67,24 @@ private def checkValue (relation : Relation) (value : Expr) : MetaM Unit := do
   unless ← isDefEq (← inferType value) relation.leanType do
     throwError "CHC witnesses: candidate type does not match '{relation.symbol}'"
 
+private def usesSymbol (symbol : String) : Smt.Term → Bool
+  | .literalT _ => false
+  | .symbolT name => name == symbol
+  | .arrowT a b | .appT a b => usesSymbol symbol a || usesSymbol symbol b
+  | .forallT name a b | .existsT name a b | .letT name a b =>
+    usesSymbol symbol a || (name != symbol && usesSymbol symbol b)
+
+/-- Only predicates absent from every exported assertion may be completed. -/
+private def completeUnused (problem : ExportedProblem) (relation : Relation) : MetaM Witness := do
+  if problem.commands.any (fun
+      | .assert term => usesSymbol relation.symbol term
+      | _ => false) then
+    throwError "CHC witnesses: missing model definition '{relation.symbol}' used by a clause"
+  let value ← forallTelescopeReducing relation.leanType fun parameters _ =>
+    mkLambdaFVars parameters (mkConst ``True) (usedOnly := false)
+  checkValue relation value
+  return { symbol := relation.symbol, mvarId := relation.kvar.mvarId, value, defaulted := true }
+
 /-- Restore Bool arguments as `b = true`, retaining Prop and unused parameters. -/
 private def adapt (relation : Relation) (definition : Smt2Lean.ReconstructedDefinition)
     : MetaM Witness := do
@@ -90,8 +110,8 @@ private def successfulModel (result : SolverResult) : MetaM Unit := do
   | .error message => throwError "CHC witnesses: {message}"
   | _ => throwError "CHC witnesses: process did not successfully return a model"
 
-/-- Import every relation by solver symbol, in existential order. Helpers are
-expanded by SMTLib-to-Lean. Restores caller state without assigning witnesses. -/
+/-- Import predicates in existential order, completing omitted unused ones with True.
+SMTLib-to-Lean expands helpers. Caller state is restored without assigning witnesses. -/
 def importWitnesses (problem : ExportedProblem) (result : SolverResult) : MetaM (Array Witness) := do
   let saved ← Meta.saveState
   try
@@ -111,9 +131,9 @@ def importWitnesses (problem : ExportedProblem) (result : SolverResult) : MetaM 
         throwError "CHC witnesses: duplicate model definition '{definition.name}'"
       byName := byName.insert definition.name definition
     problem.relations.mapM fun relation => do
-      let some definition := byName[relation.symbol]?
-        | throwError "CHC witnesses: missing model definition '{relation.symbol}'"
-      adapt relation definition
+      match byName[relation.symbol]? with
+      | some definition => adapt relation definition
+      | none => completeUnused problem relation
   finally restoreMetaState saved
 
 /-- Validate the complete, ordered bundle before assigning any witnesses.

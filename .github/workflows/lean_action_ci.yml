@@ -14,7 +14,14 @@ jobs:
       - name: Install solver dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang lld z3 libc++-dev libc++abi-dev
+          sudo apt-get install -y clang lld z3 libc++-dev libc++abi-dev default-jre-headless unzip
+      - name: Install Eldarica 2.3
+        run: |
+          curl -fsSL https://github.com/uuverifiers/eldarica/releases/download/v2.3/eldarica-bin-2.3.zip -o "$RUNNER_TEMP/eldarica.zip"
+          echo "60887e6a44d8e8c89e393b837b04cb130c601d8ce5e5c829349e6f34aba0be6d  $RUNNER_TEMP/eldarica.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/eldarica.zip" -d "$RUNNER_TEMP"
+          chmod +x "$RUNNER_TEMP/eldarica-bin-2.3/eld"
+          echo "$RUNNER_TEMP/eldarica-bin-2.3" >> "$GITHUB_PATH"
       - name: Configure Lean C compiler
         # cvc5 needs the runner's glibc; keep Lean's bundled C++ and runtime libraries.
         run: |

@@ -31,9 +31,16 @@ structure Obligation where
 instantiated and structural noise removed. -/
 structure CertificateResult where
   obligations : Array Obligation := #[]
+  residualVC : Option MVarId := none
   provedHeads : Nat := 0
   provedQueries : Nat := 0
   deriving Inhabited
+
+/-- All remaining goals, including a structure-preserving residual when present. -/
+def CertificateResult.goals (result : CertificateResult) : Array MVarId :=
+  match result.residualVC with
+  | none => result.obligations.map (·.goal)
+  | some goal => (result.obligations.map (·.goal)).push goal
 
 /-- Restore all elaborator, meta, and core state, including messages and caches. -/
 def restoreTermState (saved : Term.SavedState) : TermElabM Unit := do
@@ -114,7 +121,7 @@ private partial def residual (oracle : ProofOracle) (tag : Name)
     if let some proof ← tryOracle oracle target then return proof
   if let .forallE name domain body bi := target then
     return ← abstractBinder name bi domain fun parameter =>
-      -- Retry only after splitting: the failed oracle already saw this binder.
+      -- Retry only after conjunction splitting, not after introducing a binder.
       residual oracle tag kind clauseIndex (body.instantiate1 parameter)
         (tryWhole := false)
   if let some (left, right) := target.and? then
@@ -179,12 +186,60 @@ private partial def walk (relations : Array Relation) (oracle : ProofOracle)
       (← walk relations oracle tag right)
   certifyLeaf oracle tag .query raw
 
+/-- Replace certified κ-heads by True, retaining the original constraint tree.
+The returned equivalence closes every temporary binder before it escapes. -/
+private partial def walkHeads (relations : Array Relation) (oracle : ProofOracle)
+    (raw : Expr) : CertM (Expr × Expr) := do
+  let raw ← Prepare.expose raw
+  if raw.getAppFn.isMVar then
+    unless relations.any (·.kvar.mvarId == raw.getAppFn.mvarId!) do
+      throwError "CHC certification: unregistered predicate head"
+    let target ← normalize raw
+    if let some proof ← tryOracle oracle target then
+      modify fun s => { s with result.provedHeads := s.result.provedHeads + 1 }
+      return (mkConst ``True, ← mkAppM ``iff_true_intro #[proof])
+    return (target, ← mkAppM ``Iff.refl #[target])
+  if let .forallE name domain body bi := raw then
+    let domain ← normalize domain
+    if (← isProp domain) && body.hasLooseBVar 0 then
+      throwError "CHC certification: constraints depending on proof terms are unsupported"
+    return ← withLocalDecl name bi domain fun parameter => do
+      let (reduced, equivalence) ← walkHeads relations oracle (body.instantiate1 parameter)
+      let target ← mkForallFVars #[parameter] reduced
+      let motive ← mkLambdaFVars #[parameter] equivalence
+      return (target, ← mkAppM ``forall_congr' #[motive])
+  if let some (left, right) := raw.and? then
+    let (left', leftIff) ← walkHeads relations oracle left
+    let (right', rightIff) ← walkHeads relations oracle right
+    return (mkApp2 (mkConst ``And) left' right',
+      ← mkAppM ``and_congr #[leftIff, rightIff])
+  let target ← normalize raw
+  return (target, ← mkAppM ``Iff.refl #[target])
+
+/-- Construct a checked bridge and at most one residual in the body's context. -/
+private def certifyHeads (relations : Array Relation) (oracle : ProofOracle)
+    (tag : Name) (raw : Expr) : TermElabM (Expr × CertificateResult) := do
+  let ((reduced, equivalence), state) ← (walkHeads relations oracle raw).run {}
+  let (target, cleanup) ← collapseInert reduced
+  let equivalence ← instantiateMVars (← mkAppM ``Iff.trans #[equivalence, cleanup])
+  if equivalence.hasMVar || equivalence.hasLevelMVar then
+    throwError "CHC certification: residual equivalence contains unresolved variables"
+  checkWithKernel equivalence
+  if target.isConstOf ``True then
+    return (← mkAppM ``Iff.mpr #[equivalence, mkConst ``True.intro], state.result)
+  let residual ← mkFreshExprMVar (some target) (kind := .syntheticOpaque)
+    (userName := tag ++ `vc)
+  return (← mkAppM ``Iff.mpr #[equivalence, residual],
+    { state.result with residualVC := some residual.mvarId! })
+
 /-- Assign candidates and certify the original body, leaving unproved clauses as
 Lean goals. Partial results retain assignments and the proof scaffold; errors
 restore all entry state. Oracle evidence is checked in the original context.
+With `headsOnly`, certify only κ-heads and retain one structured residual VC.
 Does not change the tactic goal list. -/
 def certifyWitnesses (problem : ExportedProblem) (witnesses : Array Witness)
     (bodyGoal : MVarId) (oracle : ProofOracle := defaultProofOracle)
+    (headsOnly : Bool := false)
     : TermElabM CertificateResult := do
   let saved ← Term.saveState
   try
@@ -197,18 +252,23 @@ def certifyWitnesses (problem : ExportedProblem) (witnesses : Array Witness)
       let instantiated ← instantiateMVars raw
       if instantiated.hasMVar || instantiated.hasLevelMVar then
         throwError "CHC certification: unresolved variables remain in the original body"
-      let (proof, state) ← (walk problem.relations oracle (← bodyGoal.getTag) raw).run {}
-      unless state.nextClause == problem.clauseCount do
-        throwError "CHC certification: body and exported clause count disagree"
+      let (proof, result) ← if headsOnly then
+          certifyHeads problem.relations oracle (← bodyGoal.getTag) raw
+        else do
+          let (proof, state) ←
+            (walk problem.relations oracle (← bodyGoal.getTag) raw).run {}
+          unless state.nextClause == problem.clauseCount do
+            throwError "CHC certification: body and exported clause count disagree"
+          pure (proof, state.result)
       let proof ← instantiateMVars proof
-      if state.result.obligations.isEmpty && (proof.hasMVar || proof.hasLevelMVar) then
+      if result.goals.isEmpty && (proof.hasMVar || proof.hasLevelMVar) then
         throwError "CHC certification: completed certificate contains unresolved variables"
       -- Partial scaffolds contain goals, so only completed proofs use the kernel.
-      if state.result.obligations.isEmpty then checkWithKernel proof else check proof
+      if result.goals.isEmpty then checkWithKernel proof else check proof
       unless ← isDefEq (← inferType proof) (← bodyGoal.getType) do
         throwError "CHC certification: certificate does not prove the original body"
       bodyGoal.assign proof
-      return state.result
+      return result
   catch error =>
     restoreTermState saved
     throw error

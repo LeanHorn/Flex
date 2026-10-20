@@ -48,7 +48,7 @@ private partial def expandedClauses (input : Expr) (limit : Nat) : MetaM (Nat ×
 /-- Normalize existential, disjunctive, and conjunctive Horn guards with proofs.
 Use only the three logical equivalences below, bounding expansion before rewriting.
 Keep predicate slots unassigned and the body open; failures restore entry state.
-Export and certification must both consume the returned goal. -/
+The returned goal has guard forms accepted by export. -/
 def normalizeGoal (bodyGoal : MVarId) (maxClauses : Nat := 1024) : MetaM MVarId := do
   let saved ← Meta.saveState
   try

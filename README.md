@@ -71,11 +71,11 @@ See [Demo/Basic.lean](Demo/Basic.lean) for elimination examples and
 
 ## CHC Solvers
 
-Import `Flex.CHC` to use `Flex.CHC.solveGoal` with Spacer (default) or Eldarica.
-Install `z3` or `eld` on `PATH`, or set `Config.executable`. The API reconstructs
-solver invariants as Lean predicates and certifies the constraints, returning
-either a complete proof or explicit residual goals. Failed attempts restore the
-original goal. This API is separate from `fix`.
+Import `Flex.Tactic.Tactics.Spacer` or `Flex.Tactic.Tactics.Eldarica` for the
+`spacer` and `eldarica` tactics. They report and instantiate solver invariants,
+certify predicate heads with `grind`, and leave one structured VC for subsequent tactics.
+Install `z3` and `eld` on `PATH`, or set `flex.spacer.executable` and
+`flex.eldarica.executable`. See [Demo/Spacer.lean](Demo/Spacer.lean) for both.
 
-See [Demo/Spacer.lean](Demo/Spacer.lean) for examples, including manual VC discharge.
-Run it with `CHC_ELDARICA=/path/to/eld lake lean Demo/Spacer.lean` to use Eldarica.
+`Flex.CHC.solveGoal` provides the underlying library API, including complete
+certification, residual obligations, and rollback on failure.

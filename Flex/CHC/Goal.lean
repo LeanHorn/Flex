@@ -27,7 +27,7 @@ structure Failure where
   timings : Array PhaseTiming := #[]
 
 /-- A committed attempt: all existential predicates have been instantiated.
-Any remaining proof obligations are owned by `certificate.obligations`. -/
+Remaining proof goals are available through `certificate.goals`. -/
 structure GoalReport where
   problem : ExportedProblem
   solver : SolverResult
@@ -65,9 +65,11 @@ unchanged, and no backend or tactic fallback runs here.
 
 Signatures and constraints must be closed except for peeled predicate slots.
 `maxClauses` bounds guard expansion; `config.timeoutMs` bounds only the solver.
+With `headsOnly`, certify κ-heads and leave one VC with its original structure.
 Callers configure oracle budgets and install residual goals. -/
 def solveGoal (goal : MVarId) (config : Config := {})
     (oracle : ProofOracle := defaultProofOracle) (maxClauses : Nat := 1024)
+    (headsOnly : Bool := false)
     : TermElabM GoalResult := do
   let saved ← Term.saveState
   let phase ← IO.mkRef Stage.prepare
@@ -76,16 +78,22 @@ def solveGoal (goal : MVarId) (config : Config := {})
   let size ← IO.mkRef (0, 0)
   try
     goal.withContext do
-      let (kvars, bodyGoal) ← measure phase timings .prepare do
+      let (kvars, bodyGoal, exportGoal) ← measure phase timings .prepare do
         if ← goal.isAssignedOrDelayedAssigned then
           throwError "CHC goal is already assigned"
         unless ← isProp (← goal.getType) do
           throwError "CHC goal must be a proposition"
         let (_, kvars, bodyGoal) ← peelExistentialsAndIntro goal
-        let bodyGoal ← normalizeGoal bodyGoal maxClauses
-        return (kvars, bodyGoal)
+        -- Normalize a copy for export when the residual must preserve the source VC.
+        let exportGoal ← if headsOnly then
+            bodyGoal.withContext do
+              let copy ← Meta.mkFreshExprMVar (some (← bodyGoal.getType))
+                (kind := .syntheticOpaque)
+              normalizeGoal copy.mvarId! maxClauses
+          else normalizeGoal bodyGoal maxClauses
+        return (kvars, if headsOnly then bodyGoal else exportGoal, exportGoal)
       let problem ← measure phase timings .exporting do
-        exportConstraints kvars (← bodyGoal.getType)
+        exportConstraints kvars (← exportGoal.getType)
       size.set (problem.relations.size, problem.clauseCount)
       let solver ← measure phase timings .solver do
         let result ← run problem config
@@ -96,10 +104,10 @@ def solveGoal (goal : MVarId) (config : Config := {})
       let witnesses ← measure phase timings .importing do
         importWitnesses problem solver
       let certificate ← measure phase timings .certificate do
-        certifyWitnesses problem witnesses bodyGoal oracle
+        certifyWitnesses problem witnesses bodyGoal oracle headsOnly
       let report : GoalReport := {
         problem, solver, witnesses, certificate, timings := ← timings.get }
-      return if certificate.obligations.isEmpty then .solved report else .partial report
+      return if certificate.goals.isEmpty then .solved report else .partial report
   catch error =>
     let message ← error.toMessageData.toString
     restoreTermState saved

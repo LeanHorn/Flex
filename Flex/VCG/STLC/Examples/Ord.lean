@@ -41,18 +41,11 @@ attribute [local simp] Exp.ftv Ty.ftv Refinement.ftv Formula.ftv Term.ftv Base.f
   DEnv.payload? DEnv.decl? DEnv.nCtors DEnv.instOK Ty.instTysOK Ty.instTysFrom Ty.instTys
   Cstr.conjAll List.finRange DEnv.var TEnv.genVars Ty.closeTv BSubst.closeAt List.eraseDups_cons
 
-/-- `x ≤ ν` at sort `b`, with `x` the de Bruijn index `i` (ν is 0). -/
-abbrev geR (b : Base) (i : Nat) : Refinement := .fmla (.leq b (.bvar b i) (.bvar b 0))
-
 /-! ## Polymorphic comparison: `max` -/
 
 /-- `max : ∀α:B. x:α → y:α → α{x ≤ ν ∧ y ≤ ν}` -/
-abbrev maxTy : Ty := .forall .B (.arrow (Par 0) (.arrow (Par 0)
-  (Par 0 (.fmla (.and (.leq (.tbvar 0) (.bvar (.tbvar 0) 2) (.bvar (.tbvar 0) 0))
-                      (.leq (.tbvar 0) (.bvar (.tbvar 0) 1) (.bvar (.tbvar 0) 0)))))))
-/-- `Λα. λx. λy. let c = x ≤ y in if c then y else x` -/
-abbrev maxE : Exp := .tabs .B (.lam (.lam
-  (.letin (.leq (.bvar 1) (.bvar 0)) (.ite (.bvar 0) (.bvar 1) (.bvar 2)))))
+abbrev maxTy : Ty := <ty| ∀ α : B, (x : α) -> (y : α) -> α{ν : x ≤ ν ∧ y ≤ ν} |>
+abbrev maxE : Exp := <| Λ α : B, λ x y, let c = x ≤ y in if c then y else x |>
 
 /-- The VC is reflexivity and totality of `≤`, at `Int` and at `Bool`. -/
 theorem ord_max (κ : KEnv) : topVC κ [] maxE maxTy := by
@@ -61,8 +54,7 @@ theorem ord_max (κ : KEnv) : topVC κ [] maxE maxTy := by
 
 /-- At `Bool`, the abstract order is `false < true`: `max[Bool] false true` is `true`. -/
 theorem ord_max_bool (κ : KEnv) : topVC κ []
-    (.letin (.bconst false) (.letin (.bconst true)
-      (.app (.app (.tapp (.ann maxE maxTy) BoolT) (.bvar 1)) (.bvar 0))))
+    <| let ff = false in let tt = true in (⌜maxE⌝ : ⌜maxTy⌝)[Bool] ff tt |>
     TrueB := by
   simp [topVC]
   split_sorts <;> grind
@@ -70,37 +62,31 @@ theorem ord_max_bool (κ : KEnv) : topVC κ []
 /-- Comparison is only available at comparable sorts: a `⋆`-kinded variable may
     hold functions. -/
 theorem ord_leq_star_bad (κ : KEnv) : ¬ topVC κ []
-    (.tabs .star (.lam (.lam (.leq (.bvar 1) (.bvar 0)))))
-    (.forall .star (.arrow (Par 0) (.arrow (Par 0) BoolT))) := by
+    <| Λ α : ⋆, λ x y, x ≤ y |>
+    <ty| ∀ α : ⋆, α -> α -> Bool |> := by
   simp [topVC]
 
 /-! ## Ordered lists -/
 
-abbrev OListT (τ : Ty) : Ty := .dataL "olist" [τ]
 /-- `olist α = ONil | OCons (x : α, olist(α{x ≤ ν}))`, with `α : B` (comparable)
     and covariant. -/
-def olistDecl : DataDecl :=
-  { params := [.B],
-    ctorFields := [("ONil", []), ("OCons", [Par 0, OListT (Par 0 (geR (.tbvar 0) 1))])],
-    variances := [.co] }
+stlc_data olistDecl : olist (+α : B) where
+  | ONil
+  | OCons (x : α) (xs : olist[α{ν : x ≤ ν}])
 def olistEnv : DEnv := [("olist", olistDecl)]
-
-abbrev onilE (τ : Ty) : Exp := .ctor "olist" 0 [τ] unitE
-/-- `OCons[τ] (h, t)`, with payload `(h, (t, ()))` (ANF: `h`, `t` variables). -/
-abbrev oconsE (τ : Ty) (h t : Exp) : Exp := .ctor "olist" 1 [τ] (.pair h (.pair t unitE))
 
 theorem olistEnv_wf : olistEnv.wfB = true := by decide
 
 /-- `okList = OCons(0, OCons(1, OCons(2, ONil)))`, with the inner instances
     `Int{k₁}`, `Int{k₂}` inferred. -/
 abbrev okListE : Exp :=
-  .letin (.iconst 0) (.letin (.iconst 1) (.letin (.iconst 2)   -- c=0 b=1 a=2
-  (.letin (onilE FalseInt)                                       -- n
-  (.letin (oconsE (IntK "k2") (.bvar 1) (.bvar 0))               -- l₂ = OCons(c, n)
-  (.letin (oconsE (IntK "k1") (.bvar 3) (.bvar 0))               -- l₁ = OCons(b, l₂)
-  (oconsE TT (.bvar 5) (.bvar 0)))))))                           -- OCons(a, l₁)
+  <| let a = 0 in let b = 1 in let c = 2 in
+     let n = ONil[Int{ν : ⊥}] in
+     let l₂ = OCons[Int{ν : k2 ν}] c n in
+     let l₁ = OCons[Int{ν : k1 ν}] b l₂ in
+     OCons[Int] a l₁ |>
 
-theorem ord_okList : ∃ κ : KEnv, Check olistEnv κ [] okListE (OListT TT) := by
+theorem ord_okList : ∃ κ : KEnv, Check olistEnv κ [] okListE <ty| olist[Int] |> := by
   simp only [olistEnv, olistDecl]
   generate
   zap
@@ -108,14 +94,14 @@ theorem ord_okList : ∃ κ : KEnv, Check olistEnv κ [] okListE (OListT TT) := 
 
 /-- `badList = OCons(0, OCons(2, OCons(1, ONil)))` -/
 abbrev badListE : Exp :=
-  .letin (.iconst 0) (.letin (.iconst 2) (.letin (.iconst 1)
-  (.letin (onilE FalseInt)
-  (.letin (oconsE (IntK "k2") (.bvar 1) (.bvar 0))
-  (.letin (oconsE (IntK "k1") (.bvar 3) (.bvar 0))
-  (oconsE TT (.bvar 5) (.bvar 0)))))))
+  <| let a = 0 in let b = 2 in let c = 1 in
+     let n = ONil[Int{ν : ⊥}] in
+     let l₂ = OCons[Int{ν : k2 ν}] c n in
+     let l₁ = OCons[Int{ν : k1 ν}] b l₂ in
+     OCons[Int] a l₁ |>
 
 /-- … is rejected, whatever the instances: no κ makes its VC true. -/
-theorem ord_badList (κ : KEnv) : ¬ topVC κ [] badListE (OListT TT) olistEnv := by
+theorem ord_badList (κ : KEnv) : ¬ topVC κ [] badListE <ty| olist[Int] |> olistEnv := by
   simp [topVC, olistEnv, olistDecl]
   refine ⟨REnv.empty, fun h₁ _ h => ?_⟩
   have := (h 1 h₁).2
@@ -123,30 +109,17 @@ theorem ord_badList (κ : KEnv) : ¬ topVC κ [] badListE (OListT TT) olistEnv :
 
 /-! ## `insert` (polymorphic recursion) -/
 
-abbrev insTy : Ty := .forall .B (.arrow (Par 0) (.arrow (OListT (Par 0)) (OListT (Par 0))))
+abbrev insTy : Ty := <ty| ∀ α : B, α -> olist[α] -> olist[α] |>
 
-/-- Fig. 7.1:
-    `Λα. fix ins. λx. λys. case ys of
-       ONil _ => let tl = ONil[α{x ≤ ν}]; OCons[α] (x, tl)
-       OCons p => let (y, (ys', _)) = p; let c = x ≤ y;
-                  if c then let tl = OCons[α{x ≤ ν}] (y, ys'); OCons[α] (x, tl)
-                  else let g = ins[α{y ≤ ν}] x; let tl = g ys'; OCons[α] (y, tl)`
-    The recursive call is at `α{y ≤ ν}`: the tail's elements are all `≥ y`. -/
-abbrev insE : Exp := .tabs .B (.fix (.lam                    -- ys=0 x=1 ins=2
-  (caseL (.bvar 0)
-    [ -- in the instance: ν=0 u=1 ys=2 x=3
-      .letin (onilE (Par 0 (geR (.tbvar 0) 3)))              -- tl     u=1 ys=2 x=3
-        (oconsE (Par 0) (.bvar 3) (.bvar 0))
-    , .split (.bvar 0) (.split (.bvar 0)                     -- u=0 ys'=1 q=2 y=3 p=4 ys=5 x=6 ins=7
-        (.letin (.leq (.bvar 6) (.bvar 3))                   -- c      u=1 ys'=2 q=3 y=4 … x=7 ins=8
-          (.ite (.bvar 0)
-            -- in the instance: ν=0 c=1 u=2 ys'=3 q=4 y=5 p=6 ys=7 x=8
-            (.letin (oconsE (Par 0 (geR (.tbvar 0) 8)) (.bvar 4) (.bvar 2))   -- tl
-              (oconsE (Par 0) (.bvar 8) (.bvar 0)))
-            -- in the instance: ν=0 c=1 u=2 ys'=3 q=4 y=5
-            (.letin (.app (.tapp (.bvar 8) (Par 0 (geR (.tbvar 0) 5))) (.bvar 7))  -- g
-              (.letin (.app (.bvar 0) (.bvar 3))             -- tl     g=1 c=2 u=3 ys'=4 q=5 y=6
-                (oconsE (Par 0) (.bvar 6) (.bvar 0))))))) ])))
+/-- Fig. 7.1. The recursive call is at `α{y ≤ ν}`: the tail's elements are all
+    `≥ y`. -/
+abbrev insE : Exp :=
+  <| Λ α : B, fix ins x, λ ys, match ys with
+       | ONil => let tl = ONil[α{ν : x ≤ ν}] in OCons[α] x tl
+       | OCons y ys' =>
+           let c = x ≤ y in
+           if c then (let tl = OCons[α{ν : x ≤ ν}] y ys' in OCons[α] x tl)
+           else (let g = ins[α{ν : y ≤ ν}] x in let tl = g ys' in OCons[α] y tl) |>
 
 /-- The VC is totality and transitivity of `≤`, at `Int` and at `Bool`. -/
 theorem ord_insert (κ : KEnv) : topVC κ [] insE insTy olistEnv := by
@@ -155,18 +128,13 @@ theorem ord_insert (κ : KEnv) : topVC κ [] insE insTy olistEnv := by
 
 /-- With a monomorphic recursive call (`ins x ys'`, at `α` itself) the tail is
     only an `olist(α)`, which is not an `olist(α{y ≤ ν})`: rejected. -/
-abbrev insMonoE : Exp := .tabs .B (.fix (.lam
-  (caseL (.bvar 0)
-    [ .letin (onilE (Par 0 (geR (.tbvar 0) 3)))
-        (oconsE (Par 0) (.bvar 3) (.bvar 0))
-    , .split (.bvar 0) (.split (.bvar 0)
-        (.letin (.leq (.bvar 6) (.bvar 3))
-          (.ite (.bvar 0)
-            (.letin (oconsE (Par 0 (geR (.tbvar 0) 8)) (.bvar 4) (.bvar 2))
-              (oconsE (Par 0) (.bvar 8) (.bvar 0)))
-            (.letin (.app (.bvar 8) (.bvar 7))
-              (.letin (.app (.bvar 0) (.bvar 3))
-                (oconsE (Par 0) (.bvar 6) (.bvar 0))))))) ])))
+abbrev insMonoE : Exp :=
+  <| Λ α : B, fix ins x, λ ys, match ys with
+       | ONil => let tl = ONil[α{ν : x ≤ ν}] in OCons[α] x tl
+       | OCons y ys' =>
+           let c = x ≤ y in
+           if c then (let tl = OCons[α{ν : x ≤ ν}] y ys' in OCons[α] x tl)
+           else (let g = ins x in let tl = g ys' in OCons[α] y tl) |>
 
 theorem ord_insert_mono_bad (κ : KEnv) : ¬ topVC κ [] insMonoE insTy olistEnv := by
   simp [topVC, olistEnv, olistDecl]
@@ -177,21 +145,13 @@ theorem ord_insert_mono_bad (κ : KEnv) : ¬ topVC κ [] insMonoE insTy olistEnv
 def sortEnv : DEnv := [("list", listDecl), ("olist", olistDecl)]
 theorem sortEnv_wf : sortEnv.wfB = true := by decide
 
-abbrev isortTy : Ty := .forall .B (.arrow (ListT (Par 0)) (OListT (Par 0)))
+abbrev isortTy : Ty := <ty| ∀ α : B, list[α] -> olist[α] |>
 
-/-- `let ins = (insE : insTy) in
-     Λα. fix sort. λxs. case xs of
-       Nil _  => ONil[α]
-       Cons p => let (h, (t, _)) = p; let s = sort t; let g = ins[α] h; g s` -/
 abbrev isortE : Exp :=
-  .letin (.ann insE insTy)                                   -- ins
-  (.tabs .B (.fix                                            -- xs=0 sort=1 ins=2
-     (caseL (.bvar 0)
-       [ onilE (Par 0)
-       , .split (.bvar 0) (.split (.bvar 0)                  -- u=0 t=1 q=2 h=3 p=4 xs=5 sort=6 ins=7
-           (.letin (.app (.bvar 6) (.bvar 1))                -- s
-             (.letin (.app (.tapp (.bvar 8) (Par 0)) (.bvar 4))   -- g    s=1 u=2 t=3 q=4 h=5 … ins=9
-               (.app (.bvar 0) (.bvar 1))))) ])))
+  <| let ins : ⌜insTy⌝ = ⌜insE⌝ in
+     Λ α : B, fix sort xs, match xs with
+       | Nil => ONil[α]
+       | Cons h t => let s = sort t in let g = ins[α] h in g s |>
 
 theorem ord_isort (κ : KEnv) : topVC κ [] isortE isortTy sortEnv := by
   simp [topVC, sortEnv, olistDecl, listDecl]
@@ -202,18 +162,14 @@ theorem ord_isort (κ : KEnv) : topVC κ [] isortE isortTy sortEnv := by
   A client, polymorphic in `α`, compares two elements of an ordered list — at
   the abstract sort — and the type system knows the answer. -/
 
-abbrev headsTy : Ty := .forall .B (.arrow (OListT (Par 0)) TrueB)
+abbrev headsTy : Ty := <ty| ∀ α : B, olist[α] -> Bool{ν : ν = true} |>
 
-/-- `Λα. λl. case l of ONil _ => true
-                     | OCons p => let (x, (r, _)) = p in case r of
-                         ONil _ => true | OCons q => let (y, _) = q in x ≤ y` -/
-abbrev headsOrderedE : Exp := .tabs .B (.lam
-  (caseL (.bvar 0)
-    [ .bconst true
-    , .split (.bvar 0) (.split (.bvar 0)                     -- u=0 r=1 q=2 x=3 p=4 l=5
-        (caseL (.bvar 1)
-          [ .bconst true
-          , .split (.bvar 0) (.leq (.bvar 6) (.bvar 1)) ])) ]))  -- rest=0 y=1 q'=2 u=3 r=4 q=5 x=6
+abbrev headsOrderedE : Exp :=
+  <| Λ α : B, λ l, match l with
+       | ONil => true
+       | OCons x r => match r with
+           | ONil => true
+           | OCons y _ => x ≤ y |>
 
 theorem ord_headsOrdered (κ : KEnv) : topVC κ [] headsOrderedE headsTy olistEnv := by
   simp [topVC, olistEnv, olistDecl]
@@ -225,15 +181,15 @@ theorem ord_headsOrdered (κ : KEnv) : topVC κ [] headsOrderedE headsTy olistEn
   that running it never gets stuck and can only return `true`. -/
 
 abbrev sortClientE : Exp :=
-  .letin (.ann isortE isortTy)                               -- sort
-  (.letin (.ann headsOrderedE headsTy)                       -- heads
-  (.letin (.iconst 3) (.letin (.iconst 1) (.letin (.iconst 2)
-  (.letin (nilE TT)
-  (.letin (consE TT (.bvar 1) (.bvar 0))                     -- [2]
-  (.letin (consE TT (.bvar 3) (.bvar 0))                     -- [1, 2]
-  (.letin (consE TT (.bvar 5) (.bvar 0))                     -- [3, 1, 2]     heads=7 sort=8
-  (.letin (.app (.tapp (.bvar 8) TT) (.bvar 0))              -- s = sort[Int] [3, 1, 2]
-  (.app (.tapp (.bvar 8) TT) (.bvar 0)))))))))))             -- heads[Int] s
+  <| let sort : ⌜isortTy⌝ = ⌜isortE⌝ in
+     let heads : ⌜headsTy⌝ = ⌜headsOrderedE⌝ in
+     let a = 3 in let b = 1 in let c = 2 in
+     let nil = Nil[Int] in
+     let l₁ = Cons[Int] c nil in           -- [2]
+     let l₂ = Cons[Int] b l₁ in            -- [1, 2]
+     let l₃ = Cons[Int] a l₂ in            -- [3, 1, 2]
+     let s = sort[Int] l₃ in
+     heads[Int] s |>
 
 theorem ord_sortClient_vc (κ : KEnv) : topVC κ [] sortClientE TrueB sortEnv := by
   simp [topVC, sortEnv, olistDecl, listDecl]

@@ -23,43 +23,35 @@ attribute [local simp] Exp.ftv Ty.ftv Refinement.ftv Formula.ftv Term.ftv Base.f
 @[qualif] def QEqM (a b : Int) : Prop := a = b
 @[qualif] def QEqAddM (a b c : Int) : Prop := a = b + c
 
-/-- `len` of BVar i, as a κ argument. -/
-abbrev lenA (i : Nat) : (Σ b : Base, Term b) := ⟨.int, lenB i⟩
-
 /-! ## `length`: `xs:list α → Int{k(ν, len xs)}`, where the client needs `ν = len xs` -/
-abbrev lengthTyK : Ty :=
-  .forall .star (.arrow (ListT (Par 0)) (.refine .int (.kapp "k" [⟨.int, .bvar .int 0⟩, lenA 1])))
+abbrev lengthTyK : Ty := <ty| ∀ α : ⋆, (xs : list[α]) -> Int{ν : k ν (len xs)} |>
 
 theorem infer_length : ∃ κ : KEnv, Check lenEnv κ []
-    (.letin (.ann lengthE lengthTyK)
-      (.lam (.app (.tapp (.bvar 1) TT) (.bvar 0))))
-    (.arrow (ListT TT) (.refine .int (.fmla (.eq .int (.bvar .int 0) (lenB 1))))) := by
-  simp only [lengthE, lenEnv, lenListDecl, listDecl]
+    <| let length : ⌜lengthTyK⌝ = ⌜lengthE⌝ in λ xs, length[Int] xs |>
+    <ty| (xs : list[Int]) -> Int{ν : ν = len xs} |> := by
+  simp only [lengthE, lenEnv, lenListDecl]
   generate
   fix
 
 /-! ## `map`: a κ in a datatype refinement, `list β{k(len ν, len xs)}` -/
-abbrev mapTyK : Ty := .forall .star (.forall .star
-  (.arrow (.arrow (Par 1) (Par 0)) (.arrow (ListT (Par 1))
-    (.dataL "list" [Par 0] (.kapp "k" [lenA 0, lenA 1])))))
+abbrev mapTyK : Ty :=
+  <ty| ∀ α : ⋆, ∀ β : ⋆, (α -> β) -> (xs : list[α]) -> list[β]{ν : k (len ν) (len xs)} |>
 
 theorem infer_map : ∃ κ : KEnv, Check lenEnv κ []
-    (.letin (.ann mapE mapTyK)
-      (.lam (.lam (.app (.app (.tapp (.tapp (.bvar 2) TT) TT) (.bvar 1)) (.bvar 0)))))
-    (.arrow (.arrow TT TT) (.arrow (ListT TT) (ListLen TT (lenB 1)))) := by
-  simp only [mapE, lenEnv, lenListDecl, listDecl]
+    <| let map : ⌜mapTyK⌝ = ⌜mapE⌝ in λ f xs, map[Int, Int] f xs |>
+    <ty| (Int -> Int) -> (xs : list[Int]) -> list[Int]{ν : len ν = len xs} |> := by
+  simp only [mapE, lenEnv, lenListDecl]
   generate
   fix
 
 /-! ## `append`: a three-way relation `k(len ν, len xs, len ys)`; the client needs `len ν = len xs + len ys` -/
-abbrev appendTyK : Ty := .forall .star (.arrow (ListT (Par 0)) (.arrow (ListT (Par 0))
-  (.dataL "list" [Par 0] (.kapp "k" [lenA 0, lenA 2, lenA 1]))))
+abbrev appendTyK : Ty :=
+  <ty| ∀ α : ⋆, (xs : list[α]) -> (ys : list[α]) -> list[α]{ν : k (len ν) (len xs) (len ys)} |>
 
 theorem infer_append : ∃ κ : KEnv, Check lenEnv κ []
-    (.letin (.ann appendE appendTyK)
-      (.lam (.lam (.app (.app (.tapp (.bvar 2) TT) (.bvar 1)) (.bvar 0)))))
-    (.arrow (ListT TT) (.arrow (ListT TT) (ListLen TT (.add (lenB 2) (lenB 1))))) := by
-  simp only [appendE, lenEnv, lenListDecl, listDecl]
+    <| let append : ⌜appendTyK⌝ = ⌜appendE⌝ in λ xs ys, append[Int] xs ys |>
+    <ty| (xs : list[Int]) -> (ys : list[Int]) -> list[Int]{ν : len ν = len xs + len ys} |> := by
+  simp only [appendE, lenEnv, lenListDecl]
   generate
   fix
 
@@ -68,52 +60,41 @@ theorem infer_append : ∃ κ : KEnv, Check lenEnv κ []
   The client `cons` calls `nonneg t` and needs `0 < len (Cons h t)`, i.e. a
   lemma at least as strong as `0 ≤ len t`; the solver finds one that the
   recursion establishes. -/
-abbrev nonnegTyK : Ty :=
-  .forall .star (.arrow (ListT (Par 0)) (.refine .int (.kapp "k" [lenA 1])))
+abbrev nonnegTyK : Ty := <ty| ∀ α : ⋆, (xs : list[α]) -> Int{ν : k (len xs)} |>
 
 theorem infer_nonneg : ∃ κ : KEnv, Check lenEnv κ []
-    (.letin (.ann nonnegE nonnegTyK)
-      (.tabs .star (.lam (.lam                                          -- t=0 h=1 nonneg=2
-        (.letin (.app (.tapp (.bvar 2) (Par 0)) (.bvar 0))
-          (consE (Par 0) (.bvar 2) (.bvar 1)))))))
+    <| let nonneg : ⌜nonnegTyK⌝ = ⌜nonnegE⌝ in
+       Λ α : ⋆, λ h t, let _ = nonneg[α] t in Cons[α] h t |>
     consPosTy := by
-  simp only [nonnegE, consPosTy, lenEnv, lenListDecl, listDecl]
+  simp only [nonnegE, consPosTy, lenEnv, lenListDecl]
   generate
   fix
 
 /-! ## `mirror`: an inferred height relation (the verification condition contains `ite`) -/
-abbrev heightA (i : Nat) : (Σ b : Base, Term b) := ⟨.int, heightB i⟩
-abbrev mirrorTyK : Ty := .forall .star (.arrow (TreeT (Par 0))
-  (TreeT (Par 0) (.kapp "k" [heightA 0, heightA 1])))
+abbrev mirrorTyK : Ty :=
+  <ty| ∀ α : ⋆, (t : tree[α]) -> tree[α]{ν : k (height ν) (height t)} |>
 
 theorem infer_mirror : ∃ κ : KEnv, Check htreeEnv κ []
-    (.letin (.ann mirrorE mirrorTyK)
-      (.lam (.app (.tapp (.bvar 1) TT) (.bvar 0))))
-    (.arrow (TreeT TT) (TreeT TT (.fmla (.eq .int (heightB 0) (heightB 1))))) := by
-  simp only [mirrorE, htreeEnv, htreeDecl, treeDecl]
+    <| let mirror : ⌜mirrorTyK⌝ = ⌜mirrorE⌝ in λ t, mirror[Int] t |>
+    <ty| (t : tree[Int]) -> tree[Int]{ν : height ν = height t} |> := by
+  simp only [mirrorE, htreeEnv, htreeDecl]
   generate
   fix
 
 /-! ## `filterGe`: the length bound inferred, alongside the element refinement's κ (`solve` = `zap`, then `fix`) -/
 abbrev filterGeTyK : Ty :=
-  .arrow TT (.arrow (ListT TT)
-    (.dataL "list" [.refine .int (.fmla (.leqI (.bvar .int 2) (.bvar .int 0)))]
-      (.kapp "kl" [lenA 0, lenA 1])))
+  <ty| (lo : Int) -> (xs : list[Int]) -> list[Int{ν : lo ≤ ν}]{ν : kl (len ν) (len xs)} |>
 
 theorem infer_filterGe : ∃ κ : KEnv, Check lenEnv κ []
-    (.letin (.ann filterGeE filterGeTyK) (.lam (.lam (.app (.app (.bvar 2) (.bvar 1)) (.bvar 0)))))
-    (.arrow TT (.arrow (ListT TT)
-      (.dataL "list" [.refine .int (.fmla (.leqI (.bvar .int 2) (.bvar .int 0)))]
-        (.fmla (.leqI (lenB 0) (lenB 1)))))) := by
-  simp only [filterGeE, lenEnv, lenListDecl, listDecl]
+    <| let filterGe : ⌜filterGeTyK⌝ = ⌜filterGeE⌝ in λ lo xs, filterGe lo xs |>
+    <ty| (lo : Int) -> (xs : list[Int]) -> list[Int{ν : lo ≤ ν}]{ν : len ν ≤ len xs} |> := by
+  simp only [filterGeE, lenEnv, lenListDecl]
   generate
   solve
 
 /-! ## `sum` over an integer list (an `Int`-field measure) -/
-abbrev sumB (i : Nat) : (Σ b : Base, Term b) := ⟨.int, .mbvar "sum" i⟩
 theorem infer_sum : ∃ κ : KEnv, Check ilistEnv κ []
-    (.letin (.ann sumIListE (.arrow (.dataL "ilist" []) (.refine .int (.kapp "k" [⟨.int, .bvar .int 0⟩, sumB 1]))))
-      (.lam (.app (.bvar 1) (.bvar 0))))
+    <| let go : (xs : ilist) -> Int{ν : k ν (sum xs)} = ⌜sumIListE⌝ in λ xs, go xs |>
     sumIListTy := by
   simp only [sumIListE, ilistEnv, ilistDecl]
   generate
@@ -121,21 +102,16 @@ theorem infer_sum : ∃ κ : KEnv, Check ilistEnv κ []
 
 /-! ## `count` over a list of booleans (a `Bool`-field measure; `ite` in the VC) -/
 theorem infer_count : ∃ κ : KEnv, Check blistEnv κ []
-    (.letin (.ann countE (.arrow (.dataL "blist" [])
-        (.refine .int (.kapp "k" [⟨.int, .bvar .int 0⟩, ⟨.int, countB 1⟩]))))
-      (.lam (.app (.bvar 1) (.bvar 0))))
+    <| let go : (xs : blist) -> Int{ν : k ν (countTrue xs)} = ⌜countE⌝ in λ xs, go xs |>
     countTy := by
   simp only [countE, blistEnv, blistDecl]
   generate
   fix
 
 /-! ## `node`, with the statement of its size lemma inferred -/
-abbrev sizeA (i : Nat) : (Σ b : Base, Term b) := ⟨.int, sizeB i⟩
 theorem infer_node : ∃ κ : KEnv, Check treeEnv κ []
-    (.letin (.ann sizeNonnegE (.forall .star (.arrow (TreeT (Par 0)) (.refine .int (.kapp "k" [sizeA 1])))))
-      (.tabs .star (.lam (.lam (.lam                                   -- r=0 x=1 l=2 lemma=3
-        (.letin (.app (.tapp (.bvar 3) (Par 0)) (.bvar 0))
-          (.ctor "tree" 1 [Par 0] (.pair (.bvar 3) (.pair (.bvar 2) (.pair (.bvar 1) unitE))))))))))
+    <| let lemma : ∀ α : ⋆, (t : tree[α]) -> Int{ν : k (size t)} = ⌜sizeNonnegE⌝ in
+       Λ α : ⋆, λ l x r, let _ = lemma[α] r in Node[α] l x r |>
     nodeTy := by
   simp only [sizeNonnegE, nodeTy, treeEnv, treeDecl]
   generate
@@ -144,11 +120,10 @@ theorem infer_node : ∃ κ : KEnv, Check treeEnv κ []
 /-! ## A lemma relating two measures, inferred: the client needs `height t ≤ size t`; the
   induction also needs `0 ≤ height t` (and `0 ≤ size t`), which the solver finds too -/
 theorem infer_heightLeSize : ∃ κ : KEnv, Check htreeEnv κ []
-    (.letin (.ann sizeNonnegE (.forall .star (.arrow (TreeT (Par 0))
-        (.refine .int (.kapp "k" [heightA 1, sizeA 1])))))
-      (.lam (.app (.tapp (.bvar 1) TT) (.bvar 0))))
-    (.arrow (TreeT TT) (.refine .int (.fmla (.leqI (heightB 1) (sizeB 1))))) := by
-  simp only [sizeNonnegE, htreeEnv, htreeDecl, treeDecl]
+    <| let lemma : ∀ α : ⋆, (t : tree[α]) -> Int{ν : k (height t) (size t)} = ⌜sizeNonnegE⌝ in
+       λ t, lemma[Int] t |>
+    <ty| (t : tree[Int]) -> Int{ν : height t ≤ size t} |> := by
+  simp only [sizeNonnegE, htreeEnv, htreeDecl]
   generate
   fix
 
@@ -156,14 +131,12 @@ theorem infer_heightLeSize : ∃ κ : KEnv, Check htreeEnv κ []
 
 @[qualif] def QSuccM (a b : Int) : Prop := a = b + 1
 
-abbrev insTyK : Ty := .forall .B (.arrow (Par 0) (.arrow (OListT (Par 0))
-  (.dataL "olist" [Par 0] (.kapp "k" [lenA 0, lenA 1]))))
+abbrev insTyK : Ty :=
+  <ty| ∀ α : B, α -> (ys : olist[α]) -> olist[α]{ν : k (len ν) (len ys)} |>
 
 theorem infer_insert : ∃ κ : KEnv, Check olistLenEnv κ []
-    (.letin (.ann insE insTyK)
-      (.lam (.lam (.app (.app (.tapp (.bvar 2) TT) (.bvar 1)) (.bvar 0)))))
-    (.arrow TT (.arrow (OListT TT)
-      (.dataL "olist" [TT] (.fmla (.eq .int (lenB 0) (.add (.const .int 1) (lenB 1))))))) := by
-  simp only [insE, olistLenEnv, olistDecl]
+    <| let ins : ⌜insTyK⌝ = ⌜insE⌝ in λ x ys, ins[Int] x ys |>
+    <ty| Int -> (ys : olist[Int]) -> olist[Int]{ν : len ν = 1 + len ys} |> := by
+  simp only [insE, olistLenEnv, olistLenDecl]
   generate
   solve

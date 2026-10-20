@@ -30,5 +30,4 @@ import Flex.VCG.STLC.Examples.Ord
 import Flex.VCG.STLC.Examples.Measure
 import Flex.VCG.STLC.Examples.MeasureInference
 import Flex.VCG.STLC.Examples.Flex
-import Flex.VCG.STLC.Examples.Notation
 import Flex.VCG.STLC.Audit

@@ -42,7 +42,7 @@ inductive Hastype : DEnv → KEnv → TEnv → Exp → Ty → Prop where
   | add_var {de κ Γ x y r₁ r₂} :
       Γ.lookup x = some (.refine .int r₁) →
       Γ.lookup y = some (.refine .int r₂) →
-      Hastype de κ Γ (.add (.fvar x) (.fvar y)) <ty| Int{ν : ν = x + y}|>
+      Hastype de κ Γ (.add (.fvar x) (.fvar y)) (.refine .int (.fmla (.eq .int (.bvar .int 0) (.add (.fvar .int x) (.fvar .int y)))))
   | leq_var {de κ Γ x y b r₁ r₂} :
       Γ.lookup x = some (.refine b r₁) →
       Γ.lookup y = some (.refine b r₂) →
@@ -50,11 +50,11 @@ inductive Hastype : DEnv → KEnv → TEnv → Exp → Ty → Prop where
       Hastype de κ Γ (.leq (.fvar x) (.fvar y)) (leqTy b x y)
   | not_var {de κ Γ x r} :
       Γ.lookup x = some (.refine .bool r) →
-      Hastype de κ Γ (.not (.fvar x)) <ty|Bool{ν : ν = ¬x}|>
+      Hastype de κ Γ (.not (.fvar x)) (.refine .bool (.fmla (.eq .bool (.bvar .bool 0) (.not (.fvar .bool x)))))
   | and_var {de κ Γ x y rx ry} :
       Γ.lookup x = some (.refine .bool rx) →
       Γ.lookup y = some (.refine .bool ry) →
-      Hastype de κ Γ (.and (.fvar x) (.fvar y)) <ty|Bool{ν : (ν = x ∧ y)}|>
+      Hastype de κ Γ (.and (.fvar x) (.fvar y)) (.refine .bool (.fmla (.eq .bool (.bvar .bool 0) (.and (.fvar .bool x) (.fvar .bool y)))))
   | unreach {de κ Γ t} :
       Entail κ Γ (fun _ => False) →
       Ty.WFBVars t →
@@ -63,8 +63,8 @@ inductive Hastype : DEnv → KEnv → TEnv → Exp → Ty → Prop where
       Γ.lookup x = some (.refine .bool r) →
       y ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ e₁.fv ++ e₂.fv ++ t.fv ++ [x] →
       Ty.WFBVars t →
-      Hastype de κ ((y, <ty|Bool{ν : x = true }|>) :: Γ) e₁ t →
-      Hastype de κ ((y, <ty|Bool{ν : x = false}|>) :: Γ) e₂ t →
+      Hastype de κ ((y, (.refine .bool (.fmla (.eq .bool (.fvar .bool x) (.const .bool true))))) :: Γ) e₁ t →
+      Hastype de κ ((y, (.refine .bool (.fmla (.eq .bool (.fvar .bool x) (.const .bool false))))) :: Γ) e₂ t →
       Hastype de κ Γ (.ite (.fvar x) e₁ e₂) t
   | fix {de κ Γ e s t f x} (as : List TVar) :
       (∀ a ∈ as, a ∉ TEnv.ftv Γ) →

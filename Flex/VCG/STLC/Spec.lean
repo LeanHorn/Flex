@@ -39,5 +39,5 @@ import Flex.VCG.STLC.Spec.Theorems
   the kernel checks).
 
   Dependencies: `Spec/*` imports only `Spec/*`, except `Spec/Theorems`, which
-  imports the proofs it composes. `Notation` sits between `Spec` and `Checker`
-  (the typing rules use it); `Checker/*` imports no proofs. -/
+  imports the proofs it composes; `Checker/*` imports no proofs. `Notation` is
+  used only by the examples. -/

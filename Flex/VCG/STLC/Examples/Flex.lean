@@ -17,7 +17,7 @@ attribute [local simp] Exp.ftv Ty.ftv Refinement.ftv Formula.ftv Term.ftv Base.f
   Cstr.conjAll List.finRange DEnv.var DataDecl.measBody? Base.constSubst
   TEnv.genVars Ty.closeTv BSubst.closeAt List.eraseDups_cons caseL
 
-theorem flex_loopMain_vc : ∃ κ : KEnv, Check [] κ [] loopMain (.refine .int (.fmla .ff)) := by
+theorem flex_loopMain_vc : ∃ κ : KEnv, Check [] κ [] loopMain <ty| Int{ν : ⊥} |> := by
   simp only [check, synth, sub, implyBindCstr, Cstr.interp, Cstr.triv,
         loopMain, loop, loopTy, self, prim, Refinement.interp, Formula.interp, Term.interp,
         REnv.get, TEnv.dom, TEnv.tyFv, Ty.fv, Refinement.fv, Formula.fv, Term.fv, Exp.fv,
@@ -35,7 +35,8 @@ theorem flex_poly_choose : ∃ κ : KEnv, Check [] κ [] choosePoly chooseTy := 
   generate
   all_goals solve
 
-theorem flex_poly_impredicative : ∃ κ : KEnv, Check [] κ [] (.letin (.ann idF idFTy) (.app (.tapp (.bvar 0) idFTy) (.bvar 0))) idFTy := by
+theorem flex_poly_impredicative : ∃ κ : KEnv, Check [] κ []
+    <| let idF : ⌜idFTy⌝ = ⌜idF⌝ in idF[∀ β : ⋆, β -> β] idF |> idFTy := by
   simp only [idF, idFTy]
   generate
   all_goals solve
@@ -45,12 +46,14 @@ theorem flex_poly_iter : ∃ κ : KEnv, Check [] κ [] iterPoly iterTy := by
   generate
   all_goals solve
 
-theorem flex_poly_tapp_var : ∃ κ : KEnv, Check [] κ [] (.lam (.letin (.bvar 0) (.app (.tapp (.ann idPoly idTy) (.refine .int (.fmla (.leqI (.bvar .int 2) (.bvar .int 0))))) (.bvar 0)))) (.arrow TT (.refine .int (.fmla (.leqI (.bvar .int 1) (.bvar .int 0))))) := by
+theorem flex_poly_tapp_var : ∃ κ : KEnv, Check [] κ []
+    <| λ n, let m = n in (⌜idPoly⌝ : ⌜idTy⌝)[Int{ν : n ≤ ν}] m |>
+    <ty| (n : Int) -> Int{ν : n ≤ ν} |> := by
   simp only [idPoly, idTy]
   generate
   all_goals solve
 
-theorem flex_poly_nest : ∃ κ : KEnv, Check [] κ [] (nestE (.app (.tapp (.bvar 7) (.arrow TT (TV ttR))) (.bvar 2))) nestTy := by
+theorem flex_poly_nest : ∃ κ : KEnv, Check [] κ [] nestE nestTy := by
   generate
   all_goals solve
 
@@ -59,12 +62,13 @@ theorem flex_data_fromSome : ∃ κ : KEnv, Check optionEnv κ [] fromSomeE from
   generate
   all_goals solve
 
-theorem flex_data_ordOK : ∃ κ : KEnv, Check ordEnv κ [] ordOKE (.arrow OrdT TrueB) := by
+theorem flex_data_ordOK : ∃ κ : KEnv, Check ordEnv κ [] ordOKE <ty| ⌜OrdT⌝ -> ⌜TrueB⌝ |> := by
   simp only [ordOKE, ordEnv, ordDecl]
   generate
   all_goals solve
 
-theorem flex_data_mkOrd : ∃ κ : KEnv, Check ordEnv κ [] (.letin (.iconst 3) (.letin (.iconst 5) (.ctor "ord" 0 [] (.pair (.bvar 1) (.pair (.bvar 0) unitE))))) OrdT := by
+theorem flex_data_mkOrd : ∃ κ : KEnv, Check ordEnv κ []
+    <| let a = 3 in let b = 5 in MkOrd a b |> OrdT := by
   simp only [ordEnv, ordDecl]
   generate
   all_goals solve
@@ -79,12 +83,13 @@ theorem flex_data_map : ∃ κ : KEnv, Check listEnv κ [] mapE mapTy := by
   generate
   all_goals solve
 
-theorem flex_data_sumList_pos : ∃ κ : KEnv, Check listEnv κ [] (.lam (.app (.ann sumListE sumListTy) (.bvar 0))) (.arrow (ListT Pos) NatT) := by
+theorem flex_data_sumList_pos : ∃ κ : KEnv, Check listEnv κ []
+    <| λ xs, (⌜sumListE⌝ : ⌜sumListTy⌝) xs |> <ty| list[⌜Pos⌝] -> ⌜NatT⌝ |> := by
   simp only [sumListE, sumListTy, listEnv, listDecl]
   generate
   all_goals solve
 
-theorem flex_data_pred_contra : ∃ κ : KEnv, Check predEnv κ [] (.lam (.bvar 0)) (.arrow (.dataL "pred" [TT]) (.dataL "pred" [NatT])) := by
+theorem flex_data_pred_contra : ∃ κ : KEnv, Check predEnv κ [] <| λ p, p |> <ty| pred[Int] -> pred[⌜NatT⌝] |> := by
   simp only [predEnv, predDecl]
   generate
   all_goals solve
@@ -98,7 +103,8 @@ theorem flex_ord_max : ∃ κ : KEnv, Check [] κ [] maxE maxTy := by
   generate
   all_goals solve
 
-theorem flex_ord_max_bool : ∃ κ : KEnv, Check [] κ [] (.letin (.bconst false) (.letin (.bconst true) (.app (.app (.tapp (.ann maxE maxTy) BoolT) (.bvar 1)) (.bvar 0)))) TrueB := by
+theorem flex_ord_max_bool : ∃ κ : KEnv, Check [] κ []
+    <| let ff = false in let tt = true in (⌜maxE⌝ : ⌜maxTy⌝)[Bool] ff tt |> TrueB := by
   generate
   all_goals solve
 

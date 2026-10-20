@@ -142,16 +142,16 @@ mutual
     | .add (.fvar x) (.fvar y) =>
         match Γ.lookup x, Γ.lookup y with
         | some (.refine .int _), some (.refine .int _) =>
-            some (Cstr.triv, <ty| Int{ν : ν = x + y}|>)
+            some (Cstr.triv, (.refine .int (.fmla (.eq .int (.bvar .int 0) (.add (.fvar .int x) (.fvar .int y))))))
         | _, _ => none
     | .not (.fvar x) =>
         match Γ.lookup x with
-        | some (.refine .bool _) => some (Cstr.triv, <ty| Bool{ν : ν = ¬x}|>)
+        | some (.refine .bool _) => some (Cstr.triv, (.refine .bool (.fmla (.eq .bool (.bvar .bool 0) (.not (.fvar .bool x))))))
         | _ => none
     | .and (.fvar x) (.fvar y) =>
         match Γ.lookup x, Γ.lookup y with
         | some (.refine .bool _), some (.refine .bool _) =>
-            some (Cstr.triv, <ty| Bool{ν : ν = x ∧ y} |>)
+            some (Cstr.triv, (.refine .bool (.fmla (.eq .bool (.bvar .bool 0) (.and (.fvar .bool x) (.fvar .bool y))))))
         | _, _ => none
     | .tapp e s =>
         match synth de Γ e with
@@ -252,8 +252,8 @@ mutual
                   -- in each branch without conjoining into the (atomic) refinement.
                   let y := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ
                                         ++ e₁.fv ++ e₂.fv ++ t.fv ++ [x])
-                  let r_true  : Ty := <ty| Bool{ν : x = true}|>
-                  let r_false : Ty := <ty| Bool{ν : x = false}|>
+                  let r_true  : Ty := (.refine .bool (.fmla (.eq .bool (.fvar .bool x) (.const .bool true))))
+                  let r_false : Ty := (.refine .bool (.fmla (.eq .bool (.fvar .bool x) (.const .bool false))))
                   match check de ((y, r_true) :: Γ) e₁ t,
                         check de ((y, r_false) :: Γ) e₂ t with
                   | some c₁, some c₂ =>

@@ -1,5 +1,4 @@
 import Flex.VCG.STLC.Checker.Entailment
-import Flex.VCG.STLC.Notation
 
 open STLC
 
@@ -99,16 +98,16 @@ mutual
     | add_var {de κ Γ x y r₁ r₂} :
         Γ.lookup x = some (.refine .int r₁) →
         Γ.lookup y = some (.refine .int r₂) →
-        Synth de κ Γ (.add (.fvar x) (.fvar y)) <ty| Int{ν : ν = x + y}|>
+        Synth de κ Γ (.add (.fvar x) (.fvar y)) (.refine .int (.fmla (.eq .int (.bvar .int 0) (.add (.fvar .int x) (.fvar .int y)))))
 
     | not_var {de κ Γ x r} :
         Γ.lookup x = some (.refine .bool r) →
-        Synth de κ Γ (.not (.fvar x)) <ty|Bool{ν : ν = ¬x}|>
+        Synth de κ Γ (.not (.fvar x)) (.refine .bool (.fmla (.eq .bool (.bvar .bool 0) (.not (.fvar .bool x)))))
 
     | and_var {de κ Γ x y rx ry} :
         Γ.lookup x = some (.refine .bool rx) →
         Γ.lookup y = some (.refine .bool ry) →
-        Synth de κ Γ (.and (.fvar x) (.fvar y)) <ty|Bool{ν : ν = x ∧ y} |>
+        Synth de κ Γ (.and (.fvar x) (.fvar y)) (.refine .bool (.fmla (.eq .bool (.bvar .bool 0) (.and (.fvar .bool x) (.fvar .bool y)))))
 
     /-- T-TAPP: instantiate a polymorphic type with a (well-formed) type of an
         appropriate kind; refinements on the type variable strengthen the instance. -/
@@ -156,8 +155,8 @@ mutual
     | ite {de κ Γ x y e₁ e₂ r t} :
         Γ.lookup x = some (.refine .bool r) →
         y ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ e₁.fv ++ e₂.fv ++ t.fv ++ [x] →
-        Check de κ ((y, <ty|Bool{ν : x = true }|>) :: Γ) e₁ t →
-        Check de κ ((y, <ty|Bool{ν : x = false}|>) :: Γ) e₂ t →
+        Check de κ ((y, (.refine .bool (.fmla (.eq .bool (.fvar .bool x) (.const .bool true))))) :: Γ) e₁ t →
+        Check de κ ((y, (.refine .bool (.fmla (.eq .bool (.fvar .bool x) (.const .bool false))))) :: Γ) e₂ t →
         Check de κ Γ (.ite (.fvar x) e₁ e₂) t
 
     /-- FIX (Chk-Rec, assume–guarantee): check the body of the recursive

@@ -1,4 +1,5 @@
 import Flex.Tactic.Tactics.Fix
+import Flex.Tactic.Tactics.Fusion
 import Flex.Fusion.Flatten
 
 namespace PABatchTests
@@ -336,3 +337,60 @@ run_elab do
     catch _ => pure false
     if accepted then throwError "synthesis decisions bypassed proof certification"
   finally Flex.CHC.restoreTermState saved
+
+-- Rejected candidates must preserve Zap's progress and allow a different witness.
+open Lean Meta Elab Term Tactic in
+set_option flex.standardQualifiers false in
+run_elab do
+  let target ← elabTerm (← `(∃ seed k : Int → Prop,
+    seed 0 ∧ (∀ x, seed x → k x) ∧ (∀ x, k x → k (-x)) ∧
+    (∀ x, k x → x = 0))) none
+  let goal ← mkFreshExprMVar (some target) (kind := .syntheticOpaque)
+  let remaining ← Tactic.run goal.mvarId! do
+    evalTactic (← `(tactic| zap))
+    let entry ← getGoals
+    let cleaned ← getMainTarget
+    for oracle in #[Flex.PA.smtOracle 2000,
+        fun targets => pure (targets.map fun _ => .unknown "test"),
+        fun _ => pure #[]] do
+      let rejected ← try
+        fixImpl (proofOracle := some (fun _ => pure none)) (synthOracle := some oracle)
+        pure false
+      catch _ => pure true
+      unless rejected do throwError "kept an invalid or unvalidated predicate"
+      unless (← getGoals) == entry && (← instantiateMVars (← getMainTarget)) == cleaned do
+        throwError "failed Fix discarded Zap progress or changed its remaining goal"
+      if ← (← getMainGoal).isAssigned then throwError "failed Fix assigned its entry goal"
+    evalTactic (← `(tactic| refine ⟨fun x : Int => x = 0, ?_⟩))
+    evalTactic (← `(tactic| grind))
+  unless remaining.isEmpty do throwError "could not choose a different predicate after rollback"
+  checkWithKernel (← instantiateMVars goal)
+
+-- A validated residual remains usable; an inconclusive check can use a Lean proof.
+open Lean Meta Elab Term Tactic in
+set_option flex.standardQualifiers false in
+run_elab do
+  for inconclusive in #[false, true] do
+    let target ← elabTerm (← `(∃ k : Int → Prop, k 0 ∧ (∀ x, k x → x = x))) none
+    let goal ← mkFreshExprMVar (some target) (kind := .syntheticOpaque)
+    let remaining ← Tactic.run goal.mvarId! do
+      let oracle := if inconclusive then
+        fun targets => pure (targets.map fun _ => .unknown "test")
+        else Flex.PA.smtOracle 2000
+      let prove := if inconclusive then proveLeaf else fun _ => pure none
+      fixImpl (proofOracle := some prove) (synthOracle := some oracle)
+      if inconclusive then
+        unless (← getGoals).isEmpty do throwError "discarded the safety proof"
+      else
+        unless (← getGoals).length == 1 do throwError "lost the validated residual"
+        evalTactic (← `(tactic| rfl))
+    unless remaining.isEmpty do throwError "validated residual could not be completed"
+    checkWithKernel (← instantiateMVars goal)
+  let target ← elabTerm (← `(∀ p : Prop, p → ∃ k : Int → Prop, k 0 ∧ p)) none
+  let goal ← mkFreshExprMVar (some target) (kind := .syntheticOpaque)
+  let remaining ← Tactic.run goal.mvarId! do
+    evalTactic (← `(tactic| intros p h))
+    fixImpl (synthOracle := some (fun _ => throwError "checked a predicate-independent obligation"))
+    evalTactic (← `(tactic| assumption))
+  unless remaining.isEmpty do throwError "lost an independent residual"
+  checkWithKernel (← instantiateMVars goal)

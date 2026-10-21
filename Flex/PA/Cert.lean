@@ -53,12 +53,18 @@ def emitPALeaf
     | none => throwError "fix: could not certify a predicate head for '{κ.name}':{indentExpr body}"
   return conjProofs pairs
 
-/-- Build the certificate structurally, leaving κ-free leaves as proof obligations. -/
+private def mentionsPredicates (assign : List (KVar × List (Expr × List Nat)))
+    (e : Expr) : Bool :=
+  (e.find? fun e => e.isMVar && assign.any (fun (κ, _) => κ.mvarId == e.mvarId!)).isSome
+
+/-- Certify heads and validate predicate-dependent safety leaves before keeping residuals. -/
 partial def walkPAProof
     (assign : List (KVar × List (Expr × List Nat)))
     (goal : Expr)
     (residualOut : IO.Ref (Array MVarId))
-    (oracle : PAOracle := proveLeaf) :
+    (oracle : PAOracle := proveLeaf)
+    (validateSafety : PAOracle := fun _ => pure none)
+    (dependsOnPredicates : Bool := false) :
     TermElabM Expr := do
   if let some (κ, survivors, args) := paHead? assign goal then
     return ← emitPALeaf κ survivors args oracle
@@ -66,17 +72,22 @@ partial def walkPAProof
     throwError "fix: head metavariable{indentExpr goal.getAppFn}\nis not a \
       cut variable handled by PA. Eliminate acyclic κ's with `fusion` first."
   if goal.isForall then
+    let dependent := dependsOnPredicates || mentionsPredicates assign goal.bindingDomain!
     let dom ← instantiateMVars goal.bindingDomain!
     let name := goal.bindingName!
     let bi   := goal.bindingInfo!
     return ← withLocalDecl name bi dom fun fv => do
       let body  := goal.bindingBody!.instantiate1 fv
-      let inner ← walkPAProof assign body residualOut oracle
+      let inner ← walkPAProof assign body residualOut oracle validateSafety dependent
       mkLambdaFVars #[fv] inner
   if let some (l, r) := goal.and? then
-    let pL ← walkPAProof assign l residualOut oracle
-    let pR ← walkPAProof assign r residualOut oracle
+    let pL ← walkPAProof assign l residualOut oracle validateSafety dependsOnPredicates
+    let pR ← walkPAProof assign r residualOut oracle validateSafety dependsOnPredicates
     return mkAndIntro l r pL pR
+  let contextDepends := (← getLCtx).any fun decl =>
+    mentionsPredicates assign decl.type || decl.value?.any (mentionsPredicates assign)
+  if dependsOnPredicates || contextDepends || mentionsPredicates assign goal then
+    if let some proof ← validateSafety (← instantiateMVars goal) then return proof
   let m ← mkFreshExprMVar (some goal) (kind := .syntheticOpaque)
   residualOut.modify (·.push m.mvarId!)
   return m

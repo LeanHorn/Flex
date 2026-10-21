@@ -14,8 +14,7 @@ def solverTactic (config : Config) : TacticM Unit := withMainContext do
   let name := match config.backend with
     | .spacer => "spacer"
     | .eldarica => "eldarica"
-  let oracle : ProofOracle := proveLeafWith (← `(tactic| grind))
-  let report ← match ← solveGoal (← getMainGoal) config oracle (headsOnly := true) with
+  let report ← match ← solveGoal (← getMainGoal) config (headsOnly := true) with
     | .solved report | .partial report => pure report
     | .failed failure =>
       if let some solver := failure.solver then
@@ -31,7 +30,7 @@ def solverTactic (config : Config) : TacticM Unit := withMainContext do
 
 end Flex.CHC
 
-/-- Synthesize with Spacer, report invariants, and certify heads with grind. -/
+/-- Synthesize with Spacer, report invariants, and certify predicate heads. -/
 elab "spacer" : tactic => do
   Flex.CHC.solverTactic {
     backend := .spacer

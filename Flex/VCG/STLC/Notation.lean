@@ -31,7 +31,7 @@ import Flex.VCG.STLC.Syntax
   refine ::= fmla | ident term*          -- κ-application
   ty    ::= Int { ident : refine } | Bool { ident : refine }
            | ty -> ty | (ident : ty) -> ty | (ty)
-  exp   ::= ident | numeral | (exp)
+  exp   ::= ident | numeral | (exp) | unreachable
            | λ ident, exp | let ident = exp in exp
            | exp exp | (exp : ty)
            | exp + exp | exp ≤ exp | exp ∧ exp | ¬exp
@@ -90,6 +90,7 @@ syntax:25  stlcTy:26 " -> " stlcTy:25                  : stlcTy
 syntax:max "(" stlcExp ")"                            : stlcExp
 syntax:max ident                                      : stlcExp
 syntax:max num                                        : stlcExp
+syntax:max "unreachable"                              : stlcExp
 syntax:max "(" stlcExp " : " stlcTy ")"               : stlcExp
 syntax:max "¬" stlcExp:max                            : stlcExp
 syntax:70 stlcExp:70 stlcExp:71                       : stlcExp  -- application
@@ -127,24 +128,48 @@ instance : ToTerm Bool .bool where toTerm b := .const .bool b
 
 open Lean
 
-private def resolveBase (b : TSyntax `ident) : MacroM (TSyntax `term) :=
+private def resolveBase (b : TSyntax `ident) : MacroM Base :=
   match b.getId.toString with
-  | "Int"  => `(Base.int)
-  | "Bool" => `(Base.bool)
+  | "Int"  => pure .int
+  | "Bool" => pure .bool
   | s      => Macro.throwError s!"expected 'Int' or 'Bool', got '{s}'"
 
-private def resolveIdent (rctx : List String) (name : String) : MacroM (TSyntax `term) :=
-    match rctx.findIdx? (· == name) with
-    | some i => `(Term.bvar _ $(Lean.quote i))
+/-- Splice a `Base` back into surface syntax. -/
+private def baseStx : Base → MacroM (TSyntax `term)
+  | .int  => `(Base.int)
+  | .bool => `(Base.bool)
+
+/-- The refinement-level name stack pairs each bound name with the `Base` it was
+    bound at (its type), so a `BVar` occurrence can be elaborated to a
+    fully-baseified `Term.bvar b k` — necessary in κ-application argument
+    position, where the arg is packed into `Σ b : Base, Term b` and nothing else
+    pins the base. A function-typed arrow binder has no refinement base
+    (`none`); referencing it as a `Term` is ill-typed and elaborates to a hole. -/
+abbrev RCtx := List (String × Option Base)
+
+private def resolveIdent (rctx : RCtx) (name : String) : MacroM (TSyntax `term) :=
+    match rctx.findIdx? (·.1 == name) with
+    | some i =>
+        match rctx[i]!.2 with
+        | some b => do let bStx ← baseStx b; `(Term.bvar $bStx $(Lean.quote i))
+        | none   => `(Term.bvar _ $(Lean.quote i))
     | none   =>
         match name with
         | "true"  => `(Term.const Base.bool true)
         | "false" => `(Term.const Base.bool false)
         | _       => `(Term.fvar _ $(Lean.mkIdent (Name.mkSimple name)))
 
+/-- The `Base` an arrow binder of declared type `t` is bound at. A refinement
+    type `b {…}` contributes its base; a function-typed binder has none. -/
+partial def tyBase (t : TSyntax `stlcTy) : MacroM (Option Base) := do
+  match t with
+  | `(stlcTy| ($inner:stlcTy))                        => tyBase inner
+  | `(stlcTy| $b:ident { $_:ident : $_:stlcRefine })  => some <$> resolveBase b
+  | _                                                  => pure none
+
 mutual
 
-partial def eTerm (rctx : List String) (t : TSyntax `stlcTerm) :
+partial def eTerm (rctx : RCtx) (t : TSyntax `stlcTerm) :
     MacroM (TSyntax `term) := do
   match t with
   | `(stlcTerm| ($inner:stlcTerm))            => eTerm rctx inner
@@ -160,7 +185,7 @@ partial def eTerm (rctx : List String) (t : TSyntax `stlcTerm) :
       resolveIdent rctx x.getId.toString
   | _ => Macro.throwUnsupported
 
-partial def eFormula (rctx : List String) (f : TSyntax `stlcFormula) :
+partial def eFormula (rctx : RCtx) (f : TSyntax `stlcFormula) :
     MacroM (TSyntax `term) := do
   match f with
   | `(stlcFormula| ⊤)                                 => `(Formula.tt)
@@ -181,14 +206,16 @@ partial def eFormula (rctx : List String) (f : TSyntax `stlcFormula) :
   | `(stlcFormula| $a:stlcFormula → $b:stlcFormula)   => do
       let ta ← eFormula rctx a; let tb ← eFormula rctx b; `(Formula.imp $ta $tb)
   | `(stlcFormula| ∃ $x:ident : $b:ident, $body:stlcFormula) => do
-      let tb ← eFormula (x.getId.toString :: rctx) body
-      let bExpr ← resolveBase b; `(Formula.ex $bExpr $tb)
+      let base ← resolveBase b
+      let tb ← eFormula ((x.getId.toString, some base) :: rctx) body
+      let bExpr ← baseStx base; `(Formula.ex $bExpr $tb)
   | `(stlcFormula| ∀ $x:ident : $b:ident, $body:stlcFormula) => do
-      let tb ← eFormula (x.getId.toString :: rctx) body
-      let bExpr ← resolveBase b; `(Formula.all $bExpr $tb)
+      let base ← resolveBase b
+      let tb ← eFormula ((x.getId.toString, some base) :: rctx) body
+      let bExpr ← baseStx base; `(Formula.all $bExpr $tb)
   | _ => Macro.throwUnsupported
 
-partial def eRefine (rctx : List String)  (r : TSyntax `stlcRefine) :
+partial def eRefine (rctx : RCtx)  (r : TSyntax `stlcRefine) :
     MacroM (TSyntax `term) := do
   match r with
   | `(stlcRefine| $k:ident $args:stlcTerm*) => do
@@ -202,19 +229,22 @@ partial def eRefine (rctx : List String)  (r : TSyntax `stlcRefine) :
       let tf ← eFormula rctx f; `(Refinement.fmla $tf)
   | _ => Macro.throwUnsupported
 
-partial def eTy (rctx : List String) (t : TSyntax `stlcTy) : MacroM (TSyntax `term) := do
+partial def eTy (rctx : RCtx) (t : TSyntax `stlcTy) : MacroM (TSyntax `term) := do
   match t with
   | `(stlcTy| ($inner:stlcTy))                       => eTy rctx inner
   | `(stlcTy| $b:ident { $v:ident : $r:stlcRefine })  => do
-      let bExpr ← resolveBase b
-      let tr ← eRefine (v.getId.toString :: rctx) r
-      `(Ty.refine $bExpr $tr)
+      let base ← resolveBase b
+      let tr ← eRefine ((v.getId.toString, some base) :: rctx) r
+      let bExpr ← baseStx base; `(Ty.refine $bExpr $tr)
   | `(stlcTy| ($x:ident : $s:stlcTy) -> $t:stlcTy)   => do
       let ts ← eTy rctx s
-      let tt ← eTy (x.getId.toString :: rctx) t
+      let sBase ← tyBase s
+      let tt ← eTy ((x.getId.toString, sBase) :: rctx) t
       `(Ty.arrow $ts $tt)
   | `(stlcTy| $s:stlcTy -> $t:stlcTy)                => do
-      let ts ← eTy rctx s; let tt ← eTy rctx t
+      let ts ← eTy rctx s
+      let sBase ← tyBase s
+      let tt ← eTy (("", sBase) :: rctx) t
       `(Ty.arrow $ts $tt)
   | _ => Macro.throwUnsupported
 
@@ -222,6 +252,7 @@ partial def eExp (ctx : List String) (e : TSyntax `stlcExp) : MacroM (TSyntax `t
   match e with
   | `(stlcExp| ($inner:stlcExp))               => eExp ctx inner
   | `(stlcExp| $n:num)                         => `(Exp.iconst $n)
+  | `(stlcExp| unreachable)                    => `(Exp.unreach)
   | `(stlcExp| $x:ident)                       =>
       let name := x.getId.toString
       match ctx.findIdx? (· == name) with

@@ -99,6 +99,20 @@ inductive Refinement where
   | fmla : Formula → Refinement
   | kapp : EVar → List (Σ b : Base, Term b) → Refinement
 
+/-! ## Syntactic constraints (CHC tree)
+
+  A verification condition, produced by VC generation (`VCGen.lean`), as a
+  Constrained Horn Clause tree. -/
+inductive Cstr where
+  | head : Refinement → Cstr             -- goal refinement `r`
+  | imp  : Refinement → Cstr → Cstr      -- hypothesis `r ⇒ c`
+  | all  : EVar → Base → Cstr → Cstr     -- `∀ x:b. c`
+  | conj : Cstr → Cstr → Cstr            -- `c₁ ∧ c₂`
+
+/-- The trivially-true constraint (used for synthesis leaves). -/
+@[simp] def Cstr.triv : Cstr := .head (.fmla .tt)
+@[simp] def Cstr.ff : Cstr := .head (.fmla .ff)
+
 /-! ## κ-assignments
 
   A `KVar` is a name for an *uninterpreted* predicate symbol (a "κ" in the
@@ -179,6 +193,7 @@ inductive Exp where
   | leq    : Exp → Exp → Exp
   | ite    : Exp → Exp → Exp → Exp
   | add    : Exp → Exp → Exp
+  | unreach : Exp                       -- `assert false` / unreachable; not a value, gets stuck
 
 /-- Typing context: a list of free-name × type pairs. Names are unique by convention. -/
 @[simp]
@@ -225,6 +240,7 @@ def Exp.lc_at : Nat → Exp → Prop
   | k, .leq e₁ e₂     => e₁.lc_at k ∧ e₂.lc_at k
   | k, .ite e₀ e₁ e₂  => e₀.lc_at k ∧ e₁.lc_at k ∧ e₂.lc_at k
   | k, .add e₁ e₂     => e₁.lc_at k ∧ e₂.lc_at k
+  | _, .unreach       => True
 
 /-- A `Val` is closed when its `toExp` is locally closed (note: the closure
     body is required `lc_at 1` since `BVar 0` is the parameter). -/
@@ -253,6 +269,7 @@ def Exp.openExp (k : Nat) (u : Exp) (e : Exp) : Exp :=
   | .leq e₁ e₂     => .leq (Exp.openExp k u e₁) (Exp.openExp k u e₂)
   | .ite e₀ e₁ e₂  => .ite (Exp.openExp k u e₀) (Exp.openExp k u e₁) (Exp.openExp k u e₂)
   | .add e₁ e₂     => .add (Exp.openExp k u e₁) (Exp.openExp k u e₂)
+  | .unreach       => .unreach
 
 /-- Open `bvar k` with a value (via `Val.toExp`). Handy for big-step. -/
 def Exp.openVal (k : Nat) (v : Val) : Exp → Exp := Exp.openExp k v.toExp
@@ -380,6 +397,7 @@ def Exp.fv : Exp → List EVar
   | .leq e₁ e₂     => Exp.fv e₁ ++ Exp.fv e₂
   | .ite e₀ e₁ e₂  => Exp.fv e₀ ++ Exp.fv e₁ ++ Exp.fv e₂
   | .add e₁ e₂     => Exp.fv e₁ ++ Exp.fv e₂
+  | .unreach       => []
 
 def Val.fv (v : Val) : List EVar :=
   match v with

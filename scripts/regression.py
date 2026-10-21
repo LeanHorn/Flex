@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regression anchor for Flex.
 
-Compiles every benchmark / demo file individually with `lake env lean` and
+Compiles benchmark, demo, and test files individually with `lake lean` and
 reports a green ✓ (pass) or red ✗ (fail) per file. A file passes iff Lean
 exits 0 and emits no `error:` diagnostics. `sorry` warnings are surfaced but
 do not by themselves fail a file (use --strict-sorry to treat them as fails).
@@ -35,6 +35,7 @@ GROUPS = {
     "Liquid-fixpoint": REPO_ROOT / "Benchmarks" / "Liquid-fixpoint",
     "FluxRS": REPO_ROOT / "Benchmarks" / "FluxRS",
     "Demo": REPO_ROOT / "Demo",
+    "Tests": REPO_ROOT / "Tests",
 }
 
 # ANSI colors; disabled when stdout is not a TTY.
@@ -70,17 +71,15 @@ class Result:
         self.elapsed = elapsed
 
 
-def check_file(path: Path, strict_sorry: bool, runner=None,
-               bench_env=None) -> Result:
-    if runner is None:
-        runner = lambda path: ["lake", "env", "lean", str(path)]
+def check_file(path: Path, strict_sorry: bool) -> Result:
     start = time.monotonic()
+    # Lake loads native plugins required by imports (notably lean-smt/cvc5).
+    # Hide dependency build logs; --strict-sorry checks this file's diagnostics.
     proc = subprocess.run(
-        runner(path),
+        ["lake", "--log-level=error", "lean", str(path)],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
-        env=bench_env,
     )
     elapsed = time.monotonic() - start
     out = proc.stdout + proc.stderr
@@ -98,6 +97,8 @@ def check_file(path: Path, strict_sorry: bool, runner=None,
                 break
         if first_error is None:
             first_error = f"exit code {proc.returncode}"
+    elif strict_sorry and has_sorry:
+        first_error = "uses `sorry` (--strict-sorry)"  # so --verbose shows why
 
     ok = not has_error and not (strict_sorry and has_sorry)
     return Result(path, ok, has_sorry, first_error, elapsed)
@@ -115,17 +116,13 @@ def main() -> int:
                     help="print the first error line for each failing file")
     args = ap.parse_args()
 
-    # Flex is mathlib-free: every file compiles with plain `lake env lean`.
-    runner = lambda path: ["lake", "env", "lean", str(path)]
-    bench_env = None
-
     # Collect files per group, sorted for stable output.
     jobs: list[tuple[str, Path]] = []
     for group, directory in GROUPS.items():
         if not directory.is_dir():
             print(YELLOW(f"! {group}: directory not found ({directory})"))
             continue
-        for f in sorted(directory.glob("*.lean")):
+        for f in sorted(directory.rglob("*.lean")):
             if args.filter and args.filter not in str(f):
                 continue
             jobs.append((group, f))
@@ -139,8 +136,7 @@ def main() -> int:
     results: dict[Path, Result] = {}
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
         futures = {
-            ex.submit(check_file, path, args.strict_sorry, runner, bench_env):
-                (group, path)
+            ex.submit(check_file, path, args.strict_sorry): (group, path)
             for group, path in jobs
         }
         for fut in as_completed(futures):
@@ -156,7 +152,7 @@ def main() -> int:
         print(BOLD(f"{group}/"))
         for path in group_jobs:
             res = results[path]
-            name = path.name
+            name = str(path.relative_to(directory))
             timing = DIM(f"{res.elapsed:5.1f}s")
             if res.ok:
                 tag = ""
@@ -166,7 +162,7 @@ def main() -> int:
                 print(f"  {TICK} {name:<40} {timing}{tag}")
             else:
                 total_fail += 1
-                if res.has_sorry and res.first_error is None:
+                if res.has_sorry:
                     total_sorry += 1
                 print(f"  {CROSS} {name:<40} {timing}")
                 if args.verbose and res.first_error:
@@ -182,7 +178,7 @@ def main() -> int:
     if total_sorry:
         print(YELLOW(f"  ({total_sorry} file(s) use `sorry`)"))
 
-    return total_fail
+    return min(total_fail, 255)  # exit status wraps mod 256: 256 failures would read as 0
 
 
 if __name__ == "__main__":

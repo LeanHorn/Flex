@@ -25,17 +25,12 @@ abbrev TT  : Ty := <ty| Int{ν : ⊤}|>
 
 abbrev Pos : Ty :=  <ty| Int{ν : 1 ≤ ν}|>
 
-def NatR : Ty := <ty| Int{ν : 0 ≤ ν }|>
-
 /-- `IntN n = {ν : Int | ν = n}`. -/
 abbrev IntN (n : Int) : Ty := <ty| Int{ν : ν = ⌜n⌝}|>
 
 /-- κ-refinement on int: `{ν : Int | k(ν)}` for κ-symbol `k`. -/
 abbrev IntK (k : STLC.KVar) : Ty :=
   .refine .int (.kapp k [⟨.int, .bvar .int 0⟩])
-
-abbrev IntK2 (k : STLC.KVar) : Ty :=
-  .refine .int (.kapp k [⟨.int, .bvar .int 1⟩, ⟨.int, .bvar .int 0⟩])
 
 /-- κ-refinement on int: `{ν | k(x, y, ν)}` for the two enclosing arrow binders.
     `bvar 2` = x (outer arg), `bvar 1` = y (inner arg), `bvar 0` = ν. -/
@@ -63,6 +58,8 @@ def ex1Ty  : Ty  := Pos
 
 example (κ : KEnv) : topVC κ [] ex1Exp ex1Ty := by
   simp only [topVC, check, synth, sub, ex1Exp, ex1Ty, Pos, prim,
+             Cstr.interp, Cstr.triv, Refinement.openBVar,
+             Formula.openBVar, Term.openBVar, REnv.update, REnv.write,
              Refinement.interp, Formula.interp, Term.interp]
   solve_fixpoint
 
@@ -73,8 +70,10 @@ def ex2Ty  : Ty  := .arrow Pos Pos
 
 set_option maxHeartbeats 800000 in
 example (κ : KEnv) : topVC κ [] ex2Exp ex2Ty := by
-  simp [topVC, check, synth, sub, implyBind, ex2Exp, exId, ex2Ty, Pos, self,
-        Refinement.interp, Formula.interp, Term.interp, REnv.get,
+  simp [topVC, check, synth, sub, implyBindCstr, Cstr.interp, Cstr.triv,
+        Refinement.openBVar, Formula.openBVar, Term.openBVar, ex2Exp, exId, ex2Ty,
+        Pos, self, Refinement.interp, Formula.interp, Term.interp, REnv.get,
+        TEnv.dom, TEnv.tyFv, Ty.fv, Refinement.fv, Formula.fv, Term.fv,
         Exp.openVar, Ty.openVar, Refinement.openBVar, Formula.openBVar,
         Term.openBVar]
 
@@ -84,8 +83,10 @@ def ex3Exp : Exp := .letin (.iconst 5) (.bvar 0)
 def ex3Ty  : Ty  := Pos
 
 example (κ : KEnv) : topVC κ [] ex3Exp ex3Ty := by
-  simp [topVC, check, synth, sub, implyBind, ex3Exp, ex3Ty, Pos, prim, self,
-        Refinement.interp, Formula.interp, Term.interp, REnv.get,
+  simp [topVC, check, synth, sub, implyBindCstr, Cstr.interp, Cstr.triv,
+        Refinement.openBVar, Formula.openBVar, Term.openBVar, ex3Exp, ex3Ty, Pos,
+        prim, self, Refinement.interp, Formula.interp, Term.interp, REnv.get,
+        TEnv.dom, TEnv.tyFv, Ty.fv, Refinement.fv, Formula.fv, Term.fv,
         Exp.openVar]
 
 /-! ## κ-example with `ty_k`: `let z = 99 in (λx. x : IntK k → IntK k) z ⇐ Pos`
@@ -94,7 +95,8 @@ example (κ : KEnv) : topVC κ [] ex3Exp ex3Ty := by
   Here the κ surfaces from `Refinement.interp`'s `.kapp` case (post-stratification)
   and is discharged via the now fully-proven `check_sound` + `solve_fixpoint`. -/
 
-attribute [simp] check synth sub EVar.fresh implyBind prim self Refinement.interp Formula.interp TEnv.dom
+attribute [simp] check synth sub EVar.fresh implyBindCstr prim self Refinement.interp Formula.interp TEnv.dom
+attribute [simp] Cstr.interp Cstr.triv Refinement.openBVar Formula.openBVar Term.openBVar REnv.update REnv.write
 attribute [simp] Term.interp REnv.get Exp.openVar Ty.openVar Exp.fv Refinement.fv Formula.fv Term.fv Ty.fv
 attribute [simp] Refinement.openBVar Formula.openBVar Term.openBVar String.length EVar.maxLen
 attribute [simp] List.lookup TEnv.tyFv
@@ -120,6 +122,7 @@ example :
       Check κ []
         (.letin (.iconst 99) (.app (.ann exId (ty_xk "k")) (.bvar 0)))
         (IntN 99) := by
+  simp only [IntN, ToTerm.toTerm]
   generate
   zap
   grind
@@ -234,7 +237,37 @@ def exAddExp : Exp :=
 def exAddTy : Ty := IntN 7
 
 example (κ : KEnv) : topVC κ [] exAddExp exAddTy := by
-  simp [topVC, exAddExp, exAddTy]
+  simp [topVC, exAddExp, exAddTy, IntN, ToTerm.toTerm]
+
+/-! ## `unreachable`: a dead `else`-branch typechecks via ex falso
+
+  `λ x. let z = 0 in let c = x ≤ z in if c then 1 else unreachable`
+  at `{ν:Int | ν ≤ 0} → Pos`.
+
+  The `else` branch's context binds `x ≤ 0` (the param refinement), `z = 0`,
+  `c ↔ (x ≤ z)`, and the path condition `c = false`. Since `x ≤ 0 ∧ z = 0`
+  forces `x ≤ z`, the `c ↔ (x ≤ z)` hypothesis then forces `c = true`,
+  contradicting `c = false` — so the branch context is unsatisfiable and
+  `unreach` typechecks there at *any* result type, including `Pos`. -/
+
+abbrev exUnreachable : Exp :=
+  <| λ x, let z = 0 in let c = x ≤ z in if c then 1 else unreachable |>
+
+abbrev tyUnreachable : Ty :=
+  .arrow (<ty| Int{ν : ν ≤ 0}|>) Pos
+
+example (κ : KEnv) : topVC κ [] exUnreachable tyUnreachable := by
+  simp [topVC]
+
+-- Declarative-side: `unreach` is directly derivable from a contradictory `Entail`.
+example (κ : KEnv) (Γ : TEnv) (t : Ty)
+    (h : Entail κ Γ (fun _ => False)) (hwf : Ty.WFBVars t) :
+    Hastype κ Γ .unreach t := .unreach h hwf
+
+-- Sanity check: `unreach` genuinely gets stuck — it has no `BigStep` rule.
+example : ¬ ∃ v, BigStep .unreach v := by
+  rintro ⟨v, hv⟩
+  cases hv
 
 /-! ## Declarative-side examples (via `topVC_decl_sound`) -/
 
@@ -251,8 +284,9 @@ example (κ : KEnv) : Hastype κ [] ex2Exp ex2Ty := by
 -- let z = 5 in z is declaratively typeable at Pos.
 example (κ : KEnv) : Hastype κ [] ex3Exp ex3Ty := by
   apply topVC_decl_sound <;>
-  simp [topVC, check, synth, sub, implyBind, ex3Exp, ex3Ty, Pos, prim, self,
-        Refinement.interp, Formula.interp, Term.interp, REnv.get,
+  simp [topVC, check, synth, sub, implyBindCstr, Cstr.interp, Cstr.triv,
+        Refinement.openBVar, Formula.openBVar, Term.openBVar, ex3Exp, ex3Ty, Pos,
+        prim, self, Refinement.interp, Formula.interp, Term.interp, REnv.get,
         Exp.openVar, Exp.WFBVars, Ty.WFBVars, Ty.WFBVarCtx, Refinement.hasBVar,
         Formula.hasBVar, Term.hasBVar]
 

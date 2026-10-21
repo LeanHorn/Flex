@@ -36,6 +36,6 @@ example :
 /-! ## Example 3: `let z = 5 in z ⇐ Pos` -/
 
 example (κ : KEnv) : topVC κ [] (<| let z = 5 in z |>) Pos := by
-  simp [topVC, check, synth, sub, implyBind, Pos, prim, self,
+  simp [topVC, check, synth, sub, implyBindCstr, Pos, prim, self,
         Refinement.interp, Formula.interp, Term.interp, REnv.get,
         Exp.openVar]

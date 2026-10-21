@@ -4,98 +4,83 @@ import Flex.Tactic.Utils
 
 open Lean Meta Elab Tactic
 
--- Run `k` and discard any messages it logs (errors, warnings, traces).
--- PA candidate-checking calls `grind`/`omega`/etc. inside `first`-style
--- ladders; failed branches log diagnostics that survive plain `try/catch`
--- because they go through Lean's message log, not the exception path.
--- We snapshot the log before, restore it after, regardless of outcome.
+/-- Return type for oracle of PA.
+    success if `proof` returned, or `none` if failure. -/
+abbrev PAOracle := Expr → TermElabM (Option Expr)
+
+/-- The default tactic oracle used by PA, before any per-call fallback.
+    No `aesop`: it can hit `maxRecDepth` (uncatchable) and over-weakens solutions. -/
+syntax "pa_oracle" : tactic
+macro_rules
+  | `(tactic| pa_oracle) => `(tactic| first | omega | grind | (constructor <;> grind))
+
+initialize Lean.registerTraceClass `flex.oracle
+
+/-- Suppress messages from speculative PA checks,
+    since failed attempts to prove candidate qualifiers
+    would otherwise clutter the Infoview. -/
 private def withSilencedMessages {α} (k : TermElabM α) : TermElabM α := do
   let saved ← Core.getMessageLog
   try
-    let r ← k
+    k
+  finally
     Core.setMessageLog saved
-    return r
-  catch e =>
-    Core.setMessageLog saved
-    throw e
 
--- Attempt to prove `prop` via the standard tactic ladder.
--- Returns `true` iff all goals are closed AND the resulting proof term
--- contains no `sorry`. Lean's `(constructor <;> grind)` silently uses
--- `sorry` for unsolved sub-goals, so `goals.isEmpty` alone is unsound:
--- `Tactic.run` reports goals=0, mvar.isAssigned=true, but the proof has
--- `sorry` inside.
-def checkExprVC (prop : Expr) : TermElabM Bool := withSilencedMessages do
-  let mvar   ← mkFreshExprMVar (some prop) (kind := .syntheticOpaque)
-  let mvarId := mvar.mvarId!
-  try
-    let goals ← Tactic.run mvarId do
-      evalTactic (← `(tactic|
-        (intros
-         first
-           | omega
-           | grind
-           -- `aesop` drives `simp` normalization that unfolds recursive
-           -- `@[grind]` defs (e.g. `fib_spec_fib`) without bound; the
-           -- resulting `maxRecDepth` is logged as a diagnostic rather than
-           -- thrown, so `withSilencedMessages`/`try` can't swallow it and it
-           -- fails the whole build. It also over-weakens PA solutions on
-           -- several benchmarks (12 regressions when enabled). Keep dropped.
-           | (constructor <;> grind))))
-    if !goals.isEmpty then return false
-    let proof ← instantiateMVars mvar
-    return !proof.hasSorry
-  catch _ =>
-    return false
+/-- Try to prove `goal` using `tac`, suppressing intermediate messages.
+    Return `some proof` on success or `none` on failure. -/
+def proveLeafWith
+  (tac : TSyntax `tactic)
+  (goal : Expr)
+  : TermElabM (Option Expr) := do
+    withSilencedMessages <| withNewMCtxDepth do
+      let saved ← saveState
+      try
+        -- create a new meta-variable where will do the proof
+        let mvar ← mkFreshExprMVar (some goal) (kind := .syntheticOpaque)
+        let remainingGoals ← Tactic.run mvar.mvarId! do
+          -- intro binders
+          evalTactic (← `(tactic| intros))
+          evalTactic tac
+        -- check if remaining goals are fully done
+        -- if not, consider failure
+        if !remainingGoals.isEmpty then
+          saved.restore
+          return none
+        -- extract the proof
+        let proof ← instantiateMVars mvar
+        -- Reject unresolved metavariables and explicit admissions.
+        if proof.hasExprMVar || proof.hasSorry then
+          saved.restore
+          return none
+        return some proof
+      catch e =>
+        saved.restore
+        if e.isInterrupt then throw e
+        return none
 
--- Proof-RETURNING oracle (§5 `prove`/`Provable`). Same contract as
--- `checkExprVC` — silence messages, run the tactic ladder, reject `sorry` —
--- but on success returns the proof *term* (Some) instead of a Bool. The
--- certifying PA glue (`walkPAProof`) calls this at each κ-head leaf to
--- discharge every survivor conjunct `q[ρ](x̄)`, then `And.intro`s the proofs.
---
--- The goal here is the bare atom `q[ρ](x̄)`; its hypotheses Γ (the ∀-binders
--- and guards) are already ambient fvars threaded in by the walk, so NO
--- `intros` is needed. The tactic ladder MUST match `checkExprVC`'s so that
--- any candidate that survived weakening re-proves at glue time (a superset
--- ladder is sound; a weaker one could drop a survivor and break the bridge).
-def proveLeaf (goal : Expr) : TermElabM (Option Expr) := withSilencedMessages do
-  let mvar   ← mkFreshExprMVar (some goal) (kind := .syntheticOpaque)
-  let mvarId := mvar.mvarId!
-  try
-    let goals ← Tactic.run mvarId do
-      evalTactic (← `(tactic|
-        (first
-          | omega
-          | grind
-          | (constructor <;> grind))))
-    if !goals.isEmpty then return none
-    let proof ← instantiateMVars mvar
-    -- Reject `sorry` (silently inserted by `constructor <;> grind` for
-    -- unsolved subgoals) and any still-unassigned mvar.
-    if proof.hasSorry || proof.hasExprMVar then return none
-    return some proof
-  catch _ =>
-    return none
+/-- Try to prove `goal` with the default PA oracle. -/
+def proveLeaf (goal : Expr) : TermElabM (Option Expr) := do
+  proveLeafWith (← `(tactic| pa_oracle)) goal
 
--- Sat-guard for PA: returns `true` iff the LHS hypothesis of the
--- implication-shaped `propWithFalseConclusion` is contradictory — i.e.
--- the same clause but with the conclusion replaced by `False` is provable.
--- Caller passes a goal whose head leaf has already been replaced with
--- `False` (via `specializeClauseAsNeg`).
-def checkExprUnsat (propWithFalseConclusion : Expr) : TermElabM Bool := withSilencedMessages do
-  let mvar   ← mkFreshExprMVar (some propWithFalseConclusion) (kind := .syntheticOpaque)
-  let mvarId := mvar.mvarId!
-  try
-    let goals ← Tactic.run mvarId do
-      evalTactic (← `(tactic|
-        (intros
-         first
-           | omega
-           | grind
-           | (constructor <;> grind))))
-    if !goals.isEmpty then return false
-    let proof ← instantiateMVars mvar
-    return !proof.hasSorry
-  catch _ =>
-    return false
+/-- Try the existing PA Lean oracle first, then the supplied tactic on failure. -/
+def withPAFallback (tac : TSyntax `tactic) : PAOracle :=
+  fun goal => do
+    if let some proof   ← proveLeaf goal then return some proof
+    let result          ← proveLeafWith tac goal
+    trace[flex.oracle] "fallback accepted={result.isSome}: {tac}"
+    return result
+
+/-- Try `tac` first, then the default PA oracle. -/
+def withPAPriority (tac : TSyntax `tactic) : PAOracle :=
+  fun goal => do
+    if let some proof ← proveLeafWith tac goal then return some proof
+    proveLeaf goal
+
+/-- Return whether the oracle proves `prop`. -/
+def checkExprVC (prop : Expr) (oracle : PAOracle := proveLeaf) : TermElabM Bool := do
+  return (← oracle prop).isSome
+
+/-- Check a clause whose conclusion has been replaced with `False`. -/
+def checkExprUnsat (clause : Expr) (oracle : PAOracle := proveLeaf)
+    : TermElabM Bool :=
+  checkExprVC clause oracle

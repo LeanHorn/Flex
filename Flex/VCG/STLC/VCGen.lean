@@ -7,44 +7,37 @@ open STLC
 
 /-! # VC Generation for STLC (LN + deep Formula + κ)
 
-  Algorithmic bidirectional refinement type-checker that produces a
-  `Constraint : KEnv → REnv → Prop`. The user existentially quantifies the
-  `KEnv` parameter to invoke the solver (`solve_fixpoint`).
-
+  Algorithmic bidirectional refinement type-checker that produces a *syntactic*
+  constraint `Cstr` — a Constrained Horn Clause tree with constructors
 -/
 
-@[simp]
-abbrev Constraint := KEnv → REnv → Prop
+namespace STLC
 
-/-- Implication-constraint helper: bind `x` to a value satisfying refinement
-    `r` (under `κ`), then assert `c` holds. For function-typed bindings, no
-    quantification. -/
-@[simp, reducible]
-def implyBind (x : EVar) (t : Ty) (c : Constraint) : Constraint :=
-  fun κ γ =>
-    match t with
-    | .refine b r => ∀ v : b.interp,
-                       Refinement.interp κ r (γ.push (Val.inj b v)) → c κ (REnv.update b γ x v)
-    | .arrow _ _  => c κ γ
+def implyBindCstr (x : EVar) (t : Ty) (c : Cstr) : Cstr :=
+  match t with
+  | .refine b r => .all x b (.imp (r.openBVar 0 x) c)
+  | .arrow _ _  => c
+
+end STLC
+
+/-! ## Algorithmic subtyping / bidirectional checking -/
 
 /-- Algorithmic subtyping. Returns `none` on shape mismatch. Termination
     by `Ty.skel` (preserved under `openVar`). Takes `Γ` so the fresh name
-    for the arrow case is picked away from the context domain. -/
-def sub (Γ : TEnv) : Ty → Ty → Option Constraint
+    for the arrow / base cases is picked away from the context domain. -/
+def sub (Γ : TEnv) : Ty → Ty → Option Cstr
   | .refine .int  r₁, .refine .int  r₂ =>
-      some (fun κ γ => ∀ v : Int,
-              Refinement.interp κ r₁ (γ.push (Val.inj .int v)) →
-              Refinement.interp κ r₂ (γ.push (Val.inj .int v)))
+      let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ r₁.fv ++ r₂.fv)
+      some (.all x .int (.imp (r₁.openBVar 0 x) (.head (r₂.openBVar 0 x))))
   | .refine .bool r₁, .refine .bool r₂ =>
-      some (fun κ γ => ∀ v : Bool,
-              Refinement.interp κ r₁ (γ.push (Val.inj .bool v)) →
-              Refinement.interp κ r₂ (γ.push (Val.inj .bool v)))
+      let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ ++ r₁.fv ++ r₂.fv)
+      some (.all x .bool (.imp (r₁.openBVar 0 x) (.head (r₂.openBVar 0 x))))
   | .arrow s₁ t₁, .arrow s₂ t₂ =>
       let x := EVar.fresh (TEnv.dom Γ ++ TEnv.tyFv Γ
                             ++ s₁.fv ++ s₂.fv ++ t₁.fv ++ t₂.fv)
       match sub Γ s₂ s₁, sub ((x, s₂) :: Γ) (t₁.openVar 0 x) (t₂.openVar 0 x) with
       | some c₁, some c₂ =>
-          some (fun κ γ => c₁ κ γ ∧ implyBind x s₂ c₂ κ γ)
+          some (.conj c₁ (implyBindCstr x s₂ c₂))
       | _, _ => none
   | _, _ => none
 termination_by s t => s.skel + t.skel
@@ -55,10 +48,10 @@ decreasing_by all_goals
     | omega
 
 mutual
-  def synth (Γ : TEnv) : Exp → Option (Constraint × Ty)
-    | .fvar x    => Γ.lookup x |>.map (fun t => ((fun _ _ => True), self x t))
-    | .iconst n  => some ((fun _ _ => True), prim n)
-    | .bconst b  => some ((fun _ _ => True), primBool b)
+  def synth (Γ : TEnv) : Exp → Option (Cstr × Ty)
+    | .fvar x    => Γ.lookup x |>.map (fun t => (Cstr.triv, self x t))
+    | .iconst n  => some (Cstr.triv, prim n)
+    | .bconst b  => some (Cstr.triv, primBool b)
     | .ann e t =>
         match check Γ e t with
         | some c => some (c, t)
@@ -70,27 +63,27 @@ mutual
             if y ∈ t.fv then none
             else
               match check Γ (.fvar y) s with
-              | some c' => some ((fun κ γ => c κ γ ∧ c' κ γ), t.openVar 0 y)
+              | some c' => some (Cstr.conj c c', t.openVar 0 y)
               | none    => none
         | _ => none
     | .leq (.fvar x) (.fvar y) =>
         match Γ.lookup x, Γ.lookup y with
         | some (.refine .int _), some (.refine .int _) =>
-            some ((fun _ _ => True), <ty| Bool{ν : (ν = true → x ≤ y) ∧ (x ≤ y → ν = true)} |>)
+            some (Cstr.triv, <ty| Bool{ν : (ν = true → x ≤ y) ∧ (x ≤ y → ν = true)} |>)
         | _, _ => none
     | .add (.fvar x) (.fvar y) =>
         match Γ.lookup x, Γ.lookup y with
         | some (.refine .int _), some (.refine .int _) =>
-            some ((fun _ _ => True), <ty| Int{ν : ν = x + y}|>)
+            some (Cstr.triv, <ty| Int{ν : ν = x + y}|>)
         | _, _ => none
     | .not (.fvar x) =>
         match Γ.lookup x with
-        | some (.refine .bool _) => some ((fun _ _ => True), <ty| Bool{ν : ν = ¬x}|>)
+        | some (.refine .bool _) => some (Cstr.triv, <ty| Bool{ν : ν = ¬x}|>)
         | _ => none
     | .and (.fvar x) (.fvar y) =>
         match Γ.lookup x, Γ.lookup y with
         | some (.refine .bool _), some (.refine .bool _) =>
-            some ((fun _ _ => True), <ty| Bool{ν : ν = x ∧ y} |>)
+            some (Cstr.triv, <ty| Bool{ν : ν = x ∧ y} |>)
         | _, _ => none
     | _ => none
   termination_by e => 2 * e.skel
@@ -98,18 +91,19 @@ mutual
     (first | (simp only [Exp.skel]; omega) | omega)
 
 
-  def check (Γ : TEnv) : Exp → Ty → Option Constraint
+  def check (Γ : TEnv) : Exp → Ty → Option Cstr
+    | .unreach, _ => some .ff
     | .lam e, .arrow s₁ s₂ =>
         let x := EVar.fresh (TEnv.dom Γ ++ e.fv ++ s₁.fv ++ s₂.fv ++ TEnv.tyFv Γ)
         match check ((x, s₁) :: Γ) (e.openVar 0 x) (s₂.openVar 0 x) with
-        | some c => some (implyBind x s₁ c)
+        | some c => some (implyBindCstr x s₁ c)
         | none   => none
     | .letin e₁ e₂, t =>
         match synth Γ e₁ with
         | some (c₁, s) =>
             let x := EVar.fresh (TEnv.dom Γ ++ e₂.fv ++ s.fv ++ t.fv ++ TEnv.tyFv Γ)
             match check ((x, s) :: Γ) (e₂.openVar 0 x) t with
-            | some c₂ => some (fun κ γ => c₁ κ γ ∧ implyBind x s c₂ κ γ)
+            | some c₂ => some (Cstr.conj c₁ (implyBindCstr x s c₂))
             | none    => none
         | none => none
     | .ite e₀ e₁ e₂, t =>
@@ -128,9 +122,8 @@ mutual
                   match check ((y, r_true) :: Γ) e₁ t,
                         check ((y, r_false) :: Γ) e₂ t with
                   | some c₁, some c₂ =>
-                      some (fun κ γ =>
-                        implyBind y r_true  c₁ κ γ ∧
-                        implyBind y r_false c₂ κ γ)
+                      some (Cstr.conj (implyBindCstr y r_true  c₁)
+                                      (implyBindCstr y r_false c₂))
                   | _, _ => none
               | _ => none
         | _ => none
@@ -139,7 +132,7 @@ mutual
         match synth Γ e with
         | some (c, s) =>
             match sub Γ s t with
-            | some c' => some (fun κ γ => c κ γ ∧ c' κ γ)
+            | some c' => some (Cstr.conj c c')
             | none    => none
         | none => none
   termination_by e _ => 2 * e.skel + 1
@@ -152,5 +145,5 @@ end
 @[simp]
 def topVC (κ : KEnv) (Γ : TEnv) (e : Exp) (t : Ty) : Prop :=
   match check Γ e t with
-  | some c => ∀ γ : REnv, c κ γ
+  | some c => ∀ γ : REnv, c.interp κ γ
   | none   => False

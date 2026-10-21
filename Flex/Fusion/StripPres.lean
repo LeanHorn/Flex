@@ -5,7 +5,7 @@ open Lean Meta
 
 /-- Structure-preserving scoped solution + prefix metadata for the
     path-informed walk. `sol` is LCA-scoped param-form (no extra `∃`/guards
-    above the LCA); the counts tell `nav` how many accumulated
+    above the LCA); the counts tell `cert` how many accumulated
     binders/guards/orPath bits to `drop` at each κ-leaf. -/
 structure ScopedSolPres where
   sol      : Expr
@@ -19,7 +19,7 @@ structure ScopedSolPres where
     one-sided `∧` routings, param-matching value binders and counting the
     prefix, stops at the LCA (first `∧` with κ in both branches, or a κ-leaf,
     or a non-mapping value binder), and runs `exprSol1Pres` there so the
-    below-LCA `∧`↔`∨` mirror survives for `nav`/`emitKLeaf`.
+    below-LCA `∧`↔`∨` mirror survives for `cert`/`nav`.
 
     Mirrors `exprSolScoped` (Strip.lean) verbatim apart from: the `∧`-routing
     branch, the `(nB,nG,nOr)` prefix counters, and `exprSol1Pres` (preserving)

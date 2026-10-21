@@ -55,6 +55,10 @@ inductive Hastype : KEnv → TEnv → Exp → Ty → Prop where
       Γ.lookup x = some (.refine .bool rx) →
       Γ.lookup y = some (.refine .bool ry) →
       Hastype κ Γ (.and (.fvar x) (.fvar y)) <ty|Bool{ν : (ν = x ∧ y)}|>
+  | unreach {κ Γ t} :
+      Entail κ Γ (fun _ => False) →
+      Ty.WFBVars t →
+      Hastype κ Γ .unreach t
   | ite {κ Γ x y e₁ e₂ r t} :
       Γ.lookup x = some (.refine .bool r) →
       y ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ e₁.fv ++ e₂.fv ++ t.fv ++ [x] →
@@ -91,6 +95,7 @@ theorem EVar.not_free_in_open : x ∈ e.fv → x ∈ (Exp.openVar k y e).fv := b
         grind
     | ann e t ih          =>
         simp_all [Exp.fv, Exp.openVar]
+    | unreach             => simp_all [Exp.fv]
 
 /-- Deferred — see Stage 12. -/
 theorem Hastype.fv_subset {κ Γ e t} (_h : Hastype κ Γ e t) :
@@ -133,6 +138,8 @@ theorem Hastype.fv_subset {κ Γ e t} (_h : Hastype κ Γ e t) :
   | @ann Γ' e t hht _ ih =>
     simp [Exp.fv] at zf
     exact ih zf
+  | unreach =>
+    simp [Exp.fv] at zf
 
 
 /-- Well-typed expressions are locally closed (lc_at 0). Proved by induction on
@@ -157,6 +164,7 @@ theorem Hastype.lc_at {κ Γ e t} (_h : Hastype κ Γ e t) : Exp.lc_at 0 e := by
   | not_var => simp [Exp.lc_at]
   | and_var => simp [Exp.lc_at]
   | ite _ _ _ _ _ ih₁ ih₂ => simp only [Exp.lc_at]; exact ⟨trivial, ih₁, ih₂⟩
+  | unreach => simp [Exp.lc_at]
 
 /-- WFBVars of `self x t`: `self` is the singleton `{ν | ν = x}` (kvar-free, no
     BVars), so it is `WFBVars` outright — independent of `t`. -/
@@ -215,3 +223,4 @@ theorem Hastype.wf_bvars {κ Γ e t} (h : Hastype κ Γ e t) : Ty.WFBVars t := b
   | not_var => exact Ty.WFBVars_not_result _
   | and_var => exact Ty.WFBVars_and_result _ _
   | ite _ _ hwf _ _ _ _ => exact hwf
+  | unreach _ hwf => exact hwf

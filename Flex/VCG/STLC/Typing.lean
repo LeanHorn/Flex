@@ -13,22 +13,18 @@ open STLC
   Binding sites use locally-nameless: `Exp.lam`/`letin` carry no binder name;
   the body has `BVar 0` for the parameter.
 
-  Refinements are deeply-embedded `Formula`s; `Subtyp.refine`'s constraint is
-  expressed via `Refinement.subImp` (a `Formula.allI`/`allB` over `ν`).
+  Refinements are deeply-embedded `Formula`s. Both binder rules — `Subtyp.arrow`
+  and `Subtyp.refine` — are stated in *opened* form: they introduce a fresh name
+  and check the codomain / opened refinement under the extended context.
 
 -/
 
 /-! ## Subtyping  κ; Γ ⊢ s <: t -/
 
 inductive Subtyp : KEnv → TEnv → Ty → Ty → Prop where
-  /-- SUB-BASE: `κ; Γ ⊢ ∀ν. r₁(ν) → r₂(ν)`  ⟹  `κ; Γ ⊢ {ν:b|r₁} <: {ν:b|r₂}`.
-      Stated *semantically* over `Refinement.interp` (matching what the
-      algorithmic `sub` produces), so it works uniformly whether `r₁`/`r₂` are
-      formulas or κ-applications. -/
-  | refine {κ Γ b r₁ r₂} :
-      Entail κ Γ (fun γ => ∀ ν : b.interp,
-        Refinement.interp κ r₁ (γ.push (Val.inj b ν)) →
-        Refinement.interp κ r₂ (γ.push (Val.inj b ν))) →
+  | refine {κ Γ b r₁ r₂ x} :
+      x ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ r₁.fv ++ r₂.fv →
+      Entail κ ((x, .refine b r₁) :: Γ) (fun γ => Refinement.interp κ (r₂.openBVar 0 x) γ) →
       Subtyp κ Γ (.refine b r₁) (.refine b r₂)
 
   /-- SUB-FUN (explicit witness): contravariant input, covariant output. -/
@@ -83,12 +79,18 @@ mutual
         Γ.lookup y = some (.refine .bool ry) →
         Synth κ Γ (.and (.fvar x) (.fvar y)) <ty|Bool{ν : ν = x ∧ y} |>
 
-  -- κ; Γ ⊢ e ⇐ t : "e checks against type t under κ"
   inductive Check : KEnv → TEnv → Exp → Ty → Prop where
     | sub {κ Γ e s t} :
         Synth κ Γ e s  →
         Subtyp κ Γ s t →
         Check κ Γ e t
+
+    /-- UNREACH: `unreachable` typechecks at any type, provided the ambient
+        context is provably contradictory (no model of `Γ` exists). It is not
+        a value and has no `BigStep` rule — it can only appear in dead code. -/
+    | unreach {κ Γ t} :
+        Entail κ Γ (fun _ => False) →
+        Check κ Γ .unreach t
 
     | lam {κ Γ e s₁ s₂ x} :
         x ∉ TEnv.dom Γ ++ TEnv.tyFv Γ ++ e.fv ++ s₁.fv ++ s₂.fv →

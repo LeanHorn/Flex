@@ -1,5 +1,6 @@
 import Flex.CHC.Certificate
 import Flex.Tactic.Oracles
+import Flex.PA.Smt
 
 /-! SMT-first synthesis and checked residual automation. -/
 
@@ -17,7 +18,7 @@ register_option flex.automation.smtTimeout : Nat := {
 
 register_option flex.automation.synthTimeout : Nat := {
   defValue := 2
-  descr := "Seconds per lean-auto synthesis query; zero disables external synthesis."
+  descr := "Seconds per SMT synthesis batch; zero disables external synthesis."
 }
 
 register_option flex.automation.structureSteps : Nat := {
@@ -30,7 +31,7 @@ namespace Flex.Automation
 /-- Each attempt is isolated, including helper declarations and diagnostic messages.
 Fresh helper theorems are inlined into evidence in the caller's environment. -/
 private def attempt (tactic : TSyntax `tactic) (target : Expr)
-    (checked : Bool := true) : TermElabM (Option Expr) := do
+    : TermElabM (Option Expr) := do
   let mut limit := flex.automation.proofHeartbeats.get (← getOptions) * 1000
   if (← getMaxHeartbeats) != 0 then
     limit := min limit ((← getRemainingHeartbeats) / 2)
@@ -53,11 +54,10 @@ private def attempt (tactic : TSyntax `tactic) (target : Expr)
           let closed ← mkLambdaFVars (← getLCtx).getFVars proof
           checkWithKernel (← instantiateMVars closed)
           unless ← isDefEq (← inferType proof) target do return none
-          if checked then
-            for name in proof.getUsedConstants do
-              for axiomName in ← collectAxioms name do
-                unless #[``propext, ``Classical.choice, ``Quot.sound].contains axiomName do
-                  return none
+          for name in proof.getUsedConstants do
+            for axiomName in ← collectAxioms name do
+              unless #[``propext, ``Classical.choice, ``Quot.sound].contains axiomName do
+                return none
           return some proof
         finally Flex.CHC.restoreTermState saved)
     (fun error => do
@@ -90,20 +90,30 @@ def proofOracle : Flex.CHC.ProofOracle := fun target => do
       first | omega | grind |
         aesop (config := { maxRuleApplications := 200 }) (add unsafe 20% (by omega)))) target
 
-/-- Trusted SMT evidence is confined to candidate selection; certificates use
-`proofOracle`. The pinned lean-auto still requests proofs and unsat cores even
-with reconstruction disabled, so this timeout also bounds that solver work. -/
-def synthOracle : PAOracle := fun target => do
+/-- Batch SMT decisions select candidates; only `proofOracle` builds evidence.
+Unsupported or inconclusive SMT queries fall back to bounded native proofs. -/
+def synthOracle (checkBudget : TermElabM Unit := pure ()) : PASynthOracle := fun targets => do
+  checkBudget
   let timeout := flex.automation.synthTimeout.get (← getOptions)
-  if timeout != 0 then
-    let result ← withOptions (fun options =>
-        auto.smt.timeout.set (auto.smt.rconsProof.set options false) timeout) <|
-      attempt (← `(tactic| flex_auto [*])) target (checked := false)
-    if result.isSome then return result
-  for tactic in #[← `(tactic| omega), ← `(tactic| grind),
-      ← `(tactic| constructor <;> grind)] do
-    if let some proof ← attempt tactic target then return some proof
-  return none
+  let results ← if timeout == 0 then
+    pure (targets.map fun _ => PASynthResult.unknown "SMT synthesis disabled")
+    else Flex.PA.smtOracle (timeout * 1000) targets
+  checkBudget
+  unless results.size == targets.size do
+    throwError "PA synthesis oracle returned the wrong number of decisions"
+  targets.zipWithM (fun target result => do
+    checkBudget
+    match result with
+    | .valid | .invalid => return result
+    | .unknown reason =>
+      trace[flex.oracle] "SMT synthesis inconclusive: {reason}"
+      for tactic in #[← `(tactic| omega), ← `(tactic| grind),
+          ← `(tactic| constructor <;> grind)] do
+        checkBudget
+        let proof ← attempt tactic target
+        checkBudget
+        if proof.isSome then return .valid
+      return result) results
 
 /-- The structural walk used by `solve_fixpoint`, with checked leaf proofs and
 finite progress. Definitions are retried only after their target changes; goals

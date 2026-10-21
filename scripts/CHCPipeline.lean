@@ -18,6 +18,7 @@ private structure Context where
   output : System.FilePath
   solverMs : Nat
   paSeconds : Nat
+  stopAfterFix : Bool
   deadline : Nat
   events : IO.Ref (Array Json)
   closedBy : IO.Ref String
@@ -113,6 +114,9 @@ private def runPA (ctx : Context) : TacticM Unit := do
   let start ← IO.monoMsNow
   let calls ← IO.mkRef 0
   let accepted ← IO.mkRef 0
+  let invalid ← IO.mkRef 0
+  let unknown ← IO.mkRef 0
+  let batches ← IO.mkRef 0
   let oracleMs ← IO.mkRef 0
   let rounds ← IO.mkRef 0
   let observe : PAObserver := fun event => do
@@ -135,20 +139,29 @@ private def runPA (ctx : Context) : TacticM Unit := do
     | .converged count =>
       emit ctx "fix_converged" "converged" [
         ("rounds", toJson (← rounds.get)), ("surviving_candidates", toJson count)]
-  let oracle : PAOracle := fun target => do
+  let checkBudget : TermElabM Unit := do
     checkTime ctx
     if (← IO.monoMsNow) - start >= ctx.paSeconds * 1000 then
       throwError "PA wall-clock budget exhausted"
-    calls.modify (· + 1)
+  let oracle : PASynthOracle := fun targets => do
+    checkBudget
+    calls.modify (· + targets.size)
+    batches.modify (· + 1)
     let queryStart ← IO.monoMsNow
     try
-      let proof ← Flex.Automation.synthOracle target
-      if proof.isSome then accepted.modify (· + 1)
-      return proof
+      let decisions ← Flex.Automation.synthOracle checkBudget targets
+      for decision in decisions do
+        match decision with
+        | .valid => accepted.modify (· + 1)
+        | .invalid => invalid.modify (· + 1)
+        | .unknown _ => unknown.modify (· + 1)
+      return decisions
     finally oracleMs.modify (· + ((← IO.monoMsNow) - queryStart))
   try
+    let maxGuardedQualifiers ← envNat "FLEX_PILOT_GUARD_LIMIT" 32
     withOptions (flex.benchOracles.set · true) do
-      onPredicates <| fixImpl oracle { mode } (some Flex.Automation.proofOracle) observe
+      onPredicates <| fixImpl proveLeaf { mode, maxGuardedQualifiers }
+        (some Flex.Automation.proofOracle) observe (some oracle)
     emit ctx "fix_certificate" "built" [("remaining_goals", toJson (← getGoals).length)]
     discharge
   finally
@@ -157,6 +170,8 @@ private def runPA (ctx : Context) : TacticM Unit := do
       return none
     emit ctx "fix_queries" "measured" [
       ("queries", toJson (← calls.get)), ("accepted", toJson (← accepted.get)),
+      ("batches", toJson (← batches.get)), ("invalid", toJson (← invalid.get)),
+      ("unknown", toJson (← unknown.get)),
       ("oracle_ms", toJson (← oracleMs.get)),
       ("elapsed_ms", toJson ((← IO.monoMsNow) - start)), ("warnings", toJson warnings)]
 
@@ -215,6 +230,9 @@ private def pipeline (ctx : Context) : TacticM Unit := do
       best ← Tactic.saveState
       saveGoals ctx "after-fix"
     restore cleaned
+  if ctx.stopAfterFix then
+    restore best
+    return
   for backend in #[Backend.spacer, Backend.eldarica] do
     let label := if backend == .spacer then "spacer" else "eldarica"
     restore cleaned
@@ -257,6 +275,7 @@ def run (name : Name) (variant caseName : String) : TermElabM Unit := do
     caseName, variant, output := output / variant
     solverMs := ← envNat "FLEX_PILOT_SOLVER_MS" 30000
     paSeconds := ← envNat "FLEX_PILOT_PA_SECONDS" 30
+    stopAfterFix := (← IO.getEnv "FLEX_PILOT_STOP_AFTER_FIX") == some "1"
     deadline := start + (← envNat "FLEX_PILOT_CASE_SECONDS" 180) * 1000
     events := ← IO.mkRef #[], closedBy := ← IO.mkRef "" }
   IO.FS.createDirAll ctx.output
@@ -271,7 +290,9 @@ def run (name : Name) (variant caseName : String) : TermElabM Unit := do
       let residuals ← goals.mapM fun goal => return (← Meta.ppGoal goal).pretty
       IO.FS.writeFile (ctx.output / "residual.txt") (String.intercalate "\n\n" residuals)
       return (if goals.isEmpty then "proved" else "partial", "", goals.length))
-      (fun exception => do return ("failed", ← exception.toMessageData.toString, 1))
+      (fun exception => do
+        ctx.closedBy.set ""
+        return ("failed", ← exception.toMessageData.toString, 1))
   finally restoreTermState saved
   let result := Json.mkObj [
     ("case", toJson caseName), ("variant", toJson variant), ("status", toJson status),

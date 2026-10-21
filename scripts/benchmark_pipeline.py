@@ -244,7 +244,9 @@ def run_case(case: dict, repetition: int, variants: list[str], args: argparse.Na
             env = {**environment, "FLEX_PILOT_OUTPUT": str(directory),
                    "FLEX_PILOT_CASE_SECONDS": str(math.ceil(args.case_timeout)),
                    "FLEX_PILOT_SOLVER_MS": str(round(args.solver_timeout * 1000)),
-                   "FLEX_PILOT_PA_SECONDS": str(math.ceil(args.pa_timeout))}
+                   "FLEX_PILOT_PA_SECONDS": str(math.ceil(args.pa_timeout)),
+                   "FLEX_PILOT_STOP_AFTER_FIX": "1" if args.stop_after_fix else "0",
+                   "FLEX_PILOT_GUARD_LIMIT": str(args.guarded_qualifiers)}
             result = monitor(command, env, path, case, pending, args)
             write_json(directory / "process.json", result)
             runner = {k: result[k] for k in ("artifacts", "log", "process_wall_ms", "startup_ms",
@@ -319,12 +321,15 @@ def pa_diagnostics(record: dict) -> dict:
         values = [p[field] for p in events if finite_time(p.get(field))]
         return sum(values) if values else None
 
+    verified = outcome(record) == "success"
     return {
-        "entered": entered, "excluded_zap_only": not entered and record.get("closed_by") == "zap",
+        "entered": entered,
+        "excluded_zap_only": verified and not entered and record.get("closed_by") == "zap",
         "converged": bool(converged), "timed_out": timeout,
         "finished": any(p.get("status") in SUCCESS | {"partial", "finished"} for p in terminal),
-        "proved": any(p.get("status") in {"proved", "closed"} for p in terminal),
-        "pipeline_proved_after_pa": entered and outcome(record) == "success",
+        "proved": verified and record.get("closed_by") == "fix" and
+                  any(p.get("status") in {"proved", "closed"} for p in terminal),
+        "pipeline_proved_after_pa": entered and verified,
         "setups": setups, "rounds": rounds,
         "initial_candidates": total(setups, "initial_candidates"),
         "surviving_candidates": total(converged, "surviving_candidates"),
@@ -332,7 +337,8 @@ def pa_diagnostics(record: dict) -> dict:
         "standard_templates": total(setups, "standard_templates"),
         "tagged_templates": total(setups, "tagged_templates"),
         "queries": total(queries, "queries"), "accepted": total(queries, "accepted"),
-        "oracle_ms": total(queries, "oracle_ms"),
+        "batches": total(queries, "batches"), "invalid": total(queries, "invalid"),
+        "unknown": total(queries, "unknown"), "oracle_ms": total(queries, "oracle_ms"),
         "warnings": [warning for p in queries for warning in p.get("warnings", [])],
     }
 
@@ -373,7 +379,8 @@ def summarize(records: list[dict], selected: list[dict], args: argparse.Namespac
         variants[variant] = {
             "runs": len(subset), "success": counts["success"], "partial": counts["partial"],
             "failure": counts["failure"], "statuses": dict(Counter(r["status"] for r in subset)),
-            "closed_by": dict(Counter(r.get("closed_by") or "unclosed" for r in subset)),
+            "closed_by": dict(Counter((r.get("closed_by") or "unclosed")
+                                      if outcome(r) == "success" else "unclosed" for r in subset)),
             "timed_runs": len(times), "missing_times": len(subset) - len(times),
             "censored_runs": sum(bool(r.get("censored")) for r in subset),
             "median_elapsed_ms_all_timed_runs": statistics.median(times) if times else None,
@@ -390,7 +397,8 @@ def summarize(records: list[dict], selected: list[dict], args: argparse.Namespac
             entered = [d for d in diagnostics if d["entered"]]
             measurements = {}
             for field in ("initial_candidates", "surviving_candidates", "scraped_templates",
-                          "standard_templates", "tagged_templates", "queries", "accepted", "oracle_ms"):
+                          "standard_templates", "tagged_templates", "queries", "accepted",
+                          "batches", "invalid", "unknown", "oracle_ms"):
                 values = [d[field] for d in entered if d[field] is not None]
                 measurements[field] = {"measured_runs": len(values),
                                        "total": sum(values) if values else None,
@@ -404,7 +412,8 @@ def summarize(records: list[dict], selected: list[dict], args: argparse.Namespac
                          for r, d in zip(subset, diagnostics)],
                 "notes": "PA counts and candidate/query measurements exclude Zap-only runs. "
                          "Converged means a fix_converged event was observed; finished means the fix phase returned "
-                         "normally (partial or proved); proved counts only proofs closed by fix. "
+                         "normally (partial or proved); proved counts only fix closures accepted by the final kernel check. "
+                         "Query decisions include False-head guards as well as qualifier checks. "
                          "Missing measurements remain null; surviving candidates are measured only at convergence.",
             }
     return {"selected_cases": len(selected), "expected_runs": len(selected) * len(args.variants) * args.repeats,
@@ -449,7 +458,12 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=20261021)
     parser.add_argument("--case-timeout", type=float, default=180, help="hard seconds per variant, excluding imports")
     parser.add_argument("--solver-timeout", type=float, default=30, help="seconds per solver call")
-    parser.add_argument("--pa-timeout", type=float, default=30, help="seconds per proof-assistant stage")
+    parser.add_argument("--pa-timeout", type=float, default=30,
+                        help="cooperative seconds for PA preparation/synthesis; excludes certification and residual discharge")
+    parser.add_argument("--stop-after-fix", action="store_true",
+                        help="measure Zap and Fix without Spacer/Eldarica fallback")
+    parser.add_argument("--guarded-qualifiers", type=int, default=32,
+                        help="maximum generated guarded templates; zero disables them")
     parser.add_argument("--startup-timeout", type=float, default=120, help="hard seconds for imports/harness/statements or between variants")
     parser.add_argument("--skip-build", action="store_true", help="reuse already compiled Flex dependencies")
     parser.add_argument("--inventory-only", action="store_true", help="save selection and metadata without running Lean")
@@ -463,6 +477,10 @@ def main() -> int:
         parser.error("workers/repeats must be positive integers and timeouts finite positive seconds")
     if round(args.solver_timeout * 1000) < 1:
         parser.error("--solver-timeout must round to at least one millisecond")
+    if args.guarded_qualifiers < 0:
+        parser.error("--guarded-qualifiers must be nonnegative")
+    if args.stop_after_fix and any(v not in {*SCRAPING_MODES, "nest_fix", "flat_fix"} for v in args.variants):
+        parser.error("--stop-after-fix requires variants containing Fix")
     if len(set(args.variants)) != len(args.variants) or (args.cases and len(set(args.cases)) != len(args.cases)):
         parser.error("duplicate variants or case IDs")
     suite = args.suite.strip("/")
@@ -524,9 +542,15 @@ def main() -> int:
     if args.comparison == "scraping":
         metadata["scraping_comparison"] = {
             "variant_modes": {v: SCRAPING_MODES[v] for v in args.variants},
-            "pipeline": ["zap", "fix", "spacer", "eldarica", "strong_discharge"],
-            "nesting": False, "oracle": "lean-auto query", "oracle_query_timeout_ms": 2000,
-            "pa_timeout_seconds": args.pa_timeout,
+            "pipeline": (["zap", "fix", "strong_discharge"] if args.stop_after_fix else
+                         ["zap", "fix", "spacer", "eldarica", "strong_discharge"]),
+            "nesting": False, "oracle": "batched SMT decisions with native fallback",
+            "oracle_batch_timeout_ms": 2000, "scheduler": "dependency worklist",
+            "guarded_qualifiers": args.guarded_qualifiers,
+            "pa_timeout_seconds": math.ceil(args.pa_timeout),
+            "pa_timeout_scope": "Cooperative wall budget for qualifier preparation and synthesis. "
+                                "Certification and residual discharge have separate attempt limits; "
+                                "the hard case deadline covers the entire pipeline.",
             "cooperative_case_timeout_seconds": math.ceil(args.case_timeout),
             "hard_case_timeout_seconds": args.case_timeout,
             "solver_timeout_ms": round(args.solver_timeout * 1000),

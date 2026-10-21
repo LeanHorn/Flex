@@ -4,6 +4,7 @@ import Flex.PA.Fixpoint
 import Flex.PA.Cert
 import Flex.PA.Scrape
 import Flex.PA.Qualifier
+import Flex.Tactic.Automation
 
 open Lean Elab Meta Tactic
 
@@ -44,6 +45,7 @@ def fixImpl
   (scrape : PAScrapeConfig := {})
   (proofOracle : Option PAOracle := none)
   (observe : PAObserver := fun _ => pure ())
+  (synthOracle : Option PASynthOracle := none)
     : TacticM Unit := withMainContext do
   let (kctx, kvarsInOrder) ← peelKVars
 
@@ -76,7 +78,8 @@ def fixImpl
     let initial ← buildInitialAssignment kvarsInOrder qualifiers candidateLimit instanceLimit
     observe (.setup extraQualifiers.size standardQualifiers.size (← getQualifiers).size
       (initial.toArray.map fun (κ, cs) => (κ.name, cs.length)))
-    let aStar ← benchFixPhase "synthesis" <| solveFixpoint kctx flatCs initial oracle observe
+    let aStar ← benchFixPhase "synthesis" <|
+      solveFixpoint kctx flatCs initial oracle observe synthOracle
     if flex.benchOracles.get (← getOptions) then
       let count := fun (a : List (KVar × List (Expr × List Nat))) =>
         a.foldl (fun n (_, qs) => n + qs.length) 0
@@ -101,7 +104,8 @@ private declare_config_elab elabScrapeLimits PAScrapeLimits
 
 /-- Solve existential predicates by PA, leaving any unproved residual goals.
     Uses the standard qualifier bank unless `flex.standardQualifiers` is disabled.
-    `scrape`: `basic` extracts heads; `standard` adds premises and definition discovery;
+    Default synthesis batches SMT checks; certificate leaves require Lean proofs.
+    `scrape`: `basic` extracts heads; `standard` adds premises, guarded arithmetic, and definitions;
     `deep` also explores helpers and generalizes numeric templates.
     `defs`: also scrape the listed definitions. Scraping is off by default.
     `oracle`: fallback after default Lean automation, shared by both phases.
@@ -146,7 +150,10 @@ elab_rules : tactic
     let proofOracle ← match proof with
       | none => pure defaultOracle
       | some tac => pure (withPAPriority (← `(tactic| ($tac:tacticSeq))))
+    let batchOracle := if synth.isNone && fallback.isNone then
+      some Flex.Automation.synthOracle else none
     fixImpl synthOracle { limits with mode, defs } (some proofOracle)
+      (synthOracle := batchOracle)
 
     -- Use the proof oracle on residual goals; keep those it cannot close.
     benchFixPhase "residual" do

@@ -52,41 +52,74 @@ def buildInitialAssignment (cyclicKs : List KVar) (extraQualifiers : Array Expr 
       logWarning m!"fix: instance limit ({state.instances}) reached for {κ.name}; further slot assignments omitted"
     return (κ, state.entries.toList)
 
-/-- Iterate `weakenOnce` until the total candidate count across all κ's stops
-    shrinking. Monotone: the total count is strictly decreasing per iteration
-    until the fixpoint, so termination is guaranteed given finite candidates. -/
+private structure PAClause where
+  expression : Expr
+  head : KVar
+  deriving Inhabited
+
+/-- Dependencies include premise types and head argument terms, but exclude the
+    replaced head symbol. Self-dependencies must be revisited after weakening. -/
+private def clauseDependencies (kctx : KContext) (clause : Expr) : MetaM (List KVar) := do
+  forallTelescopeReducing clause (whnfType := true) fun binders head => do
+    let mut dependencies : List KVar := []
+    for binder in binders do
+      dependencies := dependencies ++ (← (KM.exprKVars (← inferType binder)).run kctx)
+    for arg in head.getAppArgs do
+      dependencies := dependencies ++ (← (KM.exprKVars arg).run kctx)
+    return dependencies.eraseDups
+
+/-- Weaken only clauses whose premises changed. A reported round is one wave
+    of pending clauses; the queue is empty exactly when no affected checks remain. -/
 partial def solveFixpoint
-    (kctx       : KContext)
-    (flatCs     : List Expr)
+    (kctx : KContext) (flatCs : List Expr)
     (assignment : List (KVar × List (Expr × List Nat)))
     (oracle : PAOracle := proveLeaf)
     (observe : PAObserver := fun _ => pure ())
+    (synthOracle : Option PASynthOracle := none)
     : TermElabM (List (KVar × List (Expr × List Nat))) := do
-  let beforeCount := assignment.foldl (fun acc (_, cs) => acc + cs.length) 0
-  observe (.roundStarted beforeCount)
-  let next ← weakenOnce kctx flatCs assignment oracle
-  let afterCount  := next.foldl       (fun acc (_, cs) => acc + cs.length) 0
-  observe (.roundFinished beforeCount afterCount)
-  if afterCount == beforeCount then
-    observe (.converged afterCount)
-    return next
-  else
-    solveFixpoint kctx flatCs next oracle observe
-
-/-- Turn the final Houdini assignment into one `Expr` per κ, ready for witness
-    synthesis. Per κ, β-apply every surviving candidate at κ's canonical fvar
-    placeholders (`FVarId.mk "z0"`, …), then conjoin.
-
-    Output shape matches what `solToWitnessExpr` in `Core/Elab.lean` expects. -/
-def finalizeSolutions (assignment : List (KVar × List (Expr × List Nat)))
-    : MetaM (List (KVar × Expr)) := do
-  assignment.mapM fun (κ, cands) => do
-    let paramFvars : Array Expr :=
-      (κ.params.map fun n => Expr.fvar (FVarId.mk n)).toArray
-    let bodies ← cands.mapM fun (q, slots) => do
-      let chosen : Array Expr := (slots.map fun i => paramFvars[i]!).toArray
-      Expr.instQualifier q chosen
-    return (κ, conjoinExprs bodies)
+  let mut contextDeps : List KVar := []
+  for decl in ← getLCtx do
+    contextDeps := contextDeps ++ (← (KM.exprKVars decl.type).run kctx)
+    if let some value := decl.value? then
+      contextDeps := contextDeps ++ (← (KM.exprKVars value).run kctx)
+  contextDeps := contextDeps.eraseDups
+  let mut clauses : Array PAClause := #[]
+  let mut dependents : Std.HashMap MVarId (Array Nat) := {}
+  for expression in flatCs do
+    let some head ← (findHeadKVar expression).run kctx | continue
+    unless assignment.any (·.1 == head) do continue
+    let index := clauses.size
+    clauses := clauses.push { expression, head }
+    for κ in ((← clauseDependencies kctx expression) ++ contextDeps).eraseDups do
+      dependents := dependents.insert κ.mvarId ((dependents[κ.mvarId]?.getD #[]).push index)
+  let mut out := assignment
+  let mut solutions ← finalizeSolutions out
+  let mut count := out.foldl (fun n (_, qs) => n + qs.length) 0
+  let mut pending := Array.range clauses.size
+  let mut queued : Std.HashSet Nat := pending.foldl (·.insert ·) {}
+  while !pending.isEmpty do
+    let before := count
+    observe (.roundStarted before)
+    let mut next : Array Nat := #[]
+    for index in pending do
+      queued := queued.erase index
+      let clause := clauses[index]!
+      let some (_, candidates) := out.find? (·.1 == clause.head) | continue
+      let kept ← weakenClause kctx clause.expression clause.head candidates solutions oracle synthOracle
+      if kept.length < candidates.length then
+        count := count - (candidates.length - kept.length)
+        out := out.map fun (κ, qs) => if κ == clause.head then (κ, kept) else (κ, qs)
+        let sol ← candidateSolution clause.head kept
+        solutions := solutions.map fun (κ, body) =>
+          if κ == clause.head then (κ, sol) else (κ, body)
+        for dependent in dependents[clause.head.mvarId]?.getD #[] do
+          unless queued.contains dependent do
+            queued := queued.insert dependent
+            next := next.push dependent
+    observe (.roundFinished before count)
+    pending := next
+  observe (.converged count)
+  return out
 
 /-- One-shot PA: from cyclic κ list + flat constraint + κ-context, run the full
     Houdini pipeline and return the final solution Expr per κ.

@@ -9,27 +9,6 @@ open Lean Meta Elab Term
 private def unknowns (count : Nat) (reason : String) : Array PASynthResult :=
   Array.replicate count (.unknown reason)
 
-/-- Open only binders and premises shared by every query in the batch. -/
-private partial def withSharedPrefix (queries : Array Expr)
-    (k : Array Expr → Array Expr → Array Expr → MetaM α) : MetaM α :=
-  go queries #[] #[]
-where
-  go (queries variables premises : Array Expr) : MetaM α := do
-    let queries ← queries.mapM CHC.Prepare.expose
-    let some (Expr.forallE name domain _ bi) := queries[0]?
-      | k variables premises queries
-    unless queries.all (fun e => e.isForall && e.bindingDomain! == domain) do
-      return ← k variables premises queries
-    if ← isProp domain then
-      if queries.any (fun e => e.bindingBody!.hasLooseBVar 0) then
-        throwError "PA SMT: proof-dependent premises are unsupported"
-      withLocalDecl name bi domain fun proof =>
-        go (queries.map (·.bindingBody!.instantiate1 proof)) variables (premises.push domain)
-    else
-      discard <| CHC.Fragment.valueSort domain
-      withLocalDecl name bi domain fun input =>
-        go (queries.map (·.bindingBody!.instantiate1 input)) (variables.push input) premises
-
 private structure Batch where
   script : String
   indices : Array Nat
@@ -55,58 +34,54 @@ private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch :=
         if error.isInterrupt then throw error
         -- A local value of an unsupported type may witness an empty type.
         omittedAssumptions := true
-  withSharedPrefix queries fun variables premises conclusions => do
-    let mut omittedAssumptions := omittedAssumptions
-    let mut results := unknowns queries.size "unsupported query"
-    let mut supported := #[]
-    for conclusion in conclusions, i in [:conclusions.size] do
-      try
-        for id in (collectFVars {} conclusion).fvarIds do
-          discard <| CHC.Fragment.valueSort (← inferType (mkFVar id))
-        supported := supported.push (i, conclusion)
-      catch error =>
-        if error.isInterrupt then throw error
-        results := results.set! i (.unknown (← error.toMessageData.toString))
-    let mut variables := variables
-    for expression in premises ++ supported.map (·.2) ++ assumptions do
-      for id in (collectFVars {} expression).fvarIds do
-        let input := mkFVar id
-        unless variables.contains input do variables := variables.push input
-    let mut names : Std.HashMap FVarId String := {}
-    let mut script := s!"(set-option :print-success false)\n(set-option :produce-models false)\n(set-option :produce-proofs false)\n(set-option :produce-unsat-cores false)\n(set-option :timeout {timeoutMs})\n(set-logic ALL)\n"
-    for input in variables, i in [:variables.size] do
-      let sort ← CHC.Fragment.valueSort (← inferType input)
-      let name := s!"pa_{i}"
-      names := names.insert input.fvarId! name
-      let sort := match sort with | .int => "Int" | .bool => "Bool"
-      script := script ++ s!"(declare-const {name} {sort})\n"
-    let symbols := variables.map fun input => names[input.fvarId!]!
-    let translate (expression : Expr) : MetaM Smt.Term := do
-      let expression ← CHC.Prepare.atom expression true
-      unless ← isProp expression do throwError "PA SMT: expected a proposition"
-      let ((term, constants, freeVariables), _) ←
-        (Smt.Translator.translateExpr expression).run { uniqueFVarNames := names }
-      unless constants.isEmpty && freeVariables.toArray.all names.contains do
-        throwError "PA SMT: unsupported constant or free-input dependencies"
-      CHC.Fragment.checkTerm term symbols true
-      return term
-    for premise in premises do
-      script := script ++ s!"(assert {← translate premise})\n"
-    for assumption in assumptions do
-      try script := script ++ s!"(assert {← translate assumption})\n"
-      catch error =>
-        if error.isInterrupt then throw error
-        omittedAssumptions := true
-    let mut indices := #[]
-    for (i, conclusion) in supported do
-      try
-        let term ← translate conclusion
-        script := script ++ s!"(push 1)\n(assert (not {term}))\n(check-sat)\n(pop 1)\n"
-        indices := indices.push i
-      catch error =>
-        if error.isInterrupt then throw error
-        results := results.set! i (.unknown (← error.toMessageData.toString))
-    return { script := script ++ "(exit)\n", indices, results, omittedAssumptions }
+  let mut results := unknowns queries.size "unsupported query"
+  let mut supported := #[]
+  for query in queries, i in [:queries.size] do
+    try
+      for id in (collectFVars {} query).fvarIds do
+        discard <| CHC.Fragment.valueSort (← inferType (mkFVar id))
+      supported := supported.push (i, query)
+    catch error =>
+      if error.isInterrupt then throw error
+      results := results.set! i (.unknown (← error.toMessageData.toString))
+  let mut variables := #[]
+  for expression in supported.map (·.2) ++ assumptions do
+    for id in (collectFVars {} expression).fvarIds do
+      let input := mkFVar id
+      unless variables.contains input do variables := variables.push input
+  let mut names : Std.HashMap FVarId String := {}
+  let mut script := s!"(set-option :print-success false)\n(set-option :produce-models false)\n(set-option :produce-proofs false)\n(set-option :produce-unsat-cores false)\n(set-option :timeout {timeoutMs})\n(set-logic ALL)\n"
+  for input in variables, i in [:variables.size] do
+    let sort ← CHC.Fragment.valueSort (← inferType input)
+    let name := s!"pa_{i}"
+    names := names.insert input.fvarId! name
+    let sort := match sort with | .int => "Int" | .bool => "Bool"
+    script := script ++ s!"(declare-const {name} {sort})\n"
+  let symbols := variables.map fun input => names[input.fvarId!]!
+  let translate (expression : Expr) : MetaM Smt.Term := do
+    let expression ← CHC.Prepare.atom expression true
+    unless ← isProp expression do throwError "PA SMT: expected a proposition"
+    let ((term, constants, freeVariables), _) ←
+      (Smt.Translator.translateExpr expression).run { uniqueFVarNames := names }
+    unless constants.isEmpty && freeVariables.toArray.all names.contains do
+      throwError "PA SMT: unsupported constant or free-input dependencies"
+    CHC.Fragment.checkTerm term symbols true
+    return term
+  for assumption in assumptions do
+    try script := script ++ s!"(assert {← translate assumption})\n"
+    catch error =>
+      if error.isInterrupt then throw error
+      omittedAssumptions := true
+  let mut indices := #[]
+  for (i, query) in supported do
+    try
+      let term ← translate query
+      script := script ++ s!"(push 1)\n(assert (not {term}))\n(check-sat)\n(pop 1)\n"
+      indices := indices.push i
+    catch error =>
+      if error.isInterrupt then throw error
+      results := results.set! i (.unknown (← error.toMessageData.toString))
+  return { script := script ++ "(exit)\n", indices, results, omittedAssumptions }
 
 /-- Reject extra, missing, or malformed responses rather than guessing their query positions. -/
 private def parseResponses (output : String) (count : Nat) : Except String (Array PASynthResult) := do

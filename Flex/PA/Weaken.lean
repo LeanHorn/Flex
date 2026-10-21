@@ -86,19 +86,25 @@ def weakenClause
     (oracle : PAOracle := proveLeaf) (synthOracle : Option PASynthOracle := none)
     : TermElabM (List (Expr × List Nat)) := do
   if candidates.isEmpty then return []
-  let guard ← (specializeClauseAsNeg head solutions clause).run kctx
   match synthOracle with
   | none =>
-    if ← checkExprUnsat guard oracle then return candidates
+    if ← checkExprUnsat (← (specializeClauseAsNeg head solutions clause).run kctx) oracle then
+      return candidates
     candidates.filterM fun (q, slots) => do
       let vc ← (specializeClauseForHead head q slots solutions clause).run kctx
       checkExprVC vc oracle
   | some synth =>
-    let vcs ← candidates.toArray.mapM fun (q, slots) =>
-      (specializeClauseForHead head q slots solutions clause).run kctx
-    let results ← synth (#[guard] ++ vcs)
-    unless results.size == vcs.size + 1 do
-      throwError "PA synthesis oracle returned {results.size} results for {vcs.size + 1} queries"
+    -- Specialize the premises once and open them as local hypotheses, which the
+    -- oracle asserts once; the checks differ only in the head.
+    let opened ← (specializeClauseWithHead head (pure <| mkAppN (.mvar head.mvarId) ·)
+      solutions clause).run kctx
+    let results ← forallTelescope opened fun _ conclusion => do
+      let guard ← (specializeClauseAsNeg head solutions conclusion).run kctx
+      let vcs ← candidates.toArray.mapM fun (q, slots) =>
+        (specializeClauseForHead head q slots solutions conclusion).run kctx
+      synth (#[guard] ++ vcs)
+    unless results.size == candidates.length + 1 do
+      throwError "PA synthesis oracle returned {results.size} results for {candidates.length + 1} queries"
     -- A proved inconsistent premise validates every candidate, even if an
     -- individual query times out or is unsupported by the backend.
     if let .valid := results[0]! then return candidates

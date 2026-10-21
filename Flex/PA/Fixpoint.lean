@@ -7,6 +7,14 @@ import Flex.PA.Weaken
 
 open Lean Meta Elab Term Tactic
 
+inductive PAProgress where
+  | setup (scraped standard tagged : Nat) (candidates : Array (Name × Nat))
+  | roundStarted (candidates : Nat)
+  | roundFinished (before after : Nat)
+  | converged (candidates : Nat)
+
+abbrev PAObserver := PAProgress → TermElabM Unit
+
 private structure InitialCandidates where
   entries : Array (Expr × List Nat) := #[]
   seen : ExprSet := {}
@@ -52,14 +60,18 @@ partial def solveFixpoint
     (flatCs     : List Expr)
     (assignment : List (KVar × List (Expr × List Nat)))
     (oracle : PAOracle := proveLeaf)
+    (observe : PAObserver := fun _ => pure ())
     : TermElabM (List (KVar × List (Expr × List Nat))) := do
-  let next ← weakenOnce kctx flatCs assignment oracle
   let beforeCount := assignment.foldl (fun acc (_, cs) => acc + cs.length) 0
+  observe (.roundStarted beforeCount)
+  let next ← weakenOnce kctx flatCs assignment oracle
   let afterCount  := next.foldl       (fun acc (_, cs) => acc + cs.length) 0
+  observe (.roundFinished beforeCount afterCount)
   if afterCount == beforeCount then
+    observe (.converged afterCount)
     return next
   else
-    solveFixpoint kctx flatCs next oracle
+    solveFixpoint kctx flatCs next oracle observe
 
 /-- Turn the final Houdini assignment into one `Expr` per κ, ready for witness
     synthesis. Per κ, β-apply every surviving candidate at κ's canonical fvar

@@ -442,7 +442,7 @@ def main() -> int:
         "retry": retry,
         "source_hashes": {str(p.relative_to(ROOT)): digest(p) for p in [
             ROOT / "lake-manifest.json", ROOT / "lakefile.lean",
-            ROOT / "Benchmarks/CHC/Parity.lean", Path(__file__), ROOT / "scripts/benchmark_chc.py",
+            ROOT / "scripts/CHCParity.lean", Path(__file__), ROOT / "scripts/benchmark_chc.py",
             *sorted((ROOT / "Flex/CHC").glob("*.lean")), ROOT / "native/chc_process.cpp"]},
         "method": "Native and Flex-exported scripts use the same backend runner, executable, "
                   "options, timeout, and model request. Partial certificates are not full proofs.",
@@ -458,7 +458,7 @@ def main() -> int:
         b: binary_info(args.z3 if b == "spacer" else args.eldarica,
                        ["--version"] if b == "spacer" else ["-h"]) for b in args.backends}
     write_json(args.output / "metadata.json", metadata)
-    header = (ROOT / "Benchmarks/CHC/Parity.lean").read_text()
+    header = (ROOT / "scripts/CHCParity.lean").read_text()
     imports = [module for case in selected if case["generated"]
                for module in re.findall(r"^import (.*)$", Path(case["generated"]).read_text(),
                                         re.MULTILINE)]

@@ -43,6 +43,7 @@ def fixImpl
   (oracle : PAOracle := proveLeaf)
   (scrape : PAScrapeConfig := {})
   (proofOracle : Option PAOracle := none)
+  (observe : PAObserver := fun _ => pure ())
     : TacticM Unit := withMainContext do
   let (kctx, kvarsInOrder) ← peelKVars
 
@@ -70,9 +71,12 @@ def fixImpl
     let candidateLimit := if scrape.mode == .no && scrape.defs.isEmpty then none
       else some scrape.maxCandidatesPerKappa
     let instanceLimit := candidateLimit.map fun _ => scrape.maxInstancesPerKappa
-    let qualifiers := extraQualifiers ++ (← getStandardQualifiers)
+    let standardQualifiers ← getStandardQualifiers
+    let qualifiers := extraQualifiers ++ standardQualifiers
     let initial ← buildInitialAssignment kvarsInOrder qualifiers candidateLimit instanceLimit
-    let aStar ← benchFixPhase "synthesis" <| solveFixpoint kctx flatCs initial oracle
+    observe (.setup extraQualifiers.size standardQualifiers.size (← getQualifiers).size
+      (initial.toArray.map fun (κ, cs) => (κ.name, cs.length)))
+    let aStar ← benchFixPhase "synthesis" <| solveFixpoint kctx flatCs initial oracle observe
     if flex.benchOracles.get (← getOptions) then
       let count := fun (a : List (KVar × List (Expr × List Nat))) =>
         a.foldl (fun n (_, qs) => n + qs.length) 0

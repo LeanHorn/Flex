@@ -33,3 +33,6 @@ eval/oracle_results.json
 eval/chc_results*
 lean-noquals.zip
 lean-noquals/
+
+# Frozen CHC evaluation inputs, translations, and results
+/evaluation/CHC-COMP/

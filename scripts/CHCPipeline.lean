@@ -1,0 +1,284 @@
+import Flex.Tactic
+import Flex.CHC
+import Flex.Tactic.Automation
+
+/-! Paired CHC pilot: identical checked automation, with nesting and PA ablations. -/
+
+open Lean Meta Elab Term Tactic Flex.CHC
+
+set_option maxRecDepth 16384
+set_option maxHeartbeats 0
+set_option Elab.async false
+
+namespace FlexPilot
+
+private structure Context where
+  caseName : String
+  variant : String
+  output : System.FilePath
+  solverMs : Nat
+  paSeconds : Nat
+  deadline : Nat
+  events : IO.Ref (Array Json)
+  closedBy : IO.Ref String
+
+private def envNat (name : String) (fallback : Nat) : IO Nat := do
+  return ((← IO.getEnv name).bind String.toNat?).getD fallback
+
+private def publish (ctx : Context) (marker : String) (value : Json) : IO Unit := do
+  let line := marker ++ value.compress
+  IO.FS.withFile (ctx.output.parent.getD ctx.output / "progress.jsonl") .append fun handle =>
+    handle.putStrLn line
+  let stdout ← IO.getStdout
+  stdout.putStrLn line
+  stdout.flush
+
+private def emit (ctx : Context) (phase status : String)
+    (fields : List (String × Json) := []) : IO Unit := do
+  let event := Json.mkObj ([
+    ("case", toJson ctx.caseName), ("variant", toJson ctx.variant),
+    ("phase", toJson phase), ("status", toJson status)] ++ fields)
+  ctx.events.modify (·.push event)
+  publish ctx "FLEX_PILOT_PHASE " event
+
+private def restore (state : Tactic.SavedState) : TacticM Unit := do
+  restoreTermState state.term
+  set state.tactic
+
+private def checkTime (ctx : Context) : TermElabM Unit := do
+  if (← IO.monoMsNow) >= ctx.deadline then throwError "pilot wall-clock budget exhausted"
+
+private def bounded (action : TacticM α) : TacticM α :=
+  withTheReader Core.Context (fun ctx => { ctx with maxHeartbeats := 200000 * 1000 }) <|
+    Core.withCurrHeartbeats action
+
+/-- Failed phases restore their entry state; their timing and diagnostics survive. -/
+private def attempt (ctx : Context) (phase : String) (action : TacticM Unit)
+    : TacticM Bool := do
+  let saved ← Tactic.saveState
+  let start ← IO.monoMsNow
+  emit ctx phase "running"
+  tryCatchRuntimeEx (do
+    checkTime ctx
+    bounded action
+    pruneSolvedGoals
+    let solved := (← getGoals).isEmpty
+    if solved then ctx.closedBy.set phase
+    emit ctx phase (if solved then "proved" else "partial") [
+      ("elapsed_ms", toJson ((← IO.monoMsNow) - start)),
+      ("remaining_goals", toJson (← getGoals).length)]
+    return true)
+    (fun error => do
+      let message ← error.toMessageData.toString
+      restore saved
+      emit ctx phase "failed" [
+        ("elapsed_ms", toJson ((← IO.monoMsNow) - start)), ("error", toJson message)]
+      return false)
+
+private def hasPredicates (goal : MVarId) : MetaM Bool := goal.withContext do
+  let target ← whnf (← instantiateMVars (← goal.getType))
+  unless target.isAppOfArity ``Exists 2 do return false
+  let type := target.appFn!.appArg!
+  forallTelescopeReducing type fun _ result => return result.isProp
+
+/-- Leave predicate existentials for synthesis, and discharge ordinary residuals. -/
+private def discharge : TacticM Unit := do
+  let goals ← getUnsolvedGoals
+  let predicates ← goals.filterM fun goal => hasPredicates goal
+  setGoals (goals.filter fun goal => !predicates.contains goal)
+  Flex.Automation.discharge
+  setGoals (predicates ++ (← getUnsolvedGoals))
+
+private def onPredicates (action : TacticM Unit) : TacticM Unit := do
+  let goals ← getUnsolvedGoals
+  let mut remaining := []
+  for goal in goals do
+    if ← hasPredicates goal then
+      setGoals [goal]
+      action
+      remaining := remaining ++ (← getUnsolvedGoals)
+    else remaining := remaining ++ [goal]
+  setGoals remaining
+
+private def saveGoals (ctx : Context) (stem : String) : TacticM Unit := do
+  let goals ← (← getUnsolvedGoals).mapM fun goal => return (← Meta.ppGoal goal).pretty
+  IO.FS.writeFile (ctx.output / (stem ++ ".txt")) (String.intercalate "\n\n" goals)
+
+private def runPA (ctx : Context) : TacticM Unit := do
+  let mode := match ctx.variant with
+    | "scrape_no" => PAScrapeMode.no
+    | "scrape_basic" => PAScrapeMode.basic
+    | "scrape_standard" => PAScrapeMode.standard
+    | _ => PAScrapeMode.deep
+  let start ← IO.monoMsNow
+  let calls ← IO.mkRef 0
+  let accepted ← IO.mkRef 0
+  let oracleMs ← IO.mkRef 0
+  let rounds ← IO.mkRef 0
+  let observe : PAObserver := fun event => do
+    match event with
+    | .setup scraped standard tagged candidates =>
+      emit ctx "fix_setup" "prepared" [
+        ("scraped_templates", toJson scraped), ("standard_templates", toJson standard),
+        ("tagged_templates", toJson tagged),
+        ("initial_candidates", toJson (candidates.foldl (fun n (_, count) => n + count) 0)),
+        ("candidates", Json.arr (candidates.map fun (name, count) => Json.mkObj [
+          ("name", toJson name.toString), ("count", toJson count)]))]
+    | .roundStarted count =>
+      rounds.modify (· + 1)
+      emit ctx "fix_round" "running" [
+        ("round", toJson (← rounds.get)), ("candidates_before", toJson count)]
+    | .roundFinished before after =>
+      emit ctx "fix_round" "completed" [
+        ("round", toJson (← rounds.get)), ("candidates_before", toJson before),
+        ("candidates_after", toJson after)]
+    | .converged count =>
+      emit ctx "fix_converged" "converged" [
+        ("rounds", toJson (← rounds.get)), ("surviving_candidates", toJson count)]
+  let oracle : PAOracle := fun target => do
+    checkTime ctx
+    if (← IO.monoMsNow) - start >= ctx.paSeconds * 1000 then
+      throwError "PA wall-clock budget exhausted"
+    calls.modify (· + 1)
+    let queryStart ← IO.monoMsNow
+    try
+      let proof ← Flex.Automation.synthOracle target
+      if proof.isSome then accepted.modify (· + 1)
+      return proof
+    finally oracleMs.modify (· + ((← IO.monoMsNow) - queryStart))
+  try
+    withOptions (flex.benchOracles.set · true) do
+      onPredicates <| fixImpl oracle { mode } (some Flex.Automation.proofOracle) observe
+    emit ctx "fix_certificate" "built" [("remaining_goals", toJson (← getGoals).length)]
+    discharge
+  finally
+    let warnings ← (← Core.getMessageLog).toList.filterMapM fun message => do
+      if message.severity == .warning then return some (← message.data.toString)
+      return none
+    emit ctx "fix_queries" "measured" [
+      ("queries", toJson (← calls.get)), ("accepted", toJson (← accepted.get)),
+      ("oracle_ms", toJson (← oracleMs.get)),
+      ("elapsed_ms", toJson ((← IO.monoMsNow) - start)), ("warnings", toJson warnings)]
+
+private def solver (ctx : Context) (backend : Backend) : TacticM Unit := do
+  let label := if backend == .spacer then "spacer" else "eldarica"
+  let index ← IO.mkRef 0
+  onPredicates do
+    checkTime ctx
+    let goal ← getMainGoal
+    let result ← solveGoal goal { backend, timeoutMs := ctx.solverMs }
+      Flex.Automation.proofOracle (headsOnly := true)
+    let i ← index.get
+    index.modify (· + 1)
+    let saveTranscript (result : SolverResult) : IO Unit := do
+      IO.FS.writeFile (ctx.output / s!"{label}-{i}.stdout") result.process.stdout
+      IO.FS.writeFile (ctx.output / s!"{label}-{i}.stderr") result.process.stderr
+    match result with
+    | .failed failure =>
+      if let some result := failure.solver then saveTranscript result
+      emit ctx (label ++ "_candidate") "failed" [
+        ("stage", toJson (reprStr failure.stage)), ("error", toJson failure.message)]
+      throwError failure.message
+    | .solved report | .partial report =>
+      saveTranscript report.solver
+      IO.FS.writeFile (ctx.output / s!"{label}-{i}.smt2") report.problem.toSMTLib
+      let witnesses ← report.witnesses.toList.mapM fun witness => do
+        return s!"{witness.symbol} := {(← ppExpr witness.value).pretty}"
+      IO.FS.writeFile (ctx.output / s!"{label}-{i}-invariants.txt")
+        (String.intercalate "\n" witnesses)
+      emit ctx (label ++ "_candidate") "imported" [
+        ("witnesses", toJson report.witnesses.size),
+        ("proved_heads", toJson report.certificate.provedHeads),
+        ("process_ms", toJson report.solver.process.elapsedMs),
+        ("timings", Json.arr (report.timings.map fun timing => Json.mkObj [
+          ("stage", toJson (reprStr timing.stage)),
+          ("elapsed_ms", toJson (timing.elapsedNs / 1000000))]))]
+      setGoals report.certificate.goals.toList
+  discharge
+
+private def pipeline (ctx : Context) : TacticM Unit := do
+  let withNest := ctx.variant == "nest_fix" || ctx.variant == "nest_no_fix"
+  let withFix := #["nest_fix", "flat_fix", "scrape_no", "scrape_basic",
+    "scrape_standard", "scrape_deep"].contains ctx.variant
+  if withNest then discard <| attempt ctx "nest" (evalTactic (← `(tactic| nest_chc)))
+  if ctx.variant != "solver_only" then
+    discard <| attempt ctx "zap" do
+      onPredicates (evalTactic (← `(tactic| zap)))
+      discharge
+  if (← getUnsolvedGoals).isEmpty then return
+  saveGoals ctx "after-zap"
+  let cleaned ← Tactic.saveState
+  let mut best := cleaned
+  if withFix then
+    if ← attempt ctx "fix" (runPA ctx) then
+      if (← getUnsolvedGoals).isEmpty then return
+      best ← Tactic.saveState
+      saveGoals ctx "after-fix"
+    restore cleaned
+  for backend in #[Backend.spacer, Backend.eldarica] do
+    let label := if backend == .spacer then "spacer" else "eldarica"
+    restore cleaned
+    if ← attempt ctx label (solver ctx backend) then
+      if (← getUnsolvedGoals).isEmpty then return
+      best ← Tactic.saveState
+      saveGoals ctx ("after-" ++ label)
+  restore best
+
+/-- Check a proof of the original target from precisely the remaining obligations. -/
+private def checkBridge (original target : Expr) (goals : Array MVarId) : TermElabM Unit := do
+  let saved ← Term.saveState
+  try
+    let closed ← goals.mapM fun goal => goal.revertAll
+    let types ← closed.mapM fun goal => do instantiateMVars (← goal.getType)
+    for type in types do
+      if type.hasMVar || type.hasFVar || type.hasLooseBVars then
+        throwError "residual contains unresolved variables"
+    let names := Array.ofFn (n := types.size) fun ⟨i, _⟩ => Name.mkSimple s!"residual{i}"
+    withLocalDeclsDND (names.zip types) fun hypotheses => do
+      for goal in closed, hyp in hypotheses do goal.assign hyp
+      let proof ← mkLambdaFVars hypotheses (← instantiateMVars original)
+      if proof.hasMVar || proof.hasFVar || proof.hasLooseBVars || proof.hasSorry then
+        throwError "certificate contains unresolved or admitted evidence"
+      checkWithKernel proof
+      unless ← isDefEq (← inferType proof) (← mkForallFVars hypotheses target) do
+        throwError "certificate does not prove the original target"
+      for name in proof.getUsedConstants do
+        for axiomName in ← collectAxioms name do
+          unless #[``propext, ``Classical.choice, ``Quot.sound].contains axiomName do
+            throwError "certificate depends on {axiomName}"
+  finally restoreTermState saved
+
+/-- Run one variant without leaking assignments, declarations, or messages to the next. -/
+def run (name : Name) (variant caseName : String) : TermElabM Unit := do
+  let saved ← Term.saveState
+  let start ← IO.monoMsNow
+  let output : System.FilePath := (← IO.getEnv "FLEX_PILOT_OUTPUT").getD "/tmp/flex-pilot"
+  let ctx : Context := {
+    caseName, variant, output := output / variant
+    solverMs := ← envNat "FLEX_PILOT_SOLVER_MS" 30000
+    paSeconds := ← envNat "FLEX_PILOT_PA_SECONDS" 30
+    deadline := start + (← envNat "FLEX_PILOT_CASE_SECONDS" 180) * 1000
+    events := ← IO.mkRef #[], closedBy := ← IO.mkRef "" }
+  IO.FS.createDirAll ctx.output
+  publish ctx "FLEX_PILOT_START " (Json.mkObj [
+    ("case", toJson caseName), ("variant", toJson variant)])
+  let (status, error, remaining) ← try
+    tryCatchRuntimeEx (do
+      let target := Lean.mkConst name
+      let original ← mkFreshExprMVar (some target) (kind := .syntheticOpaque)
+      let goals ← Tactic.run original.mvarId! (pipeline ctx)
+      checkBridge original target goals.toArray
+      let residuals ← goals.mapM fun goal => return (← Meta.ppGoal goal).pretty
+      IO.FS.writeFile (ctx.output / "residual.txt") (String.intercalate "\n\n" residuals)
+      return (if goals.isEmpty then "proved" else "partial", "", goals.length))
+      (fun exception => do return ("failed", ← exception.toMessageData.toString, 1))
+  finally restoreTermState saved
+  let result := Json.mkObj [
+    ("case", toJson caseName), ("variant", toJson variant), ("status", toJson status),
+    ("elapsed_ms", toJson ((← IO.monoMsNow) - start)),
+    ("remaining_goals", toJson remaining), ("phases", Json.arr (← ctx.events.get)),
+    ("closed_by", toJson (← ctx.closedBy.get)), ("error", toJson error)]
+  IO.FS.writeFile (ctx.output / "result.json") result.pretty
+  publish ctx "FLEX_PILOT " result
+
+end FlexPilot

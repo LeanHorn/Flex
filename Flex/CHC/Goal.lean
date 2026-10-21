@@ -105,6 +105,7 @@ def solveGoal (goal : MVarId) (config : Config := {})
     (headsOnly : Bool := false)
     : TermElabM GoalResult := do
   let saved ← Term.saveState
+  let committed ← IO.mkRef false
   let phase ← IO.mkRef Stage.prepare
   let timings ← IO.mkRef (#[] : Array PhaseTiming)
   let transcript ← IO.mkRef (none : Option SolverResult)
@@ -127,13 +128,15 @@ def solveGoal (goal : MVarId) (config : Config := {})
         certifyWitnesses problem witnesses prepared.bodyGoal oracle headsOnly
       let report : GoalReport := {
         problem, solver, witnesses, certificate, timings := ← timings.get }
+      committed.set true
       return if certificate.goals.isEmpty then .solved report else .partial report
   catch error =>
     let message ← error.toMessageData.toString
-    restoreTermState saved
     if error.isInterrupt then throw error
     return .failed {
       stage := ← phase.get, message, solver := ← transcript.get
       relations := (← size.get).1, clauses := (← size.get).2, timings := ← timings.get }
+  finally
+    unless ← committed.get do restoreTermState saved
 
 end Flex.CHC

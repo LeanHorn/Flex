@@ -114,8 +114,6 @@ partial def checkTerm (term : Smt.Term) (symbols : Array String) : MetaM Unit :=
         | "<" | "<=" | ">" | ">=" => args.size == 2
         | _ => false
       unless valid do throwError "CHC export: unsupported SMT operator '{name}' or arity"
-      if name == "*" && !args.any numeral then
-        throwError "CHC export: nonlinear multiplication; one operand must be an integer literal"
       if (name == "div" || name == "mod") && !positiveNumeral args[1]! then
         throwError "CHC export: {name} requires a positive integer literal divisor"
     for argument in args do checkTerm argument symbols
@@ -174,11 +172,15 @@ partial def checkPredicatePrefix (input : Expr) : MetaM Unit := do
   withLocalDecl name bi type fun parameter =>
     checkPredicatePrefix (body.instantiate1 parameter)
 
-/-- Reduce beta/let/metadata wrappers, preserving arithmetic operators. -/
+/-- Expose named propositions and beta/let wrappers, preserving arithmetic operators. -/
 partial def expose (expression : Expr) : MetaM Expr := do
   let expression := expression.consumeMData.headBeta
   match expression with
   | .letE _ _ value body _ => expose (body.instantiate1 value)
+  | .const .. =>
+    if ← isProp expression then
+      if let some value ← unfoldDefinition? expression then return ← expose value
+    return expression
   | _ => return expression
 
 private def canonical (original expected : Expr) : MetaM Unit := do
@@ -292,7 +294,7 @@ private def validate (problem : ExportedProblem) : MetaM Unit := do
           throw (.error s!"CHC export: wrong argument sort for '{expected.symbol}'")
   ).runIO
 
-/-- Export Bool/Int linear arithmetic, positive-literal div/mod, and local lets.
+/-- Export Bool/Int arithmetic, positive-literal div/mod, and local lets.
 The body must be closed except for its unassigned κs. No witnesses are assigned. -/
 def exportConstraints (kvars : List KVar) (body : Expr) : MetaM ExportedProblem := do
   let saved ← Meta.saveState

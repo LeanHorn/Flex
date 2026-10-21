@@ -30,3 +30,6 @@ liquid-fixpoint-develop
 literature/
 docs/
 eval/oracle_results.json
+eval/chc_results*
+lean-noquals.zip
+lean-noquals/

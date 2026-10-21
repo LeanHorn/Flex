@@ -20,8 +20,8 @@ MATHLIB_NO_CACHE_ON_UPDATE=1 lake update
 lake build
 ```
 
-Flex depends on `aesop`, `lean-auto`, and `lean-smt`. The update command skips
-unused Mathlib caches from lean-smt's transitive dependency. lean-smt downloads
+Flex depends on `aesop`, `lean-auto`, `lean-smt`, and `SMTLib-to-Lean`.
+The update command skips automatic Mathlib cache downloads. lean-smt downloads
 cvc5 automatically; `flex_auto` requires `z3` on `PATH`. For Linux native
 dependencies and linker setup, see the [CI workflow](.github/workflows/lean_action_ci.yml).
 
@@ -68,3 +68,14 @@ are discarded; only proof-phase evidence enters the final certificate.
 
 See [Demo/Basic.lean](Demo/Basic.lean) for elimination examples and
 [Demo/Fix.lean](Demo/Fix.lean) for invariants, scraping, and SMT oracles.
+
+## CHC Solvers
+
+Import `Flex.Tactic.Tactics.Spacer` or `Flex.Tactic.Tactics.Eldarica` for the
+`spacer` and `eldarica` tactics. They report and instantiate solver invariants,
+certify predicate heads with `grind`, and leave one structured VC for subsequent tactics.
+Install `z3` and `eld` on `PATH`, or set `flex.spacer.executable` and
+`flex.eldarica.executable`. See [Demo/Spacer.lean](Demo/Spacer.lean) for both.
+
+`Flex.CHC.solveGoal` provides the underlying library API, including complete
+certification, residual obligations, and rollback on failure.

@@ -3,7 +3,7 @@
 
 For every .lean file in Benchmarks/Liquid-fixpoint/ (and optionally
 Benchmarks/FluxRS/ and Demo/) this script:
-  1. Runs `lake env lean -Dflex.benchPhases=true <file>` (the option makes
+  1. Runs `lake lean <file> -- -Dflex.benchPhases=true` (the option makes
      solve_fixpoint print its κ lines) and captures stdout+stderr.
   2. Passes the output through the kappa classifier.
   3. Prints a summary table.
@@ -64,7 +64,7 @@ LABEL_COLOR = {
 def run_file(path: Path) -> dict:
     start = time.monotonic()
     proc = subprocess.run(
-        ["lake", "env", "lean", "-Dflex.benchPhases=true", str(path)],
+        ["lake", "--log-level=error", "lean", str(path), "--", "-Dflex.benchPhases=true"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -111,7 +111,7 @@ def main() -> int:
         if not directory.is_dir():
             print(YELLOW(f"! {group}: directory not found ({directory})"))
             continue
-        for f in sorted(directory.glob("*.lean")):
+        for f in sorted(directory.rglob("*.lean")):
             if args.filter and args.filter not in str(f):
                 continue
             jobs.append((group, f))
@@ -132,7 +132,7 @@ def main() -> int:
             done += 1
             n = len(res["invocations"])
             tag = "error" if res["error"] else f"{n} invocation{'s' if n != 1 else ''}"
-            print(f"  [{done}/{len(jobs)}] {res['path'].name} → {tag}", flush=True)
+            print(f"  [{done}/{len(jobs)}] {res['path'].relative_to(REPO_ROOT)} → {tag}", flush=True)
 
     print()
 
@@ -146,14 +146,15 @@ def main() -> int:
         if not group_paths:
             continue
         print(BOLD(f"{group}/"))
-        col_w = max(len(p.name) for p in group_paths) + 2
+        col_w = max(len(str(p.relative_to(directory))) for p in group_paths) + 2
         for path in group_paths:
             res = results[path]
+            name = str(path.relative_to(directory))
             timing = DIM(f"{res['elapsed']:5.1f}s")
             if res["error"]:
                 total_errors += 1
                 color = LABEL_COLOR["error"]
-                print(f"  {path.name:<{col_w}} {color(f'error         ')}{timing}")
+                print(f"  {name:<{col_w}} {color(f'error         ')}{timing}")
                 continue
 
             tally = res["tally"]
@@ -178,7 +179,7 @@ def main() -> int:
             )
             color = LABEL_COLOR.get(dominant, str)
             inv_tag = DIM(f"({n_inv} inv)")
-            print(f"  {path.name:<{col_w}} {color(f'{tally_str:<30}')}{timing} {inv_tag}")
+            print(f"  {name:<{col_w}} {color(f'{tally_str:<30}')}{timing} {inv_tag}")
         print()
 
     # ── totals ───────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regression anchor for Flex.
 
-Compiles every benchmark / demo file individually with `lake lean` and
+Compiles benchmark, demo, and test files individually with `lake lean` and
 reports a green ✓ (pass) or red ✗ (fail) per file. A file passes iff Lean
 exits 0 and emits no `error:` diagnostics. `sorry` warnings are surfaced but
 do not by themselves fail a file (use --strict-sorry to treat them as fails).
@@ -35,6 +35,7 @@ GROUPS = {
     "Liquid-fixpoint": REPO_ROOT / "Benchmarks" / "Liquid-fixpoint",
     "FluxRS": REPO_ROOT / "Benchmarks" / "FluxRS",
     "Demo": REPO_ROOT / "Demo",
+    "Tests": REPO_ROOT / "Tests",
 }
 
 # ANSI colors; disabled when stdout is not a TTY.
@@ -121,7 +122,7 @@ def main() -> int:
         if not directory.is_dir():
             print(YELLOW(f"! {group}: directory not found ({directory})"))
             continue
-        for f in sorted(directory.glob("*.lean")):
+        for f in sorted(directory.rglob("*.lean")):
             if args.filter and args.filter not in str(f):
                 continue
             jobs.append((group, f))
@@ -151,7 +152,7 @@ def main() -> int:
         print(BOLD(f"{group}/"))
         for path in group_jobs:
             res = results[path]
-            name = path.name
+            name = str(path.relative_to(directory))
             timing = DIM(f"{res.elapsed:5.1f}s")
             if res.ok:
                 tag = ""

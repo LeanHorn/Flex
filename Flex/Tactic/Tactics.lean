@@ -11,3 +11,4 @@ import Flex.Tactic.Tactics.Sol1
 import Flex.Tactic.Tactics.SolveFixpointCombo
 import Flex.Tactic.Tactics.Fix
 import Flex.Tactic.Tactics.Eval
+import Flex.Tactic.Tactics.Nest

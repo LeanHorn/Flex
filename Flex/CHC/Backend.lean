@@ -51,14 +51,15 @@ namespace Spacer
 /-- The executable is invoked directly; the timeout covers the whole request. -/
 structure Config where
   executable : String := "z3"
-  timeoutMs : Nat := 10000
+  timeoutMs : Nat := 30000
   deriving Inhabited
 
-/-- `-model` requests interpretations without issuing `get-model` after unsat. -/
+/-- Request models directly; disable inlining whose reconstruction can lose invariants. -/
 def Config.toProcessConfig (config : Config) : Process.Config :=
   {
     executable := config.executable
-    args := #["-in", "-smt2", "-model", "fp.engine=spacer"]
+    args := #["-in", "-smt2", "-model", "fp.engine=spacer",
+      "fp.xform.inline_eager=false", "fp.xform.inline_linear=false"]
     timeoutMs := config.timeoutMs }
 
 def runScript (input : String) (config : Config := {}) : IO SolverResult := do
@@ -75,7 +76,7 @@ namespace Eldarica
 /-- The executable or launcher is invoked directly; the timeout covers the whole request. -/
 structure Config where
   executable : String := "eld"
-  timeoutMs : Nat := 10000
+  timeoutMs : Nat := 30000
   deriving Inhabited
 
 /-- Use SMT-LIB Horn input and request predicate interpretations. -/
@@ -105,7 +106,7 @@ Overrides name an executable or launcher, not a shell command. -/
 structure Config where
   backend : Backend := .spacer
   executable : Option String := none
-  timeoutMs : Nat := 10000
+  timeoutMs : Nat := 30000
   deriving Inhabited, Repr
 
 /-- The same invocation is used for original and Flex-exported benchmark queries. -/

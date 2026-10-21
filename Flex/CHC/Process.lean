@@ -7,7 +7,7 @@ namespace Flex.CHC.Process
 structure Config where
   executable : String
   args : Array String := #[]
-  timeoutMs : Nat := 10000
+  timeoutMs : Nat := 30000
   cwd : Option System.FilePath := none
   deriving Inhabited, Repr
 

@@ -160,7 +160,7 @@ def main() -> int:
         "eldarica": version([args.eldarica, "-h"]) if "eldarica" in args.backends else None,
         "eldarica_executable": args.eldarica, "repeats": args.repeats, "warmups": 1,
         "seed": args.seed, "cases": args.cases, "backends": args.backends,
-        "solver_timeout_ms": 10000, "batch_timeout_seconds": args.timeout,
+        "solver_timeout_ms": 30000, "batch_timeout_seconds": args.timeout,
         "timing": "serial in-process Lean wall time, including fresh solver startup and kernel audit; excludes imports, builds, witness pretty printing",
         "chc_pipeline": "Flex.CHC.solveGoal with proof oracle first | omega | grind; partial VCs are not counted as proofs",
         "obligation_summary": "maximum remaining and minimum proved obligations across measured repetitions",

@@ -1,5 +1,6 @@
 """Coverage and accounting checks for the CHC corpus runner."""
 
+import csv
 import json
 import os
 from pathlib import Path
@@ -9,10 +10,44 @@ import sys
 import tempfile
 import unittest
 
-from chc_parity import case_source, deadline_cleanup, inventory, result_row, summarize
+from chc_parity import case_source, deadline_cleanup, inventory, result_row, retry_unproved, summarize
 
 
 class ParityAccounting(unittest.TestCase):
+    def test_retry_excludes_proofs_and_unsat_across_both_backends(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.csv"
+            with path.open("w", newline="") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(["case", "backend", "status", "kernel_status",
+                                 "native_status", "flex_status"])
+                writer.writerows([
+                    ["proved", "spacer", "partial", "ok", "sat", "sat"],
+                    ["proved", "eldarica", "proved", "ok", "sat", "sat"],
+                    ["negative", "spacer", "prepare_failed", "", "unsat", ""],
+                    ["negative", "eldarica", "solver_timeout", "", "timeout", "timeout"],
+                    ["partial", "spacer", "partial", "ok", "sat", "sat"],
+                    ["unchecked", "spacer", "proved", "error", "sat", "sat"],
+                ])
+            selected, metadata = retry_unproved(path)
+            self.assertEqual(selected, {"partial", "unchecked"})
+            self.assertEqual(metadata["previous_inputs"], 4)
+            self.assertEqual(metadata["excluded_proved"], 1)
+            self.assertEqual(metadata["excluded_unsat"], 1)
+
+    def test_retry_rejects_conflicting_proof_and_unsat(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.csv"
+            path.write_text("case,backend,status,kernel_status,native_status,flex_status\n"
+                            "x,spacer,proved,ok,sat,sat\n"
+                            "x,eldarica,solver_unsat,,unsat,unsat\n")
+            with self.assertRaisesRegex(ValueError, "checked proof and an unsat"):
+                retry_unproved(path)
+            path.write_text("case,backend,status,kernel_status,native_status,flex_status\n"
+                            "x,spacer,solver_unsat,,sat,unsat\n")
+            with self.assertRaisesRegex(ValueError, "conflicting sat/unsat"):
+                retry_unproved(path)
+
     def test_failed_translation_and_missing_generated_file_remain_in_inventory(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

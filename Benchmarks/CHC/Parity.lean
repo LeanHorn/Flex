@@ -36,7 +36,7 @@ private def settings : IO Settings := do
     | "eldarica" => pure Backend.eldarica
     | name => throw <| IO.userError s!"unknown backend: {name}"
   let executable ← IO.getEnv "FLEX_PARITY_EXECUTABLE"
-  let timeoutMs ← envNat "FLEX_PARITY_SOLVER_MS" 10000
+  let timeoutMs ← envNat "FLEX_PARITY_SOLVER_MS" ({} : Flex.CHC.Config).timeoutMs
   return {
     input, output
     solver := { backend, executable, timeoutMs }
@@ -194,11 +194,7 @@ private def runFlex (cfg : Settings) (name : Name) : TermElabM Unit := do
         (fun ws => [("witnesses", toJson ws.size),
           ("defaulted_witnesses", toJson (ws.filter (·.defaulted)).size)])
       stage.set "certificate"
-      let oracle : ProofOracle := fun goal => do
-        let saved ← saveState
-        tryCatchRuntimeEx
-          (budget cfg.proofHeartbeats <| proveLeafWith (← `(tactic| first | omega | grind)) goal)
-          (fun _ => do saved.restore; return none)
+      let oracle := proofOracle { heartbeats := cfg.proofHeartbeats }
       let certificate ← phase cfg (← stage.get)
         (certifyWitnesses problem witnesses prepared.bodyGoal oracle)
         (fun c => [("goals", toJson c.goals.size),

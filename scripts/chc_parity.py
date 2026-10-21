@@ -38,6 +38,39 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+def retry_unproved(path: Path) -> tuple[set[str], dict]:
+    """Retry inputs without a checked proof or a native/exported unsat answer."""
+    with path.open(newline="") as handle:
+        reader = csv.DictReader(handle)
+        required = {"case", "backend", "status", "kernel_status", "native_status", "flex_status"}
+        if not required <= set(reader.fieldnames or []):
+            raise ValueError("retry results are missing required columns")
+        rows = list(reader)
+    seen, cases, proved, sat, unsat = set(), set(), set(), set(), set()
+    for row in rows:
+        case, backend = row["case"], row["backend"]
+        if not case or backend not in {"spacer", "eldarica"} or (case, backend) in seen:
+            raise ValueError(f"invalid or duplicate retry result: {case!r}, {backend!r}")
+        seen.add((case, backend))
+        cases.add(case)
+        if row["status"] == "proved" and row["kernel_status"] == "ok":
+            proved.add(case)
+        if "sat" in {row["native_status"], row["flex_status"]}:
+            sat.add(case)
+        if "unsat" in {row["native_status"], row["flex_status"]}:
+            unsat.add(case)
+    if proved & unsat:
+        raise ValueError("retry results contain both a checked proof and an unsat answer: " +
+                         ", ".join(sorted(proved & unsat)))
+    if sat & unsat:
+        raise ValueError("retry results contain conflicting sat/unsat answers: " +
+                         ", ".join(sorted(sat & unsat)))
+    selected = cases - proved - unsat
+    return selected, {"results": str(path.resolve()), "sha256": digest(path),
+                      "previous_inputs": len(cases), "excluded_proved": len(proved),
+                      "excluded_unsat": len(unsat), "selected_inputs": len(selected)}
+
+
 def inventory(corpus: Path) -> tuple[list[dict], list[dict]]:
     """Retain manifest failures and absent artifacts instead of shrinking coverage."""
     cases, manifests, seen = [], [], set()
@@ -352,10 +385,15 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--backends", nargs="+", choices=["spacer", "eldarica"],
                         default=["spacer", "eldarica"])
-    parser.add_argument("--cases", nargs="+", help="exact suite/path.lean names from inventory")
-    parser.add_argument("--solver-timeout", type=float, default=2)
-    parser.add_argument("--case-timeout", type=float, default=45,
-                        help="case deadline in seconds; active solvers get bounded cleanup grace")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--cases", nargs="+", help="exact suite/path.lean names from inventory")
+    selection.add_argument("--retry-unproved", type=Path, metavar="RESULTS_CSV",
+                           help="retry previous inputs without a checked proof or any unsat answer")
+    parser.add_argument("--solver-timeout", type=float, default=30,
+                        help="seconds per native/exported solver call (default: 30)")
+    parser.add_argument("--case-timeout", type=float, default=180,
+                        help="whole-case seconds, including both solver calls and certification "
+                             "(default: 180); active solvers get bounded cleanup grace")
     parser.add_argument("--heartbeats", type=int, default=200000)
     parser.add_argument("--proof-heartbeats", type=int, default=20000)
     parser.add_argument("--workers", type=int, default=2)
@@ -378,7 +416,14 @@ def main() -> int:
         cases, manifests = inventory(args.corpus)
     except (OSError, ValueError, KeyError) as exc:
         parser.error(str(exc))
-    wanted = set(args.cases) if args.cases else {case["case"] for case in cases}
+    retry = None
+    try:
+        if args.retry_unproved:
+            wanted, retry = retry_unproved(args.retry_unproved)
+        else:
+            wanted = set(args.cases) if args.cases else {case["case"] for case in cases}
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
     missing = wanted - {case["case"] for case in cases}
     if missing:
         parser.error("unknown cases: " + ", ".join(sorted(missing)))
@@ -394,6 +439,7 @@ def main() -> int:
         "toolchain": (ROOT / "lean-toolchain").read_text().strip(),
         "dependencies": json.loads((ROOT / "lake-manifest.json").read_text()),
         "arguments": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
+        "retry": retry,
         "source_hashes": {str(p.relative_to(ROOT)): digest(p) for p in [
             ROOT / "lake-manifest.json", ROOT / "lakefile.lean",
             ROOT / "Benchmarks/CHC/Parity.lean", Path(__file__), ROOT / "scripts/benchmark_chc.py",

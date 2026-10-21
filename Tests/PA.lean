@@ -31,6 +31,13 @@ run_elab do
     withLocalDeclD `h (← mkEq x (mkIntLit 3)) fun _ => do
       let result ← Flex.PA.smtOracle 2000 #[← mkAppM ``LE.le #[mkIntLit 0, x]]
       unless result == #[.valid] do throwError "PA SMT omitted a local assumption"
+    let zero ← mkEq x (mkIntLit 0)
+    let one ← mkEq x (mkIntLit 1)
+    for (premise, expected) in #[(zero, #[.valid, .invalid, .valid]),
+        (one, #[.invalid, .valid, .invalid])] do
+      withLocalDeclD `h premise fun _ => do
+        let result ← Flex.PA.smtOracle 2000 #[zero, one, zero]
+        unless result == expected do throwError "SMT cache leaked between clause contexts"
   withLetDecl `x (mkConst ``Int) (mkIntLit 3) fun x => do
     let result ← Flex.PA.smtOracle 2000 #[← mkEq x (mkIntLit 3)]
     unless result == #[.valid] do throwError "PA SMT omitted a local definition"
@@ -235,12 +242,21 @@ run_elab do
     let batched ← solveFixpoint context clauses initial arithmetic
       (synthOracle := some arithmetic.toSynth)
     unless batched == reference do throwError "batching changed the fixed point"
+    let smt ← solveFixpoint context clauses initial arithmetic
+      (synthOracle := some (Flex.PA.smtOracle 2000))
+    unless smt == reference do throwError "shared clause preparation changed the fixed point"
     savedChecks := savedChecks || (← worklistChecks.get) < (← referenceChecks.get)
   unless savedChecks do throwError "worklist did not skip any unaffected clauses"
 
   let head := kvars.head!
   let candidates := initial.head!.2
   let solutions ← finalizeSolutions initial
+  let compound := (mkApp (← elaborate (← `(fun p : Int → Prop =>
+    ∀ x : Int, 0 ≤ x → p x ∧ p (x + 1)))) predicates[0]!).headBeta
+  let reference ← weakenClause context compound head candidates solutions arithmetic
+  let batched ← weakenClause context compound head candidates solutions arithmetic
+    (some (Flex.PA.smtOracle 2000))
+  unless batched == reference do throwError "compound clause fallback changed the candidates"
   let clause := mkApp predicates[0]! (mkIntLit 0)
   let malformed : PASynthOracle := fun _ => pure #[]
   let rejected ← try
@@ -280,6 +296,30 @@ run_elab do
     throwError "candidate specialization assigned a caller predicate"
 
 end PAWorklistTests
+
+open Lean Meta Elab Term in
+run_elab do
+  let int := Lean.mkConst ``Int
+  let pred ← mkFreshExprMVar (some (← mkArrow int (mkSort .zero)))
+  let κ : KVar := { name := `k, params := [`x], paramTypes := [int], mvarId := pred.mvarId! }
+  let qualifiers ← #[← `(fun x : Int => 0 ≤ x),
+    ← `(fun x : Int => 1 ≤ x + 1)].mapM fun q => do instantiateMVars (← elabTerm q none)
+  withLocalDeclD `x int fun x => do
+    withLocalDeclD `h (← mkEq x (mkIntLit 0)) fun _ => do
+      -- Whole-head certification and scalar-only custom oracles prove the same type.
+      for scalarOnly in #[false, true] do
+        let calls ← IO.mkRef 0
+        let oracle : PAOracle := fun target => do
+          calls.modify (· + 1)
+          if scalarOnly && target.isAppOfArity ``And 2 then return none
+          proveLeafWith (← `(tactic| grind)) target
+        let proof ← emitPALeaf κ (qualifiers.toList.map (·, [0])) #[x] oracle
+        let bodies ← qualifiers.toList.mapM fun q => Expr.instQualifier q #[x]
+        unless ← isDefEq (← inferType proof) (conjoinExprs bodies) do
+          throwError "certificate changed the witness type"
+        checkWithKernel (← mkLambdaFVars (← getLCtx).getFVars proof)
+        unless (← calls.get) == (if scalarOnly then 3 else 1) do
+          throwError "certificate unexpectedly repeated its oracle checks"
 
 open Lean Meta Elab Term Tactic in
 -- Even a dishonest synthesis oracle cannot replace the certificate proofs.

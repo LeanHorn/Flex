@@ -91,9 +91,15 @@ def fixImpl
       κ.assignSol sol
 
     let residualOut ← IO.mkRef (#[] : Array MVarId)
+    let certificateCalls ← IO.mkRef 0
+    let certify : PAOracle := fun target => do
+      certificateCalls.modify (· + 1)
+      (proofOracle.getD oracle) target
     let proof ← benchFixPhase "certificate" <|
-      walkPAProof aStar body residualOut (proofOracle.getD oracle)
+      walkPAProof aStar body residualOut certify
     bodyGoal.assign proof
+    if flex.benchOracles.get (← getOptions) then
+      IO.println s!"FIX_CERTIFICATE calls={← certificateCalls.get}"
 
     let residual := (← residualOut.get).toList
     setGoals residual

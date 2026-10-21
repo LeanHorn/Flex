@@ -81,14 +81,21 @@ private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch :=
       let sort := match sort with | .int => "Int" | .bool => "Bool"
       script := script ++ s!"(declare-const {name} {sort})\n"
     let symbols := variables.map fun input => names[input.fvarId!]!
-    let translate (expression : Expr) : MetaM Smt.Term := do
-      let expression ← CHC.Prepare.atom expression true
+    -- The context and symbol mapping stay fixed for this batch. Commit only
+    -- checked translations, so a rejected candidate cannot contaminate the cache.
+    let translation ← IO.mkRef ({ uniqueFVarNames := names } : Smt.TranslationM.State)
+    let terms ← IO.mkRef ({} : ExprMap Smt.Term)
+    let translate (input : Expr) : MetaM Smt.Term := do
+      if let some term := (← terms.get)[input]? then return term
+      let expression ← CHC.Prepare.atom input true
       unless ← isProp expression do throwError "PA SMT: expected a proposition"
-      let ((term, constants, freeVariables), _) ←
-        (Smt.Translator.translateExpr expression).run { uniqueFVarNames := names }
+      let ((term, constants, freeVariables), next) ←
+        (Smt.Translator.translateExpr expression).run (← translation.get)
       unless constants.isEmpty && freeVariables.toArray.all names.contains do
         throwError "PA SMT: unsupported constant or free-input dependencies"
       CHC.Fragment.checkTerm term symbols true
+      translation.set next
+      terms.modify (·.insert input term)
       return term
     for premise in premises do
       script := script ++ s!"(assert {← translate premise})\n"

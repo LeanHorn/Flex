@@ -8,7 +8,7 @@ open Lean Meta Elab Term Tactic
 
 register_option flex.automation.proofHeartbeats : Nat := {
   defValue := 20000
-  descr := "Heartbeats per oracle attempt; zero disables attempts."
+  descr := "Heartbeats per proof leaf; conjunctions share their combined budget. Zero disables attempts."
 }
 
 register_option flex.automation.smtTimeout : Nat := {
@@ -28,11 +28,16 @@ register_option flex.automation.structureSteps : Nat := {
 
 namespace Flex.Automation
 
+private def proofLeaves : Expr → Nat
+  | .app (.app (.const ``And _) left) right => proofLeaves left + proofLeaves right
+  | _ => 1
+
 /-- Each attempt is isolated, including helper declarations and diagnostic messages.
 Fresh helper theorems are inlined into evidence in the caller's environment. -/
 private def attempt (tactic : TSyntax `tactic) (target : Expr)
+    (budgetLeaves : Nat := proofLeaves target)
     : TermElabM (Option Expr) := do
-  let mut limit := flex.automation.proofHeartbeats.get (← getOptions) * 1000
+  let mut limit := flex.automation.proofHeartbeats.get (← getOptions) * 1000 * budgetLeaves
   if (← getMaxHeartbeats) != 0 then
     limit := min limit ((← getRemainingHeartbeats) / 2)
   if limit == 0 then return none
@@ -51,7 +56,7 @@ private def attempt (tactic : TSyntax `tactic) (target : Expr)
           if proof.hasMVar || proof.hasLevelMVar || proof.hasLooseBVars || proof.hasSorry then
             return none
           -- PA hypotheses may still mention assigned predicate metavariables.
-          let closed ← mkLambdaFVars (← getLCtx).getFVars proof
+          let closed ← mkLambdaFVars (← getLCtx).getFVars proof (usedOnly := true)
           checkWithKernel (← instantiateMVars closed)
           unless ← isDefEq (← inferType proof) target do return none
           for name in proof.getUsedConstants do
@@ -66,13 +71,20 @@ private def attempt (tactic : TSyntax `tactic) (target : Expr)
       Core.checkInterrupted
       return none)
 
-/-- Reconstruct SMT proofs first, then use the bounded native CHC portfolio.
+/-- Simplify conjunctions, then try reconstructed SMT and the native portfolio.
 Every accepted proof is kernel checked and uses only Lean's standard axioms. -/
 def proofOracle : Flex.CHC.ProofOracle := fun target => do
+  if target.isAppOfArity ``And 2 then
+    if let some proof ← attempt
+        (← `(tactic| (try simp_all (config := { maxSteps := 10000 })) <;> grind))
+        target (budgetLeaves := 1) then return some proof
   let timeout := flex.automation.smtTimeout.get (← getOptions)
   if timeout != 0 then
+    let prepare ← if target.isAppOfArity ``And 2 then
+      `(tactic| try simp_all (config := { maxSteps := 10000 })) else `(tactic| skip)
     if let some proof ← attempt
-        (← `(tactic| smt (timeout := some $(quote timeout)) (trust := false) [*] <;>
+        (← `(tactic| $prepare:tactic <;>
+          smt (timeout := some $(quote timeout)) (trust := false) [*] <;>
           first | omega | grind |
             aesop (config := { maxRuleApplications := 200 }) (add unsafe 20% (by omega))))
         target then return some proof

@@ -78,6 +78,18 @@ def finalizeSolutions (assignment : List (KVar × List (Expr × List Nat)))
     : MetaM (List (KVar × Expr)) :=
   assignment.mapM fun (κ, candidates) => return (κ, ← candidateSolution κ candidates)
 
+/-- Open a flat clause once, sharing its specialized premises across candidates. -/
+private partial def withSpecializedHead (head : KVar) (solutions : List (KVar × Expr))
+    (clause : Expr) (check : Array Expr → TermElabM α) : TermElabM (Option α) := do
+  let clause ← whnf clause
+  if clause.isForall then
+    let domain := substituteCandidates solutions clause.bindingDomain!
+    return ← withLocalDecl clause.bindingName! clause.bindingInfo! domain fun input =>
+      withSpecializedHead head solutions (clause.bindingBody!.instantiate1 input) check
+  if clause.getAppFn == mkMVar head.mvarId then
+    return some (← check (clause.getAppArgs.map (substituteCandidates solutions)))
+  return none
+
 /-- Check one clause against a fixed assignment. Unknown checks drop candidates;
     the resulting assignment still requires independent proof certification. -/
 def weakenClause
@@ -86,19 +98,27 @@ def weakenClause
     (oracle : PAOracle := proveLeaf) (synthOracle : Option PASynthOracle := none)
     : TermElabM (List (Expr × List Nat)) := do
   if candidates.isEmpty then return []
-  let guard ← (specializeClauseAsNeg head solutions clause).run kctx
   match synthOracle with
   | none =>
+    let guard ← (specializeClauseAsNeg head solutions clause).run kctx
     if ← checkExprUnsat guard oracle then return candidates
     candidates.filterM fun (q, slots) => do
       let vc ← (specializeClauseForHead head q slots solutions clause).run kctx
       checkExprVC vc oracle
   | some synth =>
-    let vcs ← candidates.toArray.mapM fun (q, slots) =>
-      (specializeClauseForHead head q slots solutions clause).run kctx
-    let results ← synth (#[guard] ++ vcs)
-    unless results.size == vcs.size + 1 do
-      throwError "PA synthesis oracle returned {results.size} results for {vcs.size + 1} queries"
+    let results ← match ← withSpecializedHead head solutions clause (fun args => do
+        let conclusions ← candidates.toArray.mapM fun (q, slots) =>
+          Expr.instQualifier q ((slots.map fun i => args[i]!).toArray)
+        synth (#[Lean.mkConst ``False] ++ conclusions)) with
+      | some results => pure results
+      | none => do
+        -- Preserve support for compound clauses supplied outside the flat worklist.
+        let guard ← (specializeClauseAsNeg head solutions clause).run kctx
+        let vcs ← candidates.toArray.mapM fun (q, slots) =>
+          (specializeClauseForHead head q slots solutions clause).run kctx
+        synth (#[guard] ++ vcs)
+    unless results.size == candidates.length + 1 do
+      throwError "PA synthesis oracle returned {results.size} results for {candidates.length + 1} queries"
     -- A proved inconsistent premise validates every candidate, even if an
     -- individual query times out or is unsupported by the backend.
     if let .valid := results[0]! then return candidates

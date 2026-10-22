@@ -117,7 +117,13 @@ structure LeafStrategy where
 def emitStrategy : LeafStrategy := { label := "fusion", mkHandler := emitLeaf }
 
 /-- The `zap` pipeline, parameterised by what happens at each κ-head leaf. -/
-def zapImpl (s : LeafStrategy) : TacticM Unit := withMainContext do
+def zapImpl (s : LeafStrategy) : TacticM Unit := focus <| withMainContext do
+  -- Remove trivial guards before synthesis and certification inspect the goal.
+  liftMetaTactic fun goal => do
+    return [← goal.change (← whnf (← goal.getType))]
+  evalTactic (← `(tactic| simp (config := { failIfUnchanged := false, maxSteps := 1000000 }) only
+    [true_implies, true_and, and_true]))
+  if (← getGoals).isEmpty then return
   let goal ← getMainGoal
   let originalType ← goal.getType
 
@@ -251,6 +257,14 @@ macro "fusion" : tactic => `(tactic| zap)
 -- ───────────────────────────────────────────────────────────────────────
 -- Tests for zap (also exercises the `fusion` alias)
 -- ───────────────────────────────────────────────────────────────────────
+
+private def guardedCHC : Prop := ∃ κ : Int → Int → Prop,
+    (∀ x y, True → (True ∧ y = x ∧ True) → κ x y) ∧
+    (∀ x y, κ x y → y = x)
+
+example : guardedCHC := by
+  zap
+  all_goals grind
 
 /-- A-test: one acyclic κ. fusion should leave only the non-κ leaf. -/
 example : ∃ κ : Int → Int → Prop,

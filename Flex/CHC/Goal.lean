@@ -64,8 +64,8 @@ structure PreparedGoal where
   bodyGoal : MVarId
   exportGoal : MVarId
 
-/-- Validate and peel predicate witnesses, then normalize for export.
-With `headsOnly`, preserve the original body for certification. Failures restore entry state. -/
+/-- Validate and peel predicates, compact guards, then normalize for export.
+With `headsOnly`, retain the cleaned clause structure for certification. Failures restore entry state. -/
 def prepareGoal (goal : MVarId) (maxClauses : Nat := 1024)
     (headsOnly : Bool := false) : TermElabM PreparedGoal := do
   let saved ← Term.saveState
@@ -79,6 +79,7 @@ def prepareGoal (goal : MVarId) (maxClauses : Nat := 1024)
         throwError "CHC preparation: goal must be a proposition"
       Prepare.checkPredicatePrefix target
       let (_, kvars, bodyGoal) ← peelExistentialsAndIntro goal
+      let bodyGoal ← compactGoal bodyGoal kvars
       let exportGoal ← if headsOnly then
           bodyGoal.withContext do
             let copy ← Meta.mkFreshExprMVar (some (← bodyGoal.getType))

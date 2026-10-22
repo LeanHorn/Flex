@@ -37,7 +37,17 @@ from chc_parity import (ROOT, binary_info, capture, case_source, digest, invento
 VARIANTS = ["nest_fix", "flat_fix", "nest_no_fix", "flat_no_fix", "solver_only"]
 SCRAPING_MODES = {"scrape_no": "no", "scrape_basic": "basic",
                   "scrape_standard": "standard", "scrape_deep": "deep"}
-COMPARISONS = {"pipeline": VARIANTS, "scraping": list(SCRAPING_MODES)}
+ABLATIONS = {
+    **{f"ab_nest_post_fix_{mode}": f"Nesting + Zap + Post-processing + Fix ({mode}) + Discharge"
+       for mode in ("basic", "standard", "deep")},
+    **{f"ab_zap_fix_{mode}": f"Zap + Fix ({mode}) + Discharge"
+       for mode in ("basic", "standard", "deep")},
+    "ab_nest_post_solver": "Nesting + Zap + Post-processing + S/E + Discharge",
+    "ab_zap_post_solver": "Zap + Post-processing + S/E + Discharge",
+    "ab_zap_solver": "Zap + S/E + Discharge",
+    "ab_solver": "S/E + Discharge",
+}
+COMPARISONS = {"pipeline": VARIANTS, "scraping": list(SCRAPING_MODES), "ablation": list(ABLATIONS)}
 HARNESS = ROOT / "scripts/CHCPipeline.lean"
 PREFIXES = ("FLEX_PILOT_START ", "FLEX_PILOT_PHASE ", "FLEX_PILOT ")
 SUCCESS = {"success", "proved", "closed", "complete"}
@@ -245,6 +255,8 @@ def run_case(case: dict, repetition: int, variants: list[str], args: argparse.Na
                    "FLEX_PILOT_CASE_SECONDS": str(math.ceil(args.case_timeout)),
                    "FLEX_PILOT_SOLVER_MS": str(round(args.solver_timeout * 1000)),
                    "FLEX_PILOT_PA_SECONDS": str(math.ceil(args.pa_timeout)),
+                   "FLEX_PILOT_PHASE_HEARTBEATS": str(args.phase_heartbeats),
+                   "FLEX_PILOT_RECURSION_LIMIT": str(args.recursion_limit),
                    "FLEX_PILOT_STOP_AFTER_FIX": "1" if args.stop_after_fix else "0",
                    "FLEX_PILOT_GUARD_LIMIT": str(args.guarded_qualifiers)}
             result = monitor(command, env, path, case, pending, args)
@@ -429,7 +441,7 @@ def save_results(args: argparse.Namespace, selected: list[dict], records: list[d
     ordered = sorted(records, key=lambda r: (r["case"], r["repetition"], r["variant"]))
     (args.output / "results.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in ordered))
     columns = ["case", "variant", "repetition", "status", "outcome", "elapsed_ms", "timing_source",
-               "censored", "remaining_goals", "closed_by", "error", "inventory_status", "artifacts",
+               "censored", "heartbeats", "recursion_limit", "peak_recursion_depth", "remaining_goals", "closed_by", "error", "inventory_status", "artifacts",
                "startup_ms", "process_wall_ms", "phases", "phase_events", "metrics"]
     with (args.output / "results.csv").open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
@@ -450,7 +462,7 @@ def main() -> int:
     parser.add_argument("--corpus", type=Path, default=ROOT / "evaluation/CHC-COMP/generated")
     parser.add_argument("--cases", nargs="+", help="optional exact full case IDs within --suite")
     parser.add_argument("--comparison", choices=COMPARISONS, default="pipeline")
-    parser.add_argument("--variants", nargs="+", choices=VARIANTS + list(SCRAPING_MODES),
+    parser.add_argument("--variants", nargs="+", choices=VARIANTS + list(SCRAPING_MODES) + list(ABLATIONS),
                         help="defaults to all variants in the selected comparison")
     parser.add_argument("--output", type=Path, required=True, help="fresh or empty result directory")
     parser.add_argument("--workers", type=int, default=1)
@@ -458,6 +470,9 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=20261021)
     parser.add_argument("--case-timeout", type=float, default=180, help="hard seconds per variant, excluding imports")
     parser.add_argument("--solver-timeout", type=float, default=30, help="seconds per solver call")
+    parser.add_argument("--phase-heartbeats", type=int, default=2000000,
+                        help="Lean heartbeats per phase, shared by all pipeline and scraping variants")
+    parser.add_argument("--recursion-limit", type=int, default=16384, help="Lean recursion limit for every variant")
     parser.add_argument("--pa-timeout", type=float, default=30,
                         help="cooperative seconds for PA preparation/synthesis; excludes certification and residual discharge")
     parser.add_argument("--stop-after-fix", action="store_true",
@@ -479,6 +494,10 @@ def main() -> int:
         parser.error("--solver-timeout must round to at least one millisecond")
     if args.guarded_qualifiers < 0:
         parser.error("--guarded-qualifiers must be nonnegative")
+    if args.recursion_limit < 1:
+        parser.error("--recursion-limit must be positive")
+    if args.phase_heartbeats < 1:
+        parser.error("--phase-heartbeats must be positive")
     if args.stop_after_fix and any(v not in {*SCRAPING_MODES, "nest_fix", "flat_fix"} for v in args.variants):
         parser.error("--stop-after-fix requires variants containing Fix")
     if len(set(args.variants)) != len(args.variants) or (args.cases and len(set(args.cases)) != len(args.cases)):
@@ -539,6 +558,15 @@ def main() -> int:
         "deadline": "Each variant has its own hard case timeout; Lean and its solver descendants are terminated. "
                     "Unstarted variants are relaunched, without rerunning completed or timed-out variants.",
     }
+    if args.comparison == "ablation":
+        metadata["ablation"] = {
+            "labels": ABLATIONS,
+            "postprocessing": "Explicit proof-producing equality-witness compaction after Zap. Existing Zap trivial cleanup and backend-required normalization remain common to all variants.",
+            "fix": "Basic/standard/deep scraping, standard bank enabled, batched SMT synthesis with native fallback, checked proof oracle. No S/E fallback in Fix variants.",
+            "solvers": "Spacer then Eldarica from the same pre-solver goal if full proof is not obtained; no reuse of the failed backend's assignments.",
+            "discharge": "Identical Flex.Automation.discharge; separately timed after Fix and after each S/E attempt.",
+            "recursion": "Configured recursion limit and depth-limit exceptions are recorded. Actual peak Lean recursion depth is unavailable (null), not inferred from expression depth.",
+        }
     if args.comparison == "scraping":
         metadata["scraping_comparison"] = {
             "variant_modes": {v: SCRAPING_MODES[v] for v in args.variants},

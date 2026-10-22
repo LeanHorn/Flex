@@ -394,7 +394,7 @@ def main() -> int:
     parser.add_argument("--case-timeout", type=float, default=180,
                         help="whole-case seconds, including both solver calls and certification "
                              "(default: 180); active solvers get bounded cleanup grace")
-    parser.add_argument("--heartbeats", type=int, default=200000)
+    parser.add_argument("--heartbeats", type=int, default=2000000)
     parser.add_argument("--proof-heartbeats", type=int, default=20000)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--z3", default=os.environ.get("CHC_Z3", "z3"))

@@ -338,7 +338,8 @@ def exportConstraints (kvars : List KVar) (body : Expr) : MetaM ExportedProblem 
           (fun map (r, symbol) => map.insert r.kvar.mvarId symbol) ({} : Std.HashMap MVarId Expr)
         let names := (relations.zip symbols).foldl
           (fun map (r, symbol) => map.insert symbol.fvarId! r.symbol) ({} : Std.HashMap FVarId String)
-        let clauses ← clauses.toArray.mapIdxM fun i original => do
+        -- Translate each clause once; retain the checked terms for the final script.
+        let assertions ← clauses.toArray.mapIdxM fun i original => do
           try
             let input := original.replace fun e => if e.isMVar then replacements[e.mvarId!]? else none
             if input.hasMVar then throwError "unregistered or unresolved metavariable"
@@ -350,16 +351,15 @@ def exportConstraints (kvars : List KVar) (body : Expr) : MetaM ExportedProblem 
             unless freeVariables.toArray.all names.contains do
               throwError "unexpected free variable in translation"
             Fragment.checkTerm term (relations.map (·.symbol))
-            return clause
+            return Smt.Translate.Command.assert term
           catch error => throwError "CHC export: clause {i + 1}: {error.toMessageData}"
-        withLocalDeclsDND (clauses.mapIdx fun i c => (.mkSimple s!"clause_{i}", c)) fun hypotheses => do
-          let commands ← Smt.Translate.Query.generateQuery (symbols ++ hypotheses).toList names
-          let problem : ExportedProblem := {
-            relations
-            commands := [.setLogic "HORN"] ++ commands ++ [.checkSat]
-            clauseCount := clauses.size }
-          validate problem
-          return problem
+        let declarations ← Smt.Translate.Query.generateQuery symbols.toList names
+        let problem : ExportedProblem := {
+          relations
+          commands := [.setLogic "HORN"] ++ declarations ++ assertions.toList ++ [.checkSat]
+          clauseCount := assertions.size }
+        validate problem
+        return problem
   finally restoreMetaState saved
 
 end Flex.CHC

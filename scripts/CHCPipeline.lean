@@ -18,6 +18,7 @@ private structure Context where
   output : System.FilePath
   solverMs : Nat
   paSeconds : Nat
+  phaseHeartbeats : Nat
   stopAfterFix : Bool
   deadline : Nat
   events : IO.Ref (Array Json)
@@ -49,8 +50,8 @@ private def restore (state : Tactic.SavedState) : TacticM Unit := do
 private def checkTime (ctx : Context) : TermElabM Unit := do
   if (← IO.monoMsNow) >= ctx.deadline then throwError "pilot wall-clock budget exhausted"
 
-private def bounded (action : TacticM α) : TacticM α :=
-  withTheReader Core.Context (fun ctx => { ctx with maxHeartbeats := 200000 * 1000 }) <|
+private def bounded (budget : Nat) (action : TacticM α) : TacticM α :=
+  withTheReader Core.Context (fun ctx => { ctx with maxHeartbeats := budget * 1000 }) <|
     Core.withCurrHeartbeats action
 
 /-- Failed phases restore their entry state; their timing and diagnostics survive. -/
@@ -58,22 +59,28 @@ private def attempt (ctx : Context) (phase : String) (action : TacticM Unit)
     : TacticM Bool := do
   let saved ← Tactic.saveState
   let start ← IO.monoMsNow
-  emit ctx phase "running"
+  let heartbeats ← IO.getNumHeartbeats
+  emit ctx phase "running" [
+    ("heartbeat_limit", toJson ctx.phaseHeartbeats),
+    ("recursion_limit", toJson (← readThe Core.Context).maxRecDepth)]
   tryCatchRuntimeEx (do
     checkTime ctx
-    bounded action
+    bounded ctx.phaseHeartbeats action
     pruneSolvedGoals
     let solved := (← getGoals).isEmpty
     if solved then ctx.closedBy.set phase
     emit ctx phase (if solved then "proved" else "partial") [
       ("elapsed_ms", toJson ((← IO.monoMsNow) - start)),
+      ("heartbeats", toJson (((← IO.getNumHeartbeats) - heartbeats) / 1000)),
       ("remaining_goals", toJson (← getGoals).length)]
     return true)
     (fun error => do
       let message ← error.toMessageData.toString
       restore saved
       emit ctx phase "failed" [
-        ("elapsed_ms", toJson ((← IO.monoMsNow) - start)), ("error", toJson message)]
+        ("elapsed_ms", toJson ((← IO.monoMsNow) - start)),
+        ("heartbeats", toJson (((← IO.getNumHeartbeats) - heartbeats) / 1000)),
+        ("error", toJson message)]
       return false)
 
 private def hasPredicates (goal : MVarId) : MetaM Bool := goal.withContext do
@@ -105,11 +112,11 @@ private def saveGoals (ctx : Context) (stem : String) : TacticM Unit := do
   let goals ← (← getUnsolvedGoals).mapM fun goal => return (← Meta.ppGoal goal).pretty
   IO.FS.writeFile (ctx.output / (stem ++ ".txt")) (String.intercalate "\n\n" goals)
 
-private def runPA (ctx : Context) : TacticM Unit := do
+private def runPA (ctx : Context) (close : Bool := true) : TacticM Unit := do
   let mode := match ctx.variant with
     | "scrape_no" => PAScrapeMode.no
-    | "scrape_basic" => PAScrapeMode.basic
-    | "scrape_standard" => PAScrapeMode.standard
+    | "scrape_basic" | "ab_nest_post_fix_basic" | "ab_zap_fix_basic" => PAScrapeMode.basic
+    | "scrape_standard" | "ab_nest_post_fix_standard" | "ab_zap_fix_standard" => PAScrapeMode.standard
     | _ => PAScrapeMode.deep
   let start ← IO.monoMsNow
   let calls ← IO.mkRef 0
@@ -163,7 +170,7 @@ private def runPA (ctx : Context) : TacticM Unit := do
       onPredicates <| fixImpl proveLeaf { mode, maxGuardedQualifiers }
         (some Flex.Automation.proofOracle) observe (some oracle)
     emit ctx "fix_certificate" "built" [("remaining_goals", toJson (← getGoals).length)]
-    discharge
+    if close then discharge
   finally
     let warnings ← (← Core.getMessageLog).toList.filterMapM fun message => do
       if message.severity == .warning then return some (← message.data.toString)
@@ -175,7 +182,7 @@ private def runPA (ctx : Context) : TacticM Unit := do
       ("oracle_ms", toJson (← oracleMs.get)),
       ("elapsed_ms", toJson ((← IO.monoMsNow) - start)), ("warnings", toJson warnings)]
 
-private def solver (ctx : Context) (backend : Backend) : TacticM Unit := do
+private def solver (ctx : Context) (backend : Backend) (close : Bool := true) : TacticM Unit := do
   let label := if backend == .spacer then "spacer" else "eldarica"
   let index ← IO.mkRef 0
   onPredicates do
@@ -209,9 +216,46 @@ private def solver (ctx : Context) (backend : Backend) : TacticM Unit := do
           ("stage", toJson (reprStr timing.stage)),
           ("elapsed_ms", toJson (timing.elapsedNs / 1000000))]))]
       setGoals report.certificate.goals.toList
-  discharge
+  if close then discharge
+
+private def ablation (ctx : Context) : TacticM Unit := do
+  if ctx.variant.startsWith "ab_nest_" then
+    discard <| attempt ctx "nest" (evalTactic (← `(tactic| nest_chc)))
+  if ctx.variant != "ab_solver" && !(← getUnsolvedGoals).isEmpty then
+    discard <| attempt ctx "zap" <| onPredicates (evalTactic (← `(tactic| zap)))
+  saveGoals ctx "after-zap"
+  if (← getUnsolvedGoals).isEmpty then return
+  if ctx.variant.startsWith "ab_nest_post_" || ctx.variant == "ab_zap_post_solver" then
+    discard <| attempt ctx "postprocess" do
+      let goals ← getUnsolvedGoals
+      setGoals (← goals.mapM fun goal => compactGoal goal [])
+    saveGoals ctx "after-postprocess"
+  if (← getUnsolvedGoals).isEmpty then return
+  if ctx.variant.endsWith "basic" || ctx.variant.endsWith "standard" || ctx.variant.endsWith "deep" then
+    unless (← getUnsolvedGoals).isEmpty do
+      discard <| attempt ctx "fix" (runPA ctx false)
+    saveGoals ctx "after-fix"
+    unless (← getUnsolvedGoals).isEmpty do
+      discard <| attempt ctx "discharge" discharge
+    return
+  let entry ← Tactic.saveState
+  let mut best := entry
+  for backend in #[Backend.spacer, Backend.eldarica] do
+    if (← getUnsolvedGoals).isEmpty then return
+    restore entry
+    let label := if backend == .spacer then "spacer" else "eldarica"
+    if ← attempt ctx label (solver ctx backend false) then
+      unless (← getUnsolvedGoals).isEmpty do
+        discard <| attempt ctx (label ++ "_discharge") discharge
+      best ← Tactic.saveState
+      saveGoals ctx ("after-" ++ label)
+      if (← getUnsolvedGoals).isEmpty then return
+  restore best
+  unless (← getUnsolvedGoals).isEmpty do
+    discard <| attempt ctx "discharge" discharge
 
 private def pipeline (ctx : Context) : TacticM Unit := do
+  if ctx.variant.startsWith "ab_" then return ← ablation ctx
   let withNest := ctx.variant == "nest_fix" || ctx.variant == "nest_no_fix"
   let withFix := #["nest_fix", "flat_fix", "scrape_no", "scrape_basic",
     "scrape_standard", "scrape_deep"].contains ctx.variant
@@ -267,14 +311,17 @@ private def checkBridge (original target : Expr) (goals : Array MVarId) : TermEl
   finally restoreTermState saved
 
 /-- Run one variant without leaking assignments, declarations, or messages to the next. -/
-def run (name : Name) (variant caseName : String) : TermElabM Unit := do
+private def runImpl (name : Name) (variant caseName : String) : TermElabM Unit := do
   let saved ← Term.saveState
   let start ← IO.monoMsNow
+  let initialHeartbeats ← IO.getNumHeartbeats
+  let recursionLimit ← envNat "FLEX_PILOT_RECURSION_LIMIT" 16384
   let output : System.FilePath := (← IO.getEnv "FLEX_PILOT_OUTPUT").getD "/tmp/flex-pilot"
   let ctx : Context := {
     caseName, variant, output := output / variant
     solverMs := ← envNat "FLEX_PILOT_SOLVER_MS" 30000
     paSeconds := ← envNat "FLEX_PILOT_PA_SECONDS" 30
+    phaseHeartbeats := ← envNat "FLEX_PILOT_PHASE_HEARTBEATS" 2000000
     stopAfterFix := (← IO.getEnv "FLEX_PILOT_STOP_AFTER_FIX") == some "1"
     deadline := start + (← envNat "FLEX_PILOT_CASE_SECONDS" 180) * 1000
     events := ← IO.mkRef #[], closedBy := ← IO.mkRef "" }
@@ -285,8 +332,14 @@ def run (name : Name) (variant caseName : String) : TermElabM Unit := do
     tryCatchRuntimeEx (do
       let target := Lean.mkConst name
       let original ← mkFreshExprMVar (some target) (kind := .syntheticOpaque)
-      let goals ← Tactic.run original.mvarId! (pipeline ctx)
+      let goals ← withTheReader Core.Context (fun c => { c with maxRecDepth := recursionLimit }) <|
+        Tactic.run original.mvarId! (pipeline ctx)
+      let checkStart ← IO.monoMsNow
+      let checkHeartbeats ← IO.getNumHeartbeats
       checkBridge original target goals.toArray
+      emit ctx "kernel" "checked" [
+        ("elapsed_ms", toJson ((← IO.monoMsNow) - checkStart)),
+        ("heartbeats", toJson (((← IO.getNumHeartbeats) - checkHeartbeats) / 1000))]
       let residuals ← goals.mapM fun goal => return (← Meta.ppGoal goal).pretty
       IO.FS.writeFile (ctx.output / "residual.txt") (String.intercalate "\n\n" residuals)
       return (if goals.isEmpty then "proved" else "partial", "", goals.length))
@@ -297,9 +350,20 @@ def run (name : Name) (variant caseName : String) : TermElabM Unit := do
   let result := Json.mkObj [
     ("case", toJson caseName), ("variant", toJson variant), ("status", toJson status),
     ("elapsed_ms", toJson ((← IO.monoMsNow) - start)),
+    ("heartbeats", toJson (((← IO.getNumHeartbeats) - initialHeartbeats) / 1000)),
+    ("recursion_limit", toJson recursionLimit), ("peak_recursion_depth", Json.null),
     ("remaining_goals", toJson remaining), ("phases", Json.arr (← ctx.events.get)),
     ("closed_by", toJson (← ctx.closedBy.get)), ("error", toJson error)]
   IO.FS.writeFile (ctx.output / "result.json") result.pretty
   publish ctx "FLEX_PILOT " result
+
+end FlexPilot
+
+namespace FlexPilot
+
+def run (name : Name) (variant caseName : String) : TermElabM Unit := do
+  let limit ← envNat "FLEX_PILOT_RECURSION_LIMIT" 16384
+  withTheReader Core.Context (fun ctx => { ctx with maxRecDepth := limit }) <|
+    runImpl name variant caseName
 
 end FlexPilot

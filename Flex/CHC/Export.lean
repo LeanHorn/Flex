@@ -63,15 +63,17 @@ def valueSort (type : Expr) : MetaM ValueSort := do
   throwError "CHC export: unsupported value type {type}; expected Int, Bool, or Prop"
 
 /-- Use only the supported lean-smt translators; restore the environment afterwards. -/
-def withTranslators (action : MetaM α) : MetaM α := withoutModifyingEnv do
+def withTranslators (action : MetaM α) (allowQuantifiers : Bool := false) : MetaM α := withoutModifyingEnv do
   let extension := Smt.Attribute.smtExt
   modifyEnv fun env => extension.modifyState env fun state =>
-    state.insert ``Smt.Translator {
+    let translators : Std.HashSet Name := {
       ``Smt.Translate.Int.translateType, ``Smt.Translate.Int.translateInt,
       ``Smt.Translate.Int.translateProp, ``Smt.Translate.Bool.translateType,
       ``Smt.Translate.Bool.translateBool, ``Smt.Translate.Bool.translateProp,
       ``Smt.Translate.Prop.translateType, ``Smt.Translate.Prop.translateProp,
       ``Smt.Translate.Prop.translateIte }
+    state.insert ``Smt.Translator (if allowQuantifiers then
+      translators.insert ``Smt.Translate.Prop.translateExists else translators)
   action
 
 private def application (term : Smt.Term) : Smt.Term × Array Smt.Term :=
@@ -91,17 +93,20 @@ private def positiveNumeral : Smt.Term → Bool
   | _ => false
 
 /-- Check supported operators and arities; the native parser subsequently checks sorts. -/
-partial def checkTerm (term : Smt.Term) (symbols : Array String) : MetaM Unit := do
+partial def checkTerm (term : Smt.Term) (symbols : Array String)
+    (allowQuantifiers : Bool := false) : MetaM Unit := do
   match term with
   | .literalT _ =>
     unless numeral term do throwError "CHC export: unsupported SMT literal {term}"
   | .symbolT name =>
     unless symbols.contains name || #["true", "false"].contains name do
       throwError "CHC export: undeclared SMT symbol '{name}'"
-  | .forallT name sort body =>
+  | .forallT name sort body | .existsT name sort body =>
+    if !allowQuantifiers then
+      if let .existsT .. := term then throwError "CHC export: existential SMT terms are unsupported"
     unless (toString sort == "Int" || toString sort == "Bool") && !symbols.contains name do
       throwError "CHC export: invalid or shadowed SMT binder '{name}'"
-    checkTerm body (symbols.push name)
+    checkTerm body (symbols.push name) allowQuantifiers
   | .appT .. =>
     let (head, args) := application term
     let .symbolT name := head | throwError "CHC export: higher-order SMT application"
@@ -116,7 +121,7 @@ partial def checkTerm (term : Smt.Term) (symbols : Array String) : MetaM Unit :=
       unless valid do throwError "CHC export: unsupported SMT operator '{name}' or arity"
       if (name == "div" || name == "mod") && !positiveNumeral args[1]! then
         throwError "CHC export: {name} requires a positive integer literal divisor"
-    for argument in args do checkTerm argument symbols
+    for argument in args do checkTerm argument symbols allowQuantifiers
   | _ => throwError "CHC export: unsupported SMT term {term}"
 
 end Fragment
@@ -207,8 +212,9 @@ private def checkIntegerInstance (e : Expr) : MetaM Unit := do
           q($a ≤ $b), q($a < $b), q($a ≥ $b), q($a > $b)][i]!
         canonical e expected
 
-/-- Normalize theory terms, rejecting hidden quantifiers and higher-order expressions. -/
-partial def atom (input : Expr) : MetaM Expr := do
+/-- Normalize checked theory terms. PA can also enable first-order Int/Bool/Prop
+quantifiers; CHC export keeps them restricted to clause prefixes. -/
+partial def atom (input : Expr) (allowQuantifiers : Bool := false) : MetaM Expr := do
   let e ← expose input
   -- lean-smt recognizes the notation's typeclass applications, not these direct functions.
   let e ← if e.isAppOfArity ``Int.ediv 2 || e.isAppOfArity ``Int.emod 2 then do
@@ -221,16 +227,31 @@ partial def atom (input : Expr) : MetaM Expr := do
     throwError "CHC export: BEq comparisons are unsupported; use propositional equality"
   match e with
   | .forallE name domain body bi =>
+    if !(← isProp domain) && allowQuantifiers then
+      discard <| Fragment.valueSort domain
+      let name ← mkFreshUserName `_pa_quant
+      return ← withLocalDecl name bi domain fun input => do
+        -- lean-smt treats unused forall binders as function arrows. These sorts
+        -- are inhabited, so dropping an unused value binder is equivalent.
+        mkForallFVars #[input] (← atom (body.instantiate1 input) true) (usedOnly := true)
     unless (← isProp domain) && !body.hasLooseBVar 0 do
       throwError "CHC export: quantifiers must be clause binders; proof-dependent guards are unsupported"
-    let domain' ← atom domain
+    let domain' ← atom domain allowQuantifiers
     withLocalDecl name bi domain fun proof => do
-      mkArrow domain' (← atom (body.instantiate1 proof))
+      mkArrow domain' (← atom (body.instantiate1 proof) allowQuantifiers)
   | .lam .. =>
     throwError "CHC export: quantifiers must be clause binders; higher-order terms are unsupported"
   | .app .. =>
+    if allowQuantifiers && e.isAppOfArity ``Exists 2 then
+      let domain := e.getArg! 0
+      discard <| Fragment.valueSort domain
+      let predicate ← whnf (e.getArg! 1)
+      let name ← mkFreshUserName `_pa_quant
+      return ← withLocalDeclD name domain fun input => do
+        let body ← atom (mkApp predicate input).headBeta true
+        return mkApp2 e.getAppFn domain (← mkLambdaFVars #[input] body)
     let head := e.getAppFn
-    let args ← e.getAppArgs.mapM atom
+    let args ← e.getAppArgs.mapM fun arg => atom arg allowQuantifiers
     return mkAppN head args
   | .mvar .. => throwError "CHC export: unresolved metavariable {e}"
   | _ => return e
@@ -317,7 +338,8 @@ def exportConstraints (kvars : List KVar) (body : Expr) : MetaM ExportedProblem 
           (fun map (r, symbol) => map.insert r.kvar.mvarId symbol) ({} : Std.HashMap MVarId Expr)
         let names := (relations.zip symbols).foldl
           (fun map (r, symbol) => map.insert symbol.fvarId! r.symbol) ({} : Std.HashMap FVarId String)
-        let clauses ← clauses.toArray.mapIdxM fun i original => do
+        -- Translate each clause once; retain the checked terms for the final script.
+        let assertions ← clauses.toArray.mapIdxM fun i original => do
           try
             let input := original.replace fun e => if e.isMVar then replacements[e.mvarId!]? else none
             if input.hasMVar then throwError "unregistered or unresolved metavariable"
@@ -329,16 +351,15 @@ def exportConstraints (kvars : List KVar) (body : Expr) : MetaM ExportedProblem 
             unless freeVariables.toArray.all names.contains do
               throwError "unexpected free variable in translation"
             Fragment.checkTerm term (relations.map (·.symbol))
-            return clause
+            return Smt.Translate.Command.assert term
           catch error => throwError "CHC export: clause {i + 1}: {error.toMessageData}"
-        withLocalDeclsDND (clauses.mapIdx fun i c => (.mkSimple s!"clause_{i}", c)) fun hypotheses => do
-          let commands ← Smt.Translate.Query.generateQuery (symbols ++ hypotheses).toList names
-          let problem : ExportedProblem := {
-            relations
-            commands := [.setLogic "HORN"] ++ commands ++ [.checkSat]
-            clauseCount := clauses.size }
-          validate problem
-          return problem
+        let declarations ← Smt.Translate.Query.generateQuery symbols.toList names
+        let problem : ExportedProblem := {
+          relations
+          commands := [.setLogic "HORN"] ++ declarations ++ assertions.toList ++ [.checkSat]
+          clauseCount := assertions.size }
+        validate problem
+        return problem
   finally restoreMetaState saved
 
 end Flex.CHC

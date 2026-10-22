@@ -12,6 +12,24 @@ private def elaborate (term : TSyntax `term) : TermElabM Expr := do
 private def response (model : String) : SolverResult :=
   SolverResult.ofProcess { completion := .exited 0, stdout := "sat\n" ++ model }
 
+-- The normalization bridge must prove the original existential/disjunctive guard.
+run_elab do
+  let target ← elaborate (← `(∃ k : Int → Prop,
+    k 0 ∧ (∀ x : Int, (∃ y : Int, (k y ∨ y = 0) ∧ y = x) → k x) ∧
+    (∀ x : Int, k x → 0 ≤ x)))
+  let goal ← mkFreshExprMVar target
+  let cleaned ← compactGoal goal.mvarId! []
+  let prepared ← prepareGoal cleaned
+  let problem ← exportConstraints prepared.kvars (← prepared.exportGoal.getType)
+  let witnesses ← importWitnesses problem
+    (response "(model (define-fun k_0 ((x Int)) Bool (<= 0 x)))")
+  let certificate ← certifyWitnesses problem witnesses prepared.bodyGoal
+    (fun target => do proveLeafWith (← `(tactic| omega)) target)
+  unless certificate.goals.isEmpty do throwError "normalized clauses were not certified"
+  let proof ← instantiateMVars goal
+  checkWithKernel proof
+  unless ← isDefEq (← inferType proof) target do throwError "normalization changed the goal"
+
 -- Import an invariant, remove its heads, and finish the original goal from the residual.
 run_elab do
   let target ← elaborate

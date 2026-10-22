@@ -3,6 +3,12 @@ import Flex.PA.Qualifier
 
 open Lean Meta
 
+register_option flex.qualifierSelf : Nat := {
+  defValue := 0
+  descr := "Bind a qualifier's first parameter only to one of the first N κ parameters, \
+    as liquid-fixpoint does with `:self N`; zero allows any κ parameter."
+}
+
 /-- Collect the qualifier's parameter types. -/
 private partial def qualifParamTypes (ty : Expr) : List Expr :=
   if ty.isForall then ty.bindingDomain! :: qualifParamTypes ty.bindingBody!
@@ -28,9 +34,11 @@ def foldQualifierInstances {α} (q : Expr) (kvarParamTypes : List Expr)
   let paramTypes := qualifParamTypes (← inferType q)
   let slots := kvarParamTypes.toArray
   if paramTypes.length > slots.size then return init
-  let choices ← paramTypes.mapM fun ty => do
+  let self := flex.qualifierSelf.get (← getOptions)
+  let choices ← paramTypes.mapIdxM fun j ty => do
     let mut compatible := #[]
     for i in [:slots.size] do
+      if j == 0 && self != 0 && i >= self then continue
       if ← isDefEq ty slots[i]! then
         compatible := compatible.push i
     return compatible

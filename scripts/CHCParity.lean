@@ -40,7 +40,7 @@ private def settings : IO Settings := do
   return {
     input, output
     solver := { backend, executable, timeoutMs }
-    heartbeats := ← envNat "FLEX_PARITY_HEARTBEATS" 200000
+    heartbeats := ← envNat "FLEX_PARITY_HEARTBEATS" 2000000
     proofHeartbeats := ← envNat "FLEX_PARITY_PROOF_HEARTBEATS" 20000 }
 
 private def emit (cfg : Settings) (stage status : String)

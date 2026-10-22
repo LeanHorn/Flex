@@ -50,11 +50,14 @@ Scraping adds qualifier candidates from the goal and definitions:
 | Option | Candidates collected |
 | --- | --- |
 | `fix (scrape := basic)` | Clause conclusions and explicitly selected definitions. |
-| `fix (scrape := standard)` | Also premises, Boolean observations, and relevant definitions discovered automatically. |
+| `fix (scrape := standard)` | Also premises, bounded guarded arithmetic qualifiers, Boolean observations, and relevant definitions. |
 | `fix (scrape := deep)` | Also explores helper definitions and generalizes numeric templates, within search limits. |
 
 Scraping is off by default. Add `(defs := [fib])` to select definitions explicitly.
 Use `set_option flex.reportQualifiers true` to inspect scraped candidates in the Infoview.
+Disable guarded templates with `(scrapeConfig := { maxGuardedQualifiers := 0 })`.
+By default, `fix` batches integer/Boolean SMT checks in short-lived Z3 processes,
+rechecks affected clauses after weakening, and certifies the result with Lean proofs.
 
 Optional SMT backends can be selected separately for synthesis and proofs:
 

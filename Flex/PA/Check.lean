@@ -8,6 +8,21 @@ open Lean Meta Elab Tactic
     success if `proof` returned, or `none` if failure. -/
 abbrev PAOracle := Expr → TermElabM (Option Expr)
 
+/-- Synthesis decisions carry no proof and never enter a certificate. -/
+inductive PASynthResult where
+  | unknown (reason : String)
+  | valid
+  | invalid
+  deriving BEq, Repr, Inhabited
+
+/-- Check related candidate implications together, preserving their order. -/
+abbrev PASynthOracle := Array Expr → TermElabM (Array PASynthResult)
+
+/-- A failed proof attempt is unknown, not a counterexample. -/
+def PAOracle.toSynth (oracle : PAOracle) : PASynthOracle := fun targets =>
+  targets.mapM fun target => do
+    return if (← oracle target).isSome then .valid else .unknown "proof search failed"
+
 /-- The default tactic oracle used by PA, before any per-call fallback.
     No `aesop`: it can hit `maxRecDepth` (uncatchable) and over-weakens solutions. -/
 syntax "pa_oracle" : tactic

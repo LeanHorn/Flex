@@ -4,6 +4,7 @@ import Flex.PA.Fixpoint
 import Flex.PA.Cert
 import Flex.PA.Scrape
 import Flex.PA.Qualifier
+import Flex.Tactic.Automation
 
 open Lean Elab Meta Tactic
 
@@ -38,11 +39,26 @@ private def benchFixPhase (phase : String) (act : TacticM α) : TacticM α := do
   IO.println s!"FIX_PHASE {phase} ns={stop - start}"
   return result
 
-/-- Run predicate abstraction and build its certificate, leaving residual goals. -/
-def fixImpl
+/-- Require a valid safety check; inconclusive checks may fall back to a Lean proof. -/
+private def validatePASafety (synth : PASynthOracle) (prove : PAOracle) : PAOracle :=
+  fun target => do
+    let results ← synth #[target]
+    unless results.size == 1 do
+      throwError "fix: safety oracle returned the wrong number of decisions"
+    match results[0]! with
+    | .valid => return none
+    | .invalid =>
+      throwError "fix: synthesized predicates do not satisfy a safety clause; goal unchanged"
+    | .unknown _ =>
+      if let some proof ← prove target then return some proof
+      throwError "fix: could not validate a safety clause for the synthesized predicates; goal unchanged"
+
+private def runFix
   (oracle : PAOracle := proveLeaf)
   (scrape : PAScrapeConfig := {})
   (proofOracle : Option PAOracle := none)
+  (observe : PAObserver := fun _ => pure ())
+  (synthOracle : Option PASynthOracle := none)
     : TacticM Unit := withMainContext do
   let (kctx, kvarsInOrder) ← peelKVars
 
@@ -70,9 +86,13 @@ def fixImpl
     let candidateLimit := if scrape.mode == .no && scrape.defs.isEmpty then none
       else some scrape.maxCandidatesPerKappa
     let instanceLimit := candidateLimit.map fun _ => scrape.maxInstancesPerKappa
-    let qualifiers := extraQualifiers ++ (← getStandardQualifiers)
+    let standardQualifiers ← getStandardQualifiers
+    let qualifiers := extraQualifiers ++ standardQualifiers
     let initial ← buildInitialAssignment kvarsInOrder qualifiers candidateLimit instanceLimit
-    let aStar ← benchFixPhase "synthesis" <| solveFixpoint kctx flatCs initial oracle
+    observe (.setup extraQualifiers.size standardQualifiers.size (← getQualifiers).size
+      (initial.toArray.map fun (κ, cs) => (κ.name, cs.length)))
+    let aStar ← benchFixPhase "synthesis" <|
+      solveFixpoint kctx flatCs initial oracle observe synthOracle
     if flex.benchOracles.get (← getOptions) then
       let count := fun (a : List (KVar × List (Expr × List Nat))) =>
         a.foldl (fun n (_, qs) => n + qs.length) 0
@@ -84,20 +104,44 @@ def fixImpl
       κ.assignSol sol
 
     let residualOut ← IO.mkRef (#[] : Array MVarId)
+    let certificateCalls ← IO.mkRef 0
+    let certify : PAOracle := fun target => do
+      certificateCalls.modify (· + 1)
+      (proofOracle.getD oracle) target
     let proof ← benchFixPhase "certificate" <|
-      walkPAProof aStar body residualOut (proofOracle.getD oracle)
+      walkPAProof aStar body residualOut certify
+        (validatePASafety (synthOracle.getD oracle.toSynth) (proofOracle.getD oracle))
     bodyGoal.assign proof
+    if flex.benchOracles.get (← getOptions) then
+      IO.println s!"FIX_CERTIFICATE calls={← certificateCalls.get}"
 
     let residual := (← residualOut.get).toList
     setGoals residual
     logInfo m!"fix: bridge built and assigned; \
       {residual.length} κ-free residual goal(s) left as c′."
 
+/-- Keep predicate assignments only after head certification and safety validation.
+    Any failed attempt restores the entry goal, including prior Zap progress. -/
+def fixImpl
+  (oracle : PAOracle := proveLeaf)
+  (scrape : PAScrapeConfig := {})
+  (proofOracle : Option PAOracle := none)
+  (observe : PAObserver := fun _ => pure ())
+  (synthOracle : Option PASynthOracle := none) : TacticM Unit := do
+  let saved ← Tactic.saveState
+  tryCatchRuntimeEx (runFix oracle scrape proofOracle observe synthOracle) fun error => do
+    Flex.CHC.restoreTermState saved.term
+    set saved.tactic
+    throw error
+
 private declare_config_elab elabScrapeLimits PAScrapeLimits
 
-/-- Solve existential predicates by PA, leaving any unproved residual goals.
+/-- Solve existential predicates by PA, retaining only safety-validated candidates.
+    Rejected or inconclusive candidates leave the entry goal unchanged.
+    Validated candidates may leave unproved residual goals.
     Uses the standard qualifier bank unless `flex.standardQualifiers` is disabled.
-    `scrape`: `basic` extracts heads; `standard` adds premises and definition discovery;
+    Default synthesis batches SMT checks; certificate leaves require Lean proofs.
+    `scrape`: `basic` extracts heads; `standard` adds premises, guarded arithmetic, and definitions;
     `deep` also explores helpers and generalizes numeric templates.
     `defs`: also scrape the listed definitions. Scraping is off by default.
     `oracle`: fallback after default Lean automation, shared by both phases.
@@ -142,7 +186,10 @@ elab_rules : tactic
     let proofOracle ← match proof with
       | none => pure defaultOracle
       | some tac => pure (withPAPriority (← `(tactic| ($tac:tacticSeq))))
+    let batchOracle := if synth.isNone && fallback.isNone then
+      some Flex.Automation.synthOracle else none
     fixImpl synthOracle { limits with mode, defs } (some proofOracle)
+      (synthOracle := batchOracle)
 
     -- Use the proof oracle on residual goals; keep those it cannot close.
     benchFixPhase "residual" do

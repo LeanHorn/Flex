@@ -6,7 +6,7 @@ inductive PAScrapeMode where
   | no | basic | standard | deep
   deriving BEq, Inhabited
 
-/-- Limits apply to one scraping invocation; candidate limits apply per κ. -/
+/-- Limits apply per invocation, except guard atoms per clause and candidates per κ. -/
 structure PAScrapeLimits where
   maxParams : Nat := 3
   maxQualifiers : Nat := 128
@@ -16,6 +16,9 @@ structure PAScrapeLimits where
   maxDefinitionDepth : Nat := 2
   maxCandidatesPerKappa : Nat := 2048
   maxInstancesPerKappa : Nat := 8192
+  maxGuardedQualifiers : Nat := 32
+  maxGuardAtoms : Nat := 12
+  maxGuardPairs : Nat := 256
 
 structure PAScrapeConfig extends PAScrapeLimits where
   mode : PAScrapeMode := .no
@@ -34,7 +37,7 @@ initialize Lean.registerTraceClass `flex.scrape
 namespace PAScrape
 
 private inductive Source where
-  | goal | definition | generated
+  | goal | definition | generated | guarded
   deriving BEq
 
 private structure Candidate where
@@ -52,6 +55,7 @@ private structure ScrapeState where
   goal : Array Candidate := #[]
   definitions : Array Candidate := #[]
   generated : Array Candidate := #[]
+  guarded : Array Candidate := #[]
   seen : Std.HashSet Expr := {}
   pending : Array Definition := #[]
   visited : Array (Expr × Array Expr) := #[]
@@ -59,6 +63,7 @@ private structure ScrapeState where
   rejected : Nat := 0
   inspected : Nat := 0
   limitsHit : Array String := #[]
+  guardPairs : Nat := 0
 
 private abbrev ScrapeM := StateRefT ScrapeState MetaM
 
@@ -96,14 +101,20 @@ private def addPredicate (cfg : PAScrapeConfig) (origin : String) (source : Sour
   if q.hasFVar || q.hasMVar || q.hasLooseBVars then reject; return
   if (← get).seen.contains q then return
   let s ← get
-  let target := if source == Source.goal then s.goal else if source == Source.definition then s.definitions else s.generated
-  if target.size >= cfg.maxQualifiers then limit "templates"; return
+  let target := match source with
+    | .goal => s.goal
+    | .definition => s.definitions
+    | .generated => s.generated
+    | .guarded => s.guarded
+  let cap := if source == .guarded then cfg.maxGuardedQualifiers else cfg.maxQualifiers
+  if target.size >= cap then limit (if source == .guarded then "guarded templates" else "templates"); return
   let target := target.push ⟨q, origin⟩
   set { s with
     seen := s.seen.insert q
     goal := if source == Source.goal then target else s.goal
     definitions := if source == Source.definition then target else s.definitions
-    generated := if source == Source.generated then target else s.generated }
+    generated := if source == Source.generated then target else s.generated
+    guarded := if source == Source.guarded then target else s.guarded }
   trace[flex.scrape] "{origin}: {q}"
 
 private partial def predicates (cfg : PAScrapeConfig) (origin : String) (source : Source)
@@ -245,6 +256,159 @@ private def numericLiteral (ty e : Expr) : MetaM Bool := do
   if ty.isConstOf ``Nat then return (← getNatValue? e).isSome
   return (← getIntValue? e).isSome
 
+private def support (e : Expr) : Array FVarId :=
+  (collectFVars {} e).fvarIds
+
+private def subset (xs ys : Array FVarId) : Bool :=
+  xs.all ys.contains
+
+/-- Guard combinations stay in arithmetic; ordinary scraping still retains
+    applications of user definitions. Products require a literal coefficient. -/
+private partial def guardTerm (cfg : PAScrapeConfig) (e : Expr) (depth : Nat) : ScrapeM Bool := do
+  unless ← visit cfg depth do return false
+  let e := e.consumeMData.headBeta
+  if let .letE _ _ value body _ := e then return ← guardTerm cfg (body.instantiate1 value) (depth + 1)
+  let ty ← whnf (← inferType e)
+  let isInt := ty.isConstOf ``Int
+  unless isInt || ty.isConstOf ``Nat do return false
+  if e.isFVar then return true
+  if ← numericLiteral ty e then return true
+  let name := e.getAppFn.constName?.getD .anonymous
+  let args := e.getAppArgs
+  if [``Neg.neg, ``Int.neg].contains name && isInt && !args.isEmpty then
+    let arg := args.back!
+    return (← guardTerm cfg arg (depth + 1)) && (← isDefEq e (mkApp (mkConst ``Int.neg) arg))
+  if name == ``Int.ofNat && args.size == 1 then return ← guardTerm cfg args[0]! (depth + 1)
+  let builtin ←
+    if [``HAdd.hAdd, ``Int.add, ``Nat.add].contains name then
+      pure (if isInt then ``Int.add else ``Nat.add)
+    else if [``HSub.hSub, ``Int.sub, ``Nat.sub].contains name then
+      pure (if isInt then ``Int.sub else ``Nat.sub)
+    else if [``HMul.hMul, ``Int.mul, ``Nat.mul].contains name then
+      pure (if isInt then ``Int.mul else ``Nat.mul)
+    else if [``HDiv.hDiv, ``Int.ediv, ``Nat.div].contains name then
+      pure (if isInt then ``Int.ediv else ``Nat.div)
+    else if [``HMod.hMod, ``Int.emod, ``Nat.mod].contains name then
+      pure (if isInt then ``Int.emod else ``Nat.mod)
+    else return false
+  if args.size < 2 then return false
+  let lhs := args[args.size - 2]!
+  let rhs := args[args.size - 1]!
+  unless (← guardTerm cfg lhs (depth + 1)) && (← guardTerm cfg rhs (depth + 1)) do return false
+  if builtin == ``Int.mul || builtin == ``Nat.mul then
+    unless (← numericLiteral ty lhs) || (← numericLiteral ty rhs) do return false
+  if [``Int.ediv, ``Int.emod, ``Nat.div, ``Nat.mod].contains builtin then
+    unless ← numericLiteral ty rhs do return false
+  return ← isDefEq e (mkApp2 (mkConst builtin) lhs rhs)
+
+/-- Expose arithmetic atoms under Boolean encodings without unfolding arithmetic. -/
+private def arithmeticAtom? (cfg : PAScrapeConfig) (e : Expr) : ScrapeM (Option Expr) := do
+  let name := e.getAppFn.constName?.getD .anonymous
+  unless [``Eq, ``LE.le, ``LT.lt, ``GE.ge, ``GT.gt,
+      ``Int.le, ``Int.lt, ``Nat.le, ``Nat.lt].contains name do return none
+  let args := e.getAppArgs
+  if args.size < 2 then return none
+  let lhs := args[args.size - 2]!
+  let rhs := args[args.size - 1]!
+  let ty ← whnf (← inferType lhs)
+  unless ty.isConstOf ``Int || ty.isConstOf ``Nat do return none
+  unless (← guardTerm cfg lhs 0) && (← guardTerm cfg rhs 0) do return none
+  if name == ``Eq then return some (← mkEq lhs rhs)
+  let rel := if [``LT.lt, ``GT.gt, ``Int.lt, ``Nat.lt].contains name then ``LT.lt else ``LE.le
+  let (lhs, rhs) := if name == ``GE.ge || name == ``GT.gt then (rhs, lhs) else (lhs, rhs)
+  return some (← mkAppM rel #[lhs, rhs])
+
+private def predicateApplication (e : Expr) : MetaM Bool := do
+  return e.isApp && (e.getAppFn.isFVar || e.getAppFn.isMVar) && (← isProp e)
+
+private structure GuardAtoms where
+  atoms : Array Expr := #[]
+  relations : Array (Array FVarId) := #[]
+
+private partial def guardAtoms (cfg : PAScrapeConfig) (e : Expr)
+    (out : GuardAtoms) (depth : Nat) : ScrapeM GuardAtoms := do
+  unless ← visit cfg depth do return out
+  let e := e.consumeMData.headBeta
+  if let .letE _ _ v b _ := e then
+    return ← guardAtoms cfg (b.instantiate1 v) out (depth + 1)
+  if ← predicateApplication e then
+    let ids := e.getAppArgs.foldl (fun ids a =>
+      (support a).foldl (fun ids id => if ids.contains id then ids else ids.push id) ids) #[]
+    return { out with relations := out.relations.push ids }
+  if let some atom ← arithmeticAtom? cfg e then
+    return if out.atoms.contains atom then out else { out with atoms := out.atoms.push atom }
+  -- Descending through Eq Prop, Iff, Not, and decide exposes their data tests.
+  -- Quantified subformulas are left intact: their binders are not clause parameters.
+  let mut out := out
+  for a in e.getAppArgs do out ← guardAtoms cfg a out (depth + 1)
+  return out
+
+private def negateAtom (p : Expr) : MetaM Expr := do
+  let args := p.getAppArgs
+  let name := p.getAppFn.constName?.getD .anonymous
+  if name == ``Not && args.size == 1 then return args[0]!
+  if name == ``LE.le || name == ``LT.lt then
+    return ← mkAppM (if name == ``LE.le then ``LT.lt else ``LE.le)
+      #[args[args.size - 1]!, args[args.size - 2]!]
+  return mkNot p
+
+/-- Equality with a literal also proposes either interval boundary. -/
+private def boundaryAtoms (p : Expr) : MetaM (Array Expr) := do
+  let some (_, lhs, rhs) := p.eq? | return #[p]
+  let ty ← inferType lhs
+  unless (← numericLiteral ty lhs) || (← numericLiteral ty rhs) do return #[p]
+  return #[p, ← mkAppM ``LE.le #[lhs, rhs], ← mkAppM ``LE.le #[rhs, lhs]]
+
+/-- Propose `guard → property` over one predicate's arguments in one clause.
+    Both polarities are candidates; none of these combinations is assumed valid. -/
+private def guardedPredicates (cfg : PAScrapeConfig) (props : Array Expr) : ScrapeM Unit := do
+  let mut found : GuardAtoms := {}
+  for p in props do found ← guardAtoms cfg p found 0
+  let mut atoms := #[]
+  for p in found.atoms do
+    let ids := support p
+    if ids.isEmpty || !found.relations.any (subset ids) then continue
+    for variant in ← boundaryAtoms p do
+      if atoms.contains variant then continue
+      if atoms.size >= cfg.maxGuardAtoms then limit "guard atoms"; break
+      atoms := atoms.push variant
+  for atom in atoms do
+    addPredicate cfg "guard atom" .generated atom
+    addPredicate cfg "guard atom" .generated (← negateAtom atom)
+  for guard in atoms do
+    for property in atoms do
+      if (← get).guarded.size >= cfg.maxGuardedQualifiers then limit "guarded templates"; return
+      if (← get).guardPairs >= cfg.maxGuardPairs then limit "guard pairs"; return
+      modify fun s => { s with guardPairs := s.guardPairs + 1 }
+      let gvars := support guard
+      let pvars := support property
+      -- Avoid pairing facts about precisely the same arguments.
+      if subset gvars pvars && subset pvars gvars then continue
+      unless found.relations.any (fun vars => subset gvars vars && subset pvars vars) do continue
+      for g in #[guard, ← negateAtom guard] do
+        for p in #[property, ← negateAtom property] do
+          addPredicate cfg "guarded clause" .guarded (mkApp2 (mkConst ``Or) (← negateAtom g) p)
+
+private partial def guardedClauses (cfg : PAScrapeConfig) (e : Expr)
+    (safety : Bool) (premises : Array Expr := #[]) (depth : Nat := 0) : ScrapeM Unit := do
+  if (← get).guarded.size >= cfg.maxGuardedQualifiers ||
+      (← get).guardPairs >= cfg.maxGuardPairs then return
+  unless ← visit cfg depth do return
+  let e := e.consumeMData.headBeta
+  if let .letE _ _ v b _ := e then
+    guardedClauses cfg (b.instantiate1 v) safety premises (depth + 1)
+  else if e.isForall then
+    let dom := e.bindingDomain!
+    let premises := if ← isProp dom then premises.push dom else premises
+    withLocalDecl e.bindingName! e.bindingInfo! dom fun x =>
+      guardedClauses cfg (e.bindingBody!.instantiate1 x) safety premises (depth + 1)
+  else if let some (l, r) := e.and? then
+    guardedClauses cfg l safety premises (depth + 1)
+    guardedClauses cfg r safety premises (depth + 1)
+  else
+    let isSafety := !(← predicateApplication e)
+    if isSafety == safety then guardedPredicates cfg (premises.push e)
+
 /-- Propose at most three variants of a closed numeric qualifier.
     Replace a literal bound with a parameter, or propose `≤` from `<`.
     These are candidates for PA to check, not proved implications. -/
@@ -278,12 +442,54 @@ def deepScrapeVariants (q : Expr) : MetaM (Array Expr) := do
         variants := variants.push variant
     return variants
 
+/-- Guard cross-products are reserved for arithmetic theory goals. Recursive
+    functions still contribute ordinary qualifiers through definition scraping. -/
+private partial def arithmeticGoal (cfg : PAScrapeConfig) (e : Expr)
+    (depth : Nat) : ScrapeM Bool := do
+  unless ← visit cfg depth do return false
+  let e := e.consumeMData.headBeta
+  if let .letE _ _ value body _ := e then
+    return ← arithmeticGoal cfg (body.instantiate1 value) (depth + 1)
+  if e.isForall then
+    let domain := e.bindingDomain!
+    if (← isProp domain) && !(← arithmeticGoal cfg domain (depth + 1)) then return false
+    return ← withLocalDecl e.bindingName! e.bindingInfo! domain fun x =>
+      arithmeticGoal cfg (e.bindingBody!.instantiate1 x) (depth + 1)
+  if e.isAppOfArity ``Exists 2 then
+    let domain ← whnf e.appFn!.appArg!
+    unless domain.isConstOf ``Int || domain.isConstOf ``Nat ||
+        domain.isConstOf ``Bool || domain.isProp do return false
+    return ← withLocalDeclD `witness domain fun x =>
+      arithmeticGoal cfg (mkApp e.appArg! x).headBeta (depth + 1)
+  let type ← whnf (← inferType e)
+  if type.isConstOf ``Int || type.isConstOf ``Nat then return ← guardTerm cfg e depth
+  if e.isFVar || e.isMVar then return true
+  let name := e.getAppFn.constName?.getD .anonymous
+  if [``True, ``False, ``Bool.true, ``Bool.false].contains name then return true
+  unless (← predicateApplication e) || [``Eq, ``LE.le, ``LT.lt, ``GE.ge, ``GT.gt,
+      ``Int.le, ``Int.lt, ``Nat.le, ``Nat.lt, ``And, ``Or, ``Not, ``Iff,
+      ``Bool.and, ``Bool.or, ``Bool.not, ``Bool.xor, ``BEq.beq, ``decide].contains name do
+    return false
+  for arg in e.getAppArgs do
+    let argType ← whnf (← inferType arg)
+    if (← isProp arg) || argType.isConstOf ``Int || argType.isConstOf ``Nat ||
+        argType.isConstOf ``Bool then
+      unless ← arithmeticGoal cfg arg (depth + 1) do return false
+  return true
+
 private def collect (cfg : PAScrapeConfig) (body : Expr) : ScrapeM Unit := do
   for name in cfg.defs do
     unless (← getConstInfo name) matches .defnInfo _ do
       throwError "fix: `{name}` is not a definition to scrape"
     enqueue cfg { fn := ← mkConstWithLevelParams name, requested := true }
   if cfg.mode != .no then clause cfg body
+  if automatic cfg && cfg.maxGuardedQualifiers > 0 then
+    -- Eligibility has its own bounded traversal; a rejected goal keeps ordinary scraping unchanged.
+    let (eligible, _) ← (arithmeticGoal cfg body 0).run {}
+    if eligible then
+      -- Safety clauses expose demanded properties before transition-clause proposals.
+      guardedClauses cfg body true
+      guardedClauses cfg body false
   repeat
     let s ← get
     if s.pending.isEmpty then break
@@ -304,11 +510,11 @@ private def collect (cfg : PAScrapeConfig) (body : Expr) : ScrapeM Unit := do
 /-- Interleave sources so a large goal cannot consume every definition/template slot. -/
 private def finish (cfg : PAScrapeConfig) (s : ScrapeState) : PAScrapeResult := Id.run do
   let mut selected := #[]
-  for i in [:max s.goal.size (max s.definitions.size s.generated.size)] do
-    for source in #[s.goal, s.definitions, s.generated] do
+  for i in [:max s.goal.size (max s.guarded.size (max s.definitions.size s.generated.size))] do
+    for source in #[s.goal, s.guarded, s.definitions, s.generated] do
       if let some q := source[i]? then
         if selected.size < cfg.maxQualifiers then selected := selected.push q
-  let count := s.goal.size + s.definitions.size + s.generated.size
+  let count := s.goal.size + s.definitions.size + s.generated.size + s.guarded.size
   let limitsHit := if count > selected.size && !s.limitsHit.contains "templates" then
     s.limitsHit.push "templates" else s.limitsHit
   return {

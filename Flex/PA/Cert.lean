@@ -1,33 +1,15 @@
 import Lean
 
 import Flex.Core
-import Flex.PA.Qualifier
+import Flex.PA.Weaken
 import Flex.PA.Check
 import Flex.Zap.Emit
 
 open Lean Meta Elab Term Tactic
 
-/-!
-  ## Certifying Predicate Abstraction — the `glue`/`bridge` (paper §5)
+/-! Certify instantiated predicate heads, retaining ordinary leaves as residual goals. -/
 
-  After weakening reaches the greatest inductive fixpoint `A*`
-  (`solveFixpoint`), the cut κ-mvars are assigned their witness λ's
-  (`σ_{A*}`). This file builds the §5 `glue` term: a proof of the body
-  `c[σ_{A*}]` in which every κ-head leaf `κ(x̄)` is discharged by an
-  `And.intro` over per-survivor oracle proofs, and every κ-free leaf is left
-  as a residual obligation (a query of `c′`).
-
-  Structurally `walkPAProof` mirrors Zap's `cert`
-  (`Flex/Zap/Cert.lean`) — ∀↦λ, ∧↦`And.intro`, κ-free leaf↦residual
-  mvar — differing only at the κ-head leaf, where Zap emits its strongest
-  ∃-tree solution (`nav`) and PA emits the survivor conjunction
-  (`emitPALeaf`). No binder/guard bookkeeping is needed: each survivor
-  conjunct is an atom proved by the ambient-context oracle `proveLeaf`.
--/
-
-/-- κ-head detector for the PA glue, analogous to `kHead?` but keyed by the PA
-    assignment. If `goal` is `?κ a₁ … aₙ` for some κ recorded in `assign`,
-    returns that κ, its surviving candidates, and the argument array. -/
+/-- Recognize a predicate head before instantiating its metavariable. -/
 def paHead?
     (assign : List (KVar × List (Expr × List Nat)))
     (goal : Expr) :
@@ -38,11 +20,7 @@ def paHead?
       (fun (κ, survivors) => (κ, survivors, goal.getAppArgs))
   else none
 
-/-- Fold `(conjunctType, proof)` pairs into one proof, mirroring `conjoinExprs`
-    (`Flex/PA/Weaken.lean`) EXACTLY: left-nested `And`, `[]` ↦
-    `True.intro`, `[p]` ↦ `p`. The result inhabits
-    `conjoinExprs (pairs.map (·.1))`, i.e. the β-reduced witness body
-    `σ_{A*}(κ)(x̄)` assigned to the κ-mvar — so the κ-head leaf typechecks. -/
+/-- Assemble proofs in the same conjunction order as the predicate witness. -/
 def conjProofs : List (Expr × Expr) → Expr
   | []           => mkConst ``True.intro
   | [(_, p)]     => p
@@ -54,74 +32,62 @@ def conjProofs : List (Expr × Expr) → Expr
         (mkApp2 (mkConst ``And) accE curE, mkAndIntro accE curE accP curP))
       (e0, p0)).2
 
-/-- Prove the survivor conjunction `⋀_{(q,ρ) ∈ survivors} q[ρ](args)` at a
-    κ-head leaf. Each conjunct `q[ρ](args)` is built exactly as
-    `specializeClauseForHead`'s headRepl (β-apply `q` at the chosen κ-slots) and
-    discharged by the proof-returning oracle `proveLeaf` under the ambient
-    context Γ; the proofs are then `And.intro`-folded in the SAME order and
-    association as `conjoinExprs` (hence as the witness λ assigned to κ).
-
-    Errors loudly if a survivor fails: at a true weakening fixpoint every
-    survivor must re-prove, so a failure signals the glue oracle and the
-    weakening oracle (`checkExprVC`) have diverged. -/
+/-- Prove a whole head once. Leaf fallback supports oracles that cannot prove conjunctions. -/
 def emitPALeaf
     (κ : KVar)
     (survivors : List (Expr × List Nat))
     (args : Array Expr)
     (oracle : PAOracle := proveLeaf) :
     TermElabM Expr := do
-  let pairs ← survivors.mapM fun (q, slots) => do
-    let chosen : Array Expr := (slots.map fun i => args[i]!).toArray
-    let φ ← Expr.instQualifier q chosen
-    match ← oracle φ with
-    | some p => pure (φ, p)
-    | none   =>
-      throwError "fix: oracle failed to prove survivor{indentExpr φ}\n\
-        at head κ '{κ.name}' — weakening fixpoint and glue oracle disagree."
+  let bodies ← survivors.mapM fun (q, slots) =>
+    Expr.instQualifier q ((slots.map fun i => args[i]!).toArray)
+  let target := conjoinExprs bodies
+  if bodies.isEmpty then return mkConst ``True.intro
+  for declaration in ← getLCtx do
+    if (← instantiateMVars declaration.type) == target then return mkFVar declaration.fvarId
+  if bodies.length > 1 then
+    if let some proof ← oracle target then return proof
+  let pairs ← bodies.mapM fun body => do
+    match ← oracle body with
+    | some proof => pure (body, proof)
+    | none => throwError "fix: could not certify a predicate head for '{κ.name}':{indentExpr body}"
   return conjProofs pairs
 
-/-- The §5 `glue`. Nav the body `goal` (with cut κ-mvars still SYNTACTICALLY
-    present — never `instantiateMVars` it), emitting the bridge proof term:
+private def mentionsPredicates (assign : List (KVar × List (Expr × List Nat)))
+    (e : Expr) : Bool :=
+  (e.find? fun e => e.isMVar && assign.any (fun (κ, _) => κ.mvarId == e.mvarId!)).isSome
 
-    · κ-head leaf `?κ x̄`   → `emitPALeaf` (survivor conjunction via oracle)
-    · ∀ (binder or guard)  → intro fvar, recurse, λ-wrap
-    · ∧                    → recurse both sides, `And.intro`
-    · κ-free leaf          → fresh residual mvar (a query collected into `c′`)
-
-    A κ-head whose κ is NOT in `assign` is a non-cut κ — abort and tell the user
-    to eliminate acyclic κ's with `fusion` first. Once the cut κ-mvars are
-    assigned `σ_{A*}`, the emitted term inhabits `c[σ_{A*}]`; together with the
-    `Exists.intro` scaffolding from `peelExistentialsAndIntro` it is the §5
-    `bridge`, which the kernel re-checks. -/
+/-- Certify heads and validate predicate-dependent safety leaves before keeping residuals. -/
 partial def walkPAProof
     (assign : List (KVar × List (Expr × List Nat)))
     (goal : Expr)
     (residualOut : IO.Ref (Array MVarId))
-    (oracle : PAOracle := proveLeaf) :
+    (oracle : PAOracle := proveLeaf)
+    (validateSafety : PAOracle := fun _ => pure none)
+    (dependsOnPredicates : Bool := false) :
     TermElabM Expr := do
-  -- (a) κ-headed leaf — check before ∀/∧ since the leaf is an application.
   if let some (κ, survivors, args) := paHead? assign goal then
     return ← emitPALeaf κ survivors args oracle
-  -- A κ-mvar head not under PA (non-cut) — abort with guidance.
   if goal.getAppFn.isMVar then
     throwError "fix: head metavariable{indentExpr goal.getAppFn}\nis not a \
       cut variable handled by PA. Eliminate acyclic κ's with `fusion` first."
-  -- (b) ∀ (value binder or Prop guard) — intro, recurse, λ-wrap.
   if goal.isForall then
-    let dom  := goal.bindingDomain!
+    let dependent := dependsOnPredicates || mentionsPredicates assign goal.bindingDomain!
+    let dom ← instantiateMVars goal.bindingDomain!
     let name := goal.bindingName!
     let bi   := goal.bindingInfo!
     return ← withLocalDecl name bi dom fun fv => do
       let body  := goal.bindingBody!.instantiate1 fv
-      let inner ← walkPAProof assign body residualOut oracle
+      let inner ← walkPAProof assign body residualOut oracle validateSafety dependent
       mkLambdaFVars #[fv] inner
-  -- (c) ∧ — split, recurse, And.intro.
   if let some (l, r) := goal.and? then
-    let pL ← walkPAProof assign l residualOut oracle
-    let pR ← walkPAProof assign r residualOut oracle
+    let pL ← walkPAProof assign l residualOut oracle validateSafety dependsOnPredicates
+    let pR ← walkPAProof assign r residualOut oracle validateSafety dependsOnPredicates
     return mkAndIntro l r pL pR
-  -- (d) κ-free leaf — residual mvar (a query of c′). Created in the ambient
-  --     LCtx, so it carries its context Γ (binders + guard hyps) as a goal.
+  let contextDepends := (← getLCtx).any fun decl =>
+    mentionsPredicates assign decl.type || decl.value?.any (mentionsPredicates assign)
+  if dependsOnPredicates || contextDepends || mentionsPredicates assign goal then
+    if let some proof ← validateSafety (← instantiateMVars goal) then return proof
   let m ← mkFreshExprMVar (some goal) (kind := .syntheticOpaque)
   residualOut.modify (·.push m.mvarId!)
   return m

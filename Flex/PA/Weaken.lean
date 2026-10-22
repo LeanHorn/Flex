@@ -13,10 +13,17 @@ def conjoinExprs : List Expr → Expr
   | [e] => e
   | e :: es => es.foldl (fun acc x => mkApp2 (mkConst ``And) acc x) e
 
-/-- Generic clause specializer.
-    Walks the ∀-chain, substitutes hypothesis κ-apps via `assignment`, and
-    at the head leaf calls `headRepl` with the κ-app's args to produce the
-    replacement. Used by both candidate-VC build and sat-VC build. -/
+/-- Substitute nested predicate arguments before replacing the enclosing application. -/
+private partial def substituteCandidates (assignment : List (KVar × Expr)) (e : Expr) : Expr :=
+  e.replace fun term =>
+    if !term.getAppFn.isMVar then none else
+      match assignment.find? (fun (κ, _) => κ.mvarId == term.getAppFn.mvarId!) with
+      | none => none
+      | some (κ, solution) =>
+        let args := term.getAppArgs.map (substituteCandidates assignment)
+        some (substKVarInExpr κ solution (mkAppN term.getAppFn args))
+
+/-- Substitute current predicates in premises and replace the selected head. -/
 partial def specializeClauseWithHead
     (headKVar   : KVar)
     (headRepl   : Array Expr → KM Expr)
@@ -24,9 +31,7 @@ partial def specializeClauseWithHead
     (e          : Expr) : KM Expr := do
   let e ← whnf e
   if e.isForall then
-    let mut dom := e.bindingDomain!
-    for (κ, sol) in assignment do
-      dom := substKVarInExpr κ sol dom
+    let dom := substituteCandidates assignment e.bindingDomain!
     withLocalDeclD e.bindingName! dom fun fvar => do
       let body  := e.bindingBody!.instantiate1 fvar
       let body' ← specializeClauseWithHead headKVar headRepl assignment body
@@ -39,89 +44,103 @@ partial def specializeClauseWithHead
   else
     let fn := e.getAppFn
     if fn.isMVar && fn.mvarId! == headKVar.mvarId then
-      headRepl e.getAppArgs
+      headRepl (e.getAppArgs.map (substituteCandidates assignment))
     else
-      let mut acc := e
-      for (κ, sol) in assignment do
-        acc := substKVarInExpr κ sol acc
-      return acc
+      return substituteCandidates assignment e
 
-/-- Specialize for a candidate qualifier (existing behavior). -/
+/-- Replace the head with one candidate instance. -/
 def specializeClauseForHead
     (headKVar   : KVar)
-    (q          : Expr)            -- qualifier lambda (unapplied, e.g. `q_le`)
-    (qSlots     : List Nat)        -- slot mapping: qualifier-param i → κ-slot qSlots[i]
+    (q          : Expr)
+    (qSlots     : List Nat)
     (assignment : List (KVar × Expr))
     (e          : Expr) : KM Expr :=
   specializeClauseWithHead headKVar
     (fun args => liftM (Expr.instQualifier q ((qSlots.map fun i => args[i]!).toArray)))
     assignment e
 
-/-- Specialize but write `False` at the head κ-leaf — used by the sat-guard
-    to test whether the clause's hypothesis is itself unsatisfiable. -/
+/-- Replace the head with `False` to test whether the premises are inconsistent. -/
 def specializeClauseAsNeg
     (headKVar   : KVar)
     (assignment : List (KVar × Expr))
     (e          : Expr) : KM Expr :=
   specializeClauseWithHead headKVar (fun _ => pure (mkConst ``False)) assignment e
 
-/-- Build a per-κ "current solution" map: each κ's surviving candidate
-    qualifier-instances β-applied at canonical-param fvars, then conjoined.
-    `substKVarInExpr` later re-substitutes those placeholders with actual
-    κ-app args at each hypothesis site. -/
-private def buildCurrentSols
-    (assignment : List (KVar × List (Expr × List Nat)))
+/-- Conjoin a predicate's candidates at its canonical parameters. -/
+def candidateSolution (κ : KVar) (candidates : List (Expr × List Nat)) : MetaM Expr := do
+  let params := (κ.params.map fun n => Expr.fvar (FVarId.mk n)).toArray
+  let bodies ← candidates.mapM fun (q, slots) =>
+    Expr.instQualifier q ((slots.map fun i => params[i]!).toArray)
+  return conjoinExprs bodies
+
+/-- Build predicate bodies for substitution and witness construction. -/
+def finalizeSolutions (assignment : List (KVar × List (Expr × List Nat)))
     : MetaM (List (KVar × Expr)) :=
-  assignment.mapM fun (κ, cands) => do
-    let paramFvars : Array Expr :=
-      (κ.params.map fun n => Expr.fvar (FVarId.mk n)).toArray
-    let bodies ← cands.mapM fun (q, slots) => do
-      let chosen : Array Expr := (slots.map fun i => paramFvars[i]!).toArray
-      Expr.instQualifier q chosen
-    return (κ, conjoinExprs bodies)
+  assignment.mapM fun (κ, candidates) => return (κ, ← candidateSolution κ candidates)
 
-/-- One iteration of Houdini weakening.
+/-- Open a flat clause once, sharing its specialized premises across candidates. -/
+private partial def withSpecializedHead (head : KVar) (solutions : List (KVar × Expr))
+    (clause : Expr) (check : Array Expr → TermElabM α) : TermElabM (Option α) := do
+  let clause ← whnf clause
+  if clause.isForall then
+    let domain := substituteCandidates solutions clause.bindingDomain!
+    return ← withLocalDecl clause.bindingName! clause.bindingInfo! domain fun input =>
+      withSpecializedHead head solutions (clause.bindingBody!.instantiate1 input) check
+  if clause.getAppFn == mkMVar head.mvarId then
+    return some (← check (clause.getAppArgs.map (substituteCandidates solutions)))
+  return none
 
-    For each flat clause whose conclusion is a κ-application:
-    · Identify the head κ.
-    · Sat-guard (A1): if hypothesis (with current sols substituted) is
-      inconsistent, every candidate would pass via vacuous truth — SKIP
-      this clause this iter (don't drop candidates; dropping would be
-      unsound). Other clauses processed in this iter usually shrink `out`
-      enough that the inconsistency disappears next pass.
-    · Otherwise, for each candidate `(q, qSlots)`, specialize and check
-      via `checkExprVC`. Keep candidate iff it passes.
+/-- Check one clause against a fixed assignment. Unknown checks drop candidates;
+    the resulting assignment still requires independent proof certification. -/
+def weakenClause
+    (kctx : KContext) (clause : Expr) (head : KVar)
+    (candidates : List (Expr × List Nat)) (solutions : List (KVar × Expr))
+    (oracle : PAOracle := proveLeaf) (synthOracle : Option PASynthOracle := none)
+    : TermElabM (List (Expr × List Nat)) := do
+  if candidates.isEmpty then return []
+  match synthOracle with
+  | none =>
+    let guard ← (specializeClauseAsNeg head solutions clause).run kctx
+    if ← checkExprUnsat guard oracle then return candidates
+    candidates.filterM fun (q, slots) => do
+      let vc ← (specializeClauseForHead head q slots solutions clause).run kctx
+      checkExprVC vc oracle
+  | some synth =>
+    let results ← match ← withSpecializedHead head solutions clause (fun args => do
+        let conclusions ← candidates.toArray.mapM fun (q, slots) =>
+          Expr.instQualifier q ((slots.map fun i => args[i]!).toArray)
+        synth (#[Lean.mkConst ``False] ++ conclusions)) with
+      | some results => pure results
+      | none => do
+        -- Preserve support for compound clauses supplied outside the flat worklist.
+        let guard ← (specializeClauseAsNeg head solutions clause).run kctx
+        let vcs ← candidates.toArray.mapM fun (q, slots) =>
+          (specializeClauseForHead head q slots solutions clause).run kctx
+        synth (#[guard] ++ vcs)
+    unless results.size == candidates.length + 1 do
+      throwError "PA synthesis oracle returned {results.size} results for {candidates.length + 1} queries"
+    -- A proved inconsistent premise validates every candidate, even if an
+    -- individual query times out or is unsupported by the backend.
+    if let .valid := results[0]! then return candidates
+    return (candidates.zip results.toList.tail!).filterMap fun (candidate, result) =>
+      match result with
+      | .valid => some candidate
+      | .invalid | .unknown _ => none
 
-    A2: `currentSols` is rebuilt INSIDE the per-clause loop so each clause
-    sees the latest `out` (post earlier-clause refinements within this iter). -/
-partial def weakenOnce
-    (kctx       : KContext)
-    (flatCs     : List Expr)
+/-- A full scan of all head clauses, retained as the reference Houdini step. -/
+def weakenOnce
+    (kctx : KContext) (flatCs : List Expr)
     (assignment : List (KVar × List (Expr × List Nat)))
-    (oracle : PAOracle := proveLeaf)
+    (oracle : PAOracle := proveLeaf) (synthOracle : Option PASynthOracle := none)
     : TermElabM (List (KVar × List (Expr × List Nat))) := do
-  -- A2: `currentSols` is rebuilt INSIDE the per-clause loop so each clause
-  -- sees the latest `out` (post earlier-clause refinements within this iter).
-  -- Matches liquid-fixpoint's worklist behavior more closely.
   let mut out := assignment
-  for fc in flatCs do
-    let some headKVar ← (findHeadKVar fc).run kctx | continue
-    let some (_, candidates) := out.find? (·.1 == headKVar) | continue
-    let currentSols ← buildCurrentSols out
-    -- A1: sat-guard. If hypothesis is unsat (with current sols substituted),
-    -- every candidate would pass via vacuous truth. SKIP this clause —
-    -- don't touch `out`. Other clauses processed in this iter shrink `out`,
-    -- usually breaking the inconsistency on the next pass.
-    let negVC ← (specializeClauseAsNeg headKVar currentSols fc).run kctx
-    let vacuous ← checkExprUnsat negVC oracle
-    match vacuous with
-    | true  => pure ()
-    | false =>
-      let mut kept : List (Expr × List Nat) := []
-      for (q, slots) in candidates do
-        let vc ← (specializeClauseForHead headKVar q slots currentSols fc).run kctx
-        if ← checkExprVC vc oracle then
-          kept := kept.concat (q, slots)
-      out := out.map fun (κ, qs) =>
-        if κ == headKVar then (κ, kept) else (κ, qs)
+  let mut solutions ← finalizeSolutions out
+  for clause in flatCs do
+    let some head ← (findHeadKVar clause).run kctx | continue
+    let some (_, candidates) := out.find? (·.1 == head) | continue
+    let kept ← weakenClause kctx clause head candidates solutions oracle synthOracle
+    if kept.length < candidates.length then
+      out := out.map fun (κ, qs) => if κ == head then (κ, kept) else (κ, qs)
+      let sol ← candidateSolution head kept
+      solutions := solutions.map fun (κ, body) => if κ == head then (κ, sol) else (κ, body)
   return out

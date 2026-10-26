@@ -73,6 +73,8 @@ structure CertificateResult where
   obligations : Array Obligation := #[]
   residualVC : Option MVarId := none
   provedHeads : Nat := 0
+  /-- Unproved head leaves in a completed heads-only traversal; unknown after fallback. -/
+  remainingHeads : Option Nat := none
   provedQueries : Nat := 0
   deriving Inhabited
 
@@ -283,6 +285,7 @@ private partial def walkHeads (relations : Array Relation) (oracle : ProofOracle
       modify fun s => { s with result.provedHeads := s.result.provedHeads + 1 }
       let proof := mkApp4 (mkConst ``Iff.mpr) raw target equivalence proof
       return (mkConst ``True, mkApp2 (mkConst ``iff_true_intro) raw proof)
+    modify fun s => { s with result.remainingHeads := s.result.remainingHeads.map (· + 1) }
     return (target, equivalence)
   if let .forallE name domain body bi := raw then
     let domain ← normalize domain
@@ -316,7 +319,8 @@ private def certifyHeads (relations : Array Relation) (oracle : ProofOracle)
     (tag : Name) (raw : Expr) (context : Simp.Context)
     : TermElabM (Expr × CertificateResult) := do
   let ((reduced, equivalence), state) ←
-    (walkHeads relations oracle raw).run { cleanupContext := context }
+    (walkHeads relations oracle raw).run {
+      cleanupContext := context, result.remainingHeads := some 0 }
   let ((target, cleanup), _) ← (cleanup reduced).run state
   let equivalence ← instantiateMVars (← mkAppM ``Iff.trans #[equivalence, cleanup])
   if equivalence.hasMVar || equivalence.hasLevelMVar then

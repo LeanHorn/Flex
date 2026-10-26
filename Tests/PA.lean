@@ -516,3 +516,86 @@ example (p : Int → Prop) (f : Int → Int) (m : Int → Int → Int) :
   fix (scrape := standard)
 
 end PAContextTests
+
+namespace PAObservationTests
+
+open Lean Meta Elab Term
+
+@[simp, grind] private def member (xs : List Int) (key : Int) : Prop := key ∈ xs
+
+private def elaborate (term : TSyntax `term) : TermElabM Expr := do
+  let e ← elabTerm term none
+  synthesizeSyntheticMVarsNoPostponing
+  instantiateMVars e
+
+private def observations (result : PAScrapeResult) : Array Expr :=
+  result.qualifiers.zip result.origins |>.filterMap fun (q, origin) =>
+    if origin == "observation relation" then some q else none
+
+private def hasInstance (qs : Array Expr) (expected : Expr) : MetaM Bool :=
+  lambdaTelescope expected fun xs body => do
+    let types ← xs.toList.mapM inferType
+    for q in qs do
+      for (template, slots) in ← instantiateQualifier q types do
+        let candidate ← Expr.instQualifier template (slots.toArray.map (xs[·]!))
+        if ← isDefEq candidate body then return true
+    return false
+
+run_elab do
+  let input ← elaborate (← `(∀ k : List Int → Int → List Int → Prop,
+    ∀ current key original, k current key original → True = member original key))
+  let expected ← elaborate (← `(fun (current : List Int) (key : Int) (original : List Int) =>
+    member current key ↔ member original key))
+  for mode in #[PAScrapeMode.standard, .deep] do
+    let qs := observations (← scrapePAQualifiersWithReport input { mode })
+    unless ← hasInstance qs expected do throwError "missing shared-key observation relation"
+    for q in qs do
+      if q.hasMVar || q.hasFVar || q.hasLooseBVars then throwError "observation binder escaped"
+      check q
+  for cfg in #[{ mode := .no }, { mode := .basic },
+      { mode := .standard, maxObservationQualifiers := 0 },
+      { mode := .standard, maxObservationPairs := 0 },
+      { mode := .standard, maxParams := 2 }] do
+    unless (observations (← scrapePAQualifiersWithReport input cfg)).isEmpty do
+      throwError "observation scraping ignored its mode or limits"
+  let limited ← scrapePAQualifiersWithReport input
+    { mode := .standard, maxObservationQualifiers := 1 }
+  unless (observations limited).size == 1 do throwError "observation template limit ignored"
+  let old ← scrapePAQualifiers input
+    { mode := .standard, maxQualifiers := 1, maxObservationQualifiers := 0 }
+  let augmented ← scrapePAQualifiers input { mode := .standard, maxQualifiers := 1 }
+  unless old == augmented do throwError "observation scraping displaced an existing template"
+
+-- A relation requires both observations to fit one predicate occurrence in one clause.
+run_elab do
+  for term in #[← `(∀ k : List Int → Int → List Int → Prop,
+      (∀ current key original, k current key original → True) ∧
+      (∀ original key, True = member original key)),
+      ← `(∀ k l : List Int → Int → Prop, ∀ current key original,
+        k current key → l original key → True = member original key)] do
+    let result ← scrapePAQualifiersWithReport (← elaborate term) { mode := .standard }
+    unless (observations result).isEmpty do throwError "paired unrelated observations"
+  let input ← elaborate (← `(fun (p : List Int → Int → Prop) =>
+    ∀ k : List Int → Int → List Int → Prop, ∀ current key original,
+      k current key original → True = p original key))
+  lambdaTelescope input fun fixed body => do
+    let qs := observations (← scrapePAQualifiersWithReport body { mode := .standard })
+    let expected ← elaborate (← `(fun (p : List Int → Int → Prop)
+        (current : List Int) (key : Int) (original : List Int) =>
+      p current key ↔ p original key))
+    unless ← hasInstance qs (mkApp expected fixed[0]!).headBeta do
+      throwError "fixed semantic function was mistaken for an unknown predicate"
+    for q in qs do
+      unless (collectFVars {} q).fvarIds.all (· == fixed[0]!.fvarId!) do
+        throwError "observation retained a temporary binder"
+
+-- Discover preservation of membership while traversing a list, without tagged qualifiers.
+example : ∃ k : List Int → Int → List Int → Prop,
+    ∀ key original, k original key original ∧
+      (∀ current, k current key original →
+        (∀ head tail, current = head :: tail → head ≠ key → k tail key original) ∧
+        (∀ head tail, current = head :: tail → head = key → member original key) ∧
+        (current = [] → ¬member original key)) := by
+  fix (scrape := standard)
+
+end PAObservationTests

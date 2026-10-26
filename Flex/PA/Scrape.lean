@@ -19,6 +19,8 @@ structure PAScrapeLimits where
   maxGuardedQualifiers : Nat := 32
   maxGuardAtoms : Nat := 12
   maxGuardPairs : Nat := 256
+  maxObservationQualifiers : Nat := 16
+  maxObservationPairs : Nat := 256
 
 structure PAScrapeConfig extends PAScrapeLimits where
   mode : PAScrapeMode := .no
@@ -27,6 +29,8 @@ structure PAScrapeConfig extends PAScrapeLimits where
 structure PAScrapeResult where
   qualifiers : Array Expr := #[]
   origins : Array String := #[]
+  /-- Observation relations form the final, lowest-priority segment. -/
+  observationCount : Nat := 0
   visitedNodes : Nat := 0
   inspectedDefinitions : Nat := 0
   rejected : Nat := 0
@@ -37,7 +41,7 @@ initialize Lean.registerTraceClass `flex.scrape
 namespace PAScrape
 
 private inductive Source where
-  | goal | definition | generated | guarded
+  | goal | definition | generated | guarded | observation
   deriving BEq
 
 private structure Candidate where
@@ -57,6 +61,7 @@ private structure ScrapeState where
   definitions : Array Candidate := #[]
   generated : Array Candidate := #[]
   guarded : Array Candidate := #[]
+  observations : Array Candidate := #[]
   seen : Std.HashSet Expr := {}
   pending : Array Definition := #[]
   visited : Array (Expr × Array Expr) := #[]
@@ -65,6 +70,7 @@ private structure ScrapeState where
   inspected : Nat := 0
   limitsHit : Array String := #[]
   guardPairs : Nat := 0
+  observationPairs : Nat := 0
 
 private abbrev ScrapeM := StateRefT ScrapeState MetaM
 
@@ -109,15 +115,20 @@ private def addPredicate (cfg : PAScrapeConfig) (origin : String) (source : Sour
     | .definition => s.definitions
     | .generated => s.generated
     | .guarded => s.guarded
-  let cap := if source == .guarded then cfg.maxGuardedQualifiers else cfg.maxQualifiers
-  if target.size >= cap then limit (if source == .guarded then "guarded templates" else "templates"); return
+    | .observation => s.observations
+  let (cap, label) := match source with
+    | .guarded => (cfg.maxGuardedQualifiers, "guarded templates")
+    | .observation => (cfg.maxObservationQualifiers, "observation templates")
+    | _ => (cfg.maxQualifiers, "templates")
+  if target.size >= cap then limit label; return
   let target := target.push ⟨q, origin⟩
   set { s with
     seen := s.seen.insert q
     goal := if source == Source.goal then target else s.goal
     definitions := if source == Source.definition then target else s.definitions
     generated := if source == Source.generated then target else s.generated
-    guarded := if source == Source.guarded then target else s.guarded }
+    guarded := if source == Source.guarded then target else s.guarded
+    observations := if source == Source.observation then target else s.observations }
   trace[flex.scrape] "{origin}: {q}"
 
 private partial def predicates (cfg : PAScrapeConfig) (origin : String) (source : Source)
@@ -506,6 +517,90 @@ private partial def arithmeticGoal (cfg : PAScrapeConfig) (e : Expr)
       unless ← arithmeticGoal cfg arg (depth + 1) do return false
   return true
 
+private structure Observations where
+  relations : Array Expr := #[]
+  predicates : Array Expr := #[]
+
+private partial def observationAtoms (cfg : PAScrapeConfig) (raw : Expr)
+    (out : Observations) (depth : Nat := 0) : ScrapeM Observations := do
+  unless ← visit cfg depth do return out
+  let e := raw.consumeMData.headBeta
+  if let .letE _ _ value body _ := e then
+    return ← observationAtoms cfg (body.instantiate1 value) out (depth + 1)
+  let fn := e.getAppFn
+  let fixed := (← get).fixed
+  if ← predicateApplication e then
+    unless fn.isFVar && fixed.contains fn.fvarId! do
+      return if out.relations.contains e then out else
+        { out with relations := out.relations.push e }
+  let mut out := out
+  if e.isApp && !e.hasMVar && !e.hasLooseBVars && (← isProp e) then
+    let semantic ← match fn with
+      | .const name _ => discoverable name
+      | .fvar id => pure (fixed.contains id)
+      | _ => pure false
+    if semantic && !out.predicates.contains e then
+      out := { out with predicates := out.predicates.push e }
+  -- Quantified observations need their own binding rule; do not cross binders here.
+  for arg in e.getAppArgs do
+    out ← observationAtoms cfg arg out (depth + 1)
+  return out
+
+/-- Compare one semantic observation at two arguments of the same κ occurrence. -/
+private def observationPredicates (cfg : PAScrapeConfig) (props : Array Expr) : ScrapeM Unit := do
+  let mut found : Observations := {}
+  for p in props do found ← observationAtoms cfg p found
+  let fixed := (← get).fixed
+  for observation in found.predicates do
+    let ids := (support observation).filter (!fixed.contains ·)
+    for relation in found.relations do
+      unless subset ids (support relation) do continue
+      let args := observation.getAppArgs
+      let mut type ← inferType observation.getAppFn
+      for i in [:args.size] do
+        type ← whnf type
+        unless type.isForall do break
+        let domain := type.bindingDomain!
+        let dependent := type.bindingBody!.hasLooseBVar 0
+        let isInstance := type.bindingInfo! == .instImplicit
+        type := type.bindingBody!.instantiate1 args[i]!
+        let arg := args[i]!
+        unless arg.isFVar && relation.getAppArgs.contains arg do continue
+        if dependent || isInstance || domain.hasFVar || domain.hasMVar ||
+            (← isProp domain) || (← whnf domain).isSort then continue
+        for replacement in relation.getAppArgs do
+          if (← get).observations.size >= cfg.maxObservationQualifiers then
+            limit "observation templates"; return
+          if (← get).observationPairs >= cfg.maxObservationPairs then
+            limit "observation pairs"; return
+          unless replacement.isFVar && replacement != arg do continue
+          modify fun s => { s with observationPairs := s.observationPairs + 1 }
+          let replacementType ← inferType replacement
+          if replacementType.hasFVar || replacementType.hasMVar then continue
+          unless ← isDefEq domain replacementType do continue
+          let other := mkAppN observation.getAppFn (args.set! i replacement)
+          addPredicate cfg "observation relation" .observation
+            (mkApp2 (mkConst ``Iff) observation other)
+
+private partial def observationClauses (cfg : PAScrapeConfig) (raw : Expr)
+    (premises : Array Expr := #[]) (depth : Nat := 0) : ScrapeM Unit := do
+  if (← get).observations.size >= cfg.maxObservationQualifiers ||
+      (← get).observationPairs >= cfg.maxObservationPairs then return
+  unless ← visit cfg depth do return
+  let e := raw.consumeMData.headBeta
+  if let .letE _ _ value body _ := e then
+    observationClauses cfg (body.instantiate1 value) premises (depth + 1)
+  else if e.isForall then
+    let domain := e.bindingDomain!
+    let premises := if ← isProp domain then premises.push domain else premises
+    withLocalDecl e.bindingName! e.bindingInfo! domain fun x =>
+      observationClauses cfg (e.bindingBody!.instantiate1 x) premises (depth + 1)
+  else if let some (left, right) := e.and? then
+    observationClauses cfg left premises (depth + 1)
+    observationClauses cfg right premises (depth + 1)
+  else
+    observationPredicates cfg (premises.push e)
+
 private def collect (cfg : PAScrapeConfig) (body : Expr) : ScrapeM Unit := do
   for name in cfg.defs do
     unless (← getConstInfo name) matches .defnInfo _ do
@@ -535,6 +630,8 @@ private def collect (cfg : PAScrapeConfig) (body : Expr) : ScrapeM Unit := do
       for q in ← deepScrapeVariants candidate.expr do
         unless ← visit cfg 0 do break
         lambdaTelescope q fun _ p => addPredicate cfg (candidate.origin ++ ": generalized") .generated p
+  if automatic cfg && cfg.maxObservationQualifiers > 0 then
+    observationClauses cfg body
 
 /-- Interleave sources so a large goal cannot consume every definition/template slot. -/
 private def finish (cfg : PAScrapeConfig) (s : ScrapeState) : PAScrapeResult := Id.run do
@@ -543,12 +640,17 @@ private def finish (cfg : PAScrapeConfig) (s : ScrapeState) : PAScrapeResult := 
     for source in #[s.goal, s.guarded, s.definitions, s.generated] do
       if let some q := source[i]? then
         if selected.size < cfg.maxQualifiers then selected := selected.push q
-  let count := s.goal.size + s.definitions.size + s.generated.size + s.guarded.size
+  -- New observation templates use only slots left by existing scraping.
+  let ordinaryCount := selected.size
+  for candidate in s.observations do
+    if selected.size < cfg.maxQualifiers then selected := selected.push candidate
+  let count := s.goal.size + s.definitions.size + s.generated.size + s.guarded.size + s.observations.size
   let limitsHit := if count > selected.size && !s.limitsHit.contains "templates" then
     s.limitsHit.push "templates" else s.limitsHit
   return {
     qualifiers := selected.map (·.expr)
     origins := selected.map (·.origin)
+    observationCount := selected.size - ordinaryCount
     visitedNodes := s.nodes
     inspectedDefinitions := s.inspected
     rejected := s.rejected

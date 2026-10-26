@@ -67,15 +67,16 @@ private def runFix
     let bodyGoal ← getMainGoal
     -- Scrape before `reduce` erases surface predicates and unfolds definitions.
     let rawBody ← bodyGoal.getType
-    let extraQualifiers ←
+    let scraped : PAScrapeResult ←
       if scrape.mode != .no || !scrape.defs.isEmpty then do
         let result ← scrapePAQualifiersWithReport rawBody scrape
         if flex.reportQualifiers.get (← getOptions) then
           reportScrapedQualifiers result
         unless result.limitsHit.isEmpty do
           logWarning m!"fix: scraping reached limits {result.limitsHit}; some candidates were omitted"
-        pure result.qualifiers
-      else pure #[]
+        pure result
+      else pure {}
+    let extraQualifiers := scraped.qualifiers
     let body ← reduce rawBody
 
     let (acyclic, _) ← (exprPartitionKVars body).run kctx
@@ -87,7 +88,10 @@ private def runFix
       else some scrape.maxCandidatesPerKappa
     let instanceLimit := candidateLimit.map fun _ => scrape.maxInstancesPerKappa
     let standardQualifiers ← getStandardQualifiers
-    let qualifiers := extraQualifiers ++ standardQualifiers
+    -- Preserve existing candidates before spending the remaining budget on new relations.
+    let ordinaryCount := extraQualifiers.size - scraped.observationCount
+    let qualifiers := extraQualifiers.extract 0 ordinaryCount ++ standardQualifiers ++
+      extraQualifiers.extract ordinaryCount extraQualifiers.size
     let initial ← buildInitialAssignment kvarsInOrder qualifiers candidateLimit instanceLimit
     observe (.setup extraQualifiers.size standardQualifiers.size (← getQualifiers).size
       (initial.toArray.map fun (κ, cs) => (κ.name, cs.length)))
@@ -141,7 +145,8 @@ private declare_config_elab elabScrapeLimits PAScrapeLimits
     Validated candidates may leave unproved residual goals.
     Uses the standard qualifier bank unless `flex.standardQualifiers` is disabled.
     Default synthesis batches SMT checks; certificate leaves require Lean proofs.
-    `scrape`: `basic` extracts heads; `standard` adds premises, guarded arithmetic, and definitions;
+    `scrape`: `basic` extracts heads; `standard` adds premises, guarded arithmetic,
+    definitions, and relations between semantic observations;
     `deep` also explores helpers and generalizes numeric templates.
     `defs`: also scrape the listed definitions. Scraping is off by default.
     `oracle`: fallback after default Lean automation, shared by both phases.

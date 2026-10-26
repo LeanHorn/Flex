@@ -240,7 +240,7 @@ def main() -> None:
     parser.add_argument("--inventory-only", action="store_true")
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--discharge", action="store_true", help="also attempt residual VC proof (off by default)")
-    parser.add_argument("--compare", type=Path, help="previous complete run with identical inputs and budgets")
+    parser.add_argument("--compare", type=Path, help="previous complete run containing these inputs, with matching budgets")
     parser.add_argument("--reuse-completed", type=Path,
                         help="reuse checked results with identical inputs, harness, Flex code and budgets")
     parser.add_argument("--case-timeout", type=int, default=180)
@@ -275,12 +275,19 @@ def main() -> None:
         previous_selection = json.loads((args.compare / "selection.json").read_text())
         if not previous_meta.get("complete") or not previous_meta.get("source_unchanged"):
             parser.error("comparison requires a complete, unchanged previous run")
-        if [(r["id"], r["sha256"]) for r in selected] != [(r["id"], r["sha256"]) for r in previous_selection]:
-            parser.error("comparison inputs differ")
-        for key in ("variants", "discharge", "case_timeout", "pa_timeout", "solver_timeout", "phase_heartbeats", "recursion_limit"):
+        old_hashes = {r["id"]: r["sha256"] for r in previous_selection}
+        if any(old_hashes.get(r["id"]) != r["sha256"] for r in selected):
+            parser.error("comparison does not contain the selected inputs with matching hashes")
+        if not set(args.variants).issubset(previous_meta["config"]["variants"]):
+            parser.error("comparison does not contain the selected variants")
+        for key in ("discharge", "case_timeout", "pa_timeout", "solver_timeout", "phase_heartbeats", "recursion_limit"):
             if getattr(args, key) != previous_meta["config"][key]:
                 parser.error(f"comparison configuration differs: {key}")
-        previous = [json.loads(line) for line in (args.compare / "results.jsonl").read_text().splitlines()]
+        wanted = {(r["id"], v) for r in selected for v in args.variants}
+        previous = [r for line in (args.compare / "results.jsonl").read_text().splitlines()
+                    if ((r := json.loads(line))["case"], r["variant"]) in wanted]
+        if Counter((r["case"], r["variant"]) for r in previous) != Counter(wanted):
+            parser.error("comparison requires exactly one previous result per selected case/variant")
     write_json(args.output / "inventory.json", {"summary": summarize(rows), "cases": rows})
     write_json(args.output / "selection.json", selected)
     if args.inventory_only:
@@ -354,6 +361,11 @@ def main() -> None:
     for suite in sorted({row["suite"] for row in selected}):
         workspace = args.output / "workspaces" / suite
         manifest = snapshot_suite(args.source, suite, [r for r in selected if r["suite"] == suite], workspace)
+        if args.compare:
+            old = json.loads((args.compare / "workspaces" / suite / "manifest.json").read_text())
+            dependencies = {m["module"]: m["sha256"] for m in old["modules"]}
+            if any(dependencies.get(m["module"]) != m["sha256"] for m in manifest["modules"]):
+                raise ValueError(f"comparison specification dependencies changed: {suite}")
         if args.reuse_completed:
             old = json.loads((args.reuse_completed / "workspaces" / suite / "manifest.json").read_text())
             if manifest != old:

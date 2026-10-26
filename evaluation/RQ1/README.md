@@ -31,9 +31,10 @@ caffeinate -i python3 scripts/benchmark_rq1.py \
 
 Use `--source PATH` for another `flex-benchmarks` checkout. `--cases suite/Name`
 restricts a diagnostic run; `--prepare-only` checks imports without synthesis.
-Every output directory must be fresh. Later PRs can add `--compare OLD_RUN`:
-inputs and budgets must match, and gained/lost proofs and synthesis cases are
-written to `comparison.json`.
+Every output directory must be fresh. `--compare OLD_RUN` compares only the
+selected cases and variants against a complete saved run. Their statements,
+specification dependencies and budgets must match; gained/lost proofs and
+synthesis cases are written to `comparison.json`. No baseline is rerun.
 `--reuse-completed OLD_RUN` can continue an interrupted run without repeating
 checked cases: specification dependencies, Flex/harness code, solver binaries
 and budgets must match. Reused rows retain their provenance; startup timings

@@ -469,3 +469,50 @@ run_elab do
   let target := target.replace fun e => if e.isConstOf ``True then some caller else none
   discard <| inlineFalsePredicates target
   if ← caller.mvarId!.isAssigned then throwError "normalization assigned caller metavariable"
+
+namespace PAContextTests
+
+open Lean Meta Elab Term
+
+run_elab do
+  let input ← elabTerm (← `(fun (p : Int → Prop) (f : Int → Int)
+      (m : Int → Int → Int) =>
+    (∀ t s : Int, p t ∧ f t = f s ∧ m t = m s) ∧
+    (∀ u v : Int, p u ∧ f u = f v ∧ m u = m v))) none
+  synthesizeSyntheticMVarsNoPostponing
+  let input ← instantiateMVars input
+  lambdaTelescope input fun functions body => do
+    let qs ← scrapePAQualifiers body { mode := .basic }
+    unless qs.size == 3 do throwError "contextual qualifiers were lost or duplicated"
+    let allowed := functions.map Expr.fvarId!
+    for q in qs do
+      if q.hasMVar || q.hasLooseBVars ||
+          !(collectFVars {} q).fvarIds.all allowed.contains then
+        throwError "temporary scraping binder escaped"
+      check q
+    let some (clause, _) := body.and? | throwError "expected two clauses"
+    forallTelescope clause fun xs _ => do
+      let expected ← #[mkApp functions[0]! xs[0]!,
+        ← mkEq (mkApp functions[1]! xs[0]!) (mkApp functions[1]! xs[1]!),
+        ← mkEq (mkApp functions[2]! xs[0]!) (mkApp functions[2]! xs[1]!)]
+        |>.mapM fun atom => mkLambdaFVars xs atom (usedOnly := true)
+      for q in expected do
+        unless ← qs.anyM (fun actual => do isDefEq q actual) do
+          throwError "fixed function became a qualifier argument"
+    withLocalDeclD `other (← inferType functions[0]!) fun other => do
+      let changed := body.replaceFVar functions[0]! other
+      let fresh ← scrapePAQualifiers changed { mode := .basic }
+      unless fresh.any (fun q => q.containsFVar other.fvarId!) do
+        throwError "new context function was not captured"
+      if fresh.any (fun q => q.containsFVar functions[0]!.fvarId!) then
+        throwError "qualifier capture leaked between invocations"
+
+-- The invariant must preserve fixed semantic observations across changing states.
+example (p : Int → Prop) (f : Int → Int) (m : Int → Int → Int) :
+    ∃ k : Int → Int → Prop,
+      (∀ s, p s → k s s) ∧
+      (∀ t s u, k t s → p u → f u = f t → m u = m t → k u s) ∧
+      (∀ t s, k t s → p t ∧ f t = f s ∧ m t = m s) := by
+  fix (scrape := standard)
+
+end PAContextTests

@@ -52,6 +52,7 @@ private structure Definition where
   deriving BEq, Inhabited
 
 private structure ScrapeState where
+  fixed : FVarIdSet := {}
   goal : Array Candidate := #[]
   definitions : Array Candidate := #[]
   generated : Array Candidate := #[]
@@ -80,13 +81,14 @@ private def visit (cfg : PAScrapeConfig) (depth : Nat) : ScrapeM Bool := do
 private def reject : ScrapeM Unit :=
   modify fun s => { s with rejected := s.rejected + 1 }
 
-/-- Close independent data parameters; temporary binders must never escape. -/
+/-- Capture the caller's context and abstract clause-local data parameters. -/
 private def addPredicate (cfg : PAScrapeConfig) (origin : String) (source : Source)
     (p : Expr) : ScrapeM Unit := do
   let p ← instantiateMVars p
   if p.hasMVar || p.hasLooseBVars || !(← isProp p) then reject; return
   if p.isConstOf ``True || p.isConstOf ``False || p.isForall then return
-  let ids := (collectFVars {} p).fvarIds
+  let fixed := (← get).fixed
+  let ids := (collectFVars {} p).fvarIds.filter (!fixed.contains ·)
   if ids.isEmpty then return
   if ids.size > cfg.maxParams then reject; return
   let mut types := #[]
@@ -98,7 +100,8 @@ private def addPredicate (cfg : PAScrapeConfig) (origin : String) (source : Sour
   let mut q := p.abstract (ids.map mkFVar)
   for i in (List.range ids.size).reverse do
     q := .lam (Name.mkSimple s!"q{i}") types[i]! q .default
-  if q.hasFVar || q.hasMVar || q.hasLooseBVars then reject; return
+  if q.hasMVar || q.hasLooseBVars ||
+      (collectFVars {} q).fvarIds.any (!fixed.contains ·) then reject; return
   if (← get).seen.contains q then return
   let s ← get
   let target := match source with
@@ -553,9 +556,10 @@ private def finish (cfg : PAScrapeConfig) (s : ScrapeState) : PAScrapeResult := 
 
 end PAScrape
 
-/-- Scraped expressions are candidate templates, never assumed facts. -/
+/-- Candidate templates may capture the caller's context, never temporary scraping binders. -/
 def scrapePAQualifiersWithReport (body : Expr) (cfg : PAScrapeConfig) : MetaM PAScrapeResult := do
-  let (_, state) ← (PAScrape.collect cfg (← instantiateMVars body)).run {}
+  let fixed := FVarIdSet.ofArray (← getLCtx).getFVarIds
+  let (_, state) ← (PAScrape.collect cfg (← instantiateMVars body)).run { fixed }
   let result := PAScrape.finish cfg state
   unless result.limitsHit.isEmpty do
     trace[flex.scrape] "limits reached: {result.limitsHit}"

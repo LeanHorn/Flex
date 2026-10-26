@@ -124,6 +124,17 @@ def zapImpl (s : LeafStrategy) : TacticM Unit := focus <| withMainContext do
   evalTactic (← `(tactic| simp (config := { failIfUnchanged := false, maxSteps := 1000000 }) only
     [true_implies, true_and, and_true]))
   if (← getGoals).isEmpty then return
+  -- Keep safety clauses explicit instead of synthesizing an error predicate.
+  let goal ← getMainGoal
+  let type ← goal.getType
+  let (normalized, proof) ← inlineFalsePredicates type
+  if normalized != type then
+    let next ← mkFreshExprMVar normalized (kind := .syntheticOpaque)
+    goal.assign (← mkAppM ``Iff.mpr #[proof, next])
+    replaceMainGoal [next.mvarId!]
+    evalTactic (← `(tactic| simp (config := { failIfUnchanged := false, maxSteps := 1000000 }) only
+      [false_implies, true_implies, true_and, and_true, forall_const]))
+  if (← getGoals).isEmpty then return
   let goal ← getMainGoal
   let originalType ← goal.getType
 

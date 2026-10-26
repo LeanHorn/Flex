@@ -184,6 +184,37 @@ run_elab do
   unless !(guarded (← scrapePAQualifiersWithReport quantified { mode := .standard })).isEmpty do
     throwError "quantified arithmetic seed disabled guarded scraping"
 
+-- Zap's existential guards retain clause-local candidates without mixing disjuncts.
+run_elab do
+  let scrape := fun term => do
+    scrapePAQualifiersWithReport (← elaborate term)
+      { mode := .standard, maxGuardedQualifiers := 128, maxGuardPairs := 1024 }
+  let flat ← scrape (← `(∀ k : Int → Int → Prop, ∀ x y : Int,
+    k x y → 0 ≤ x → y ≤ 3 → False))
+  let nested ← scrape (← `(∀ k : Int → Int → Prop,
+    (∃ x y : Int, k x y ∧ 0 ≤ x ∧ y ≤ 3) → False))
+  unless !(guarded flat).isEmpty && guarded flat == guarded nested do
+    throwError "existential guards lost flat-clause candidates"
+  let branched ← scrape (← `(∀ k : Int → Int → Prop,
+    (∃ x y : Int, k x y ∧ ((0 ≤ x ∧ y ≤ 3) ∨ (x ≤ 7 ∧ 11 ≤ y))) → False))
+  for term in #[← `(fun x y : Int => x < 0 ∨ y ≤ 3),
+      ← `(fun x y : Int => 7 < x ∨ 11 ≤ y)] do
+    let expected ← elaborate term
+    unless ← (guarded branched).anyM (fun q => isDefEq expected q) do
+      throwError "missing branch qualifier"
+  let cross ← elaborate (← `(fun x y : Int => x < 0 ∨ 11 ≤ y))
+  if ← (guarded branched).anyM (fun q => isDefEq cross q) then
+    throwError "combined distinct guard branches"
+  for q in branched.qualifiers do
+    if q.hasFVar || q.hasMVar || q.hasLooseBVars then throwError "witness binder escaped"
+    check q
+  let renamed ← scrape (← `(∀ k : Int → Int → Prop,
+    (∃ a b : Int, k a b ∧ ((0 ≤ a ∧ b ≤ 3) ∨ (a ≤ 7 ∧ 11 ≤ b))) → False))
+  unless guarded branched == guarded renamed do throwError "witness names changed candidates"
+  let negative ← scrape (← `(∀ k : Int → Int → Prop,
+    (¬∃ x y : Int, k x y ∧ 0 ≤ x ∧ y ≤ 3) → False))
+  unless (guarded negative).isEmpty do throwError "opened a negated existential guard"
+
 end PAScrapeTests
 
 namespace PAWorklistTests
@@ -394,3 +425,47 @@ run_elab do
     evalTactic (← `(tactic| assumption))
   unless remaining.isEmpty do throwError "lost an independent residual"
   checkWithKernel (← instantiateMVars goal)
+
+-- Error predicates are identified by a proved constraint, not by their spelling.
+open Lean Meta Elab Term in
+run_elab do
+  let original ← elabTerm (← `(∃ error : Prop, ∃ k : Int → Prop,
+    k 0 ∧ (∀ x, k x → x < 0 → error) ∧ (∀ _ : Prop, error → False))) none
+  let expected ← elabTerm (← `(∃ k : Int → Prop,
+    k 0 ∧ (∀ x, k x → x < 0 → False) ∧ (∀ _ : Prop, False → False))) none
+  synthesizeSyntheticMVarsNoPostponing
+  let original ← instantiateMVars original
+  let expected ← instantiateMVars expected
+  let (normalized, proof) ← inlineFalsePredicates original
+  unless ← isDefEq normalized expected do throwError "error predicate was not inlined"
+  checkWithKernel proof
+  unless ← isDefEq (← inferType proof) (← mkAppM ``Iff #[original, normalized]) do
+    throwError "normalization did not prove equivalence"
+  -- A guarded prohibition and a prohibition over an empty domain do not force False.
+  for term in #[← `(∃ CHC_COMP_FALSE : Prop, CHC_COMP_FALSE),
+      ← `(∃ p : Prop, p ∧ (False → p → False)),
+      ← `(∃ p : Prop, p ∧ (∀ _ : Empty, p → False))] do
+    let input ← elabTerm term none
+    synthesizeSyntheticMVarsNoPostponing
+    let input ← instantiateMVars input
+    let (output, proof) ← inlineFalsePredicates input
+    unless output == input do throwError "inlined a proposition not forced false"
+    checkWithKernel proof
+
+open Lean Meta Elab Term in
+run_elab do
+  for term in #[← `(∃ k : Int → Prop, ∃ error : Prop, k 0 ∧ (k 1 → error) ∧ ¬error),
+      ← `(∃ first second : Prop, (first → False) ∧ (second → False))] do
+    let input ← elabTerm term none
+    synthesizeSyntheticMVarsNoPostponing
+    let input ← instantiateMVars input
+    let (output, proof) ← inlineFalsePredicates input
+    if output == input then throwError "missed an error predicate under another existential"
+    if proof.hasMVar || proof.hasFVar || proof.hasLooseBVars || proof.hasSorry then
+      throwError "normalization leaked proof obligations"
+    checkWithKernel proof
+  let caller ← mkFreshExprMVar (some (mkSort .zero))
+  let target ← elabTerm (← `(∃ p : Prop, p ∧ (True → False))) none
+  let target := target.replace fun e => if e.isConstOf ``True then some caller else none
+  discard <| inlineFalsePredicates target
+  if ← caller.mvarId!.isAssigned then throwError "normalization assigned caller metavariable"

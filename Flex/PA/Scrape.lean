@@ -338,7 +338,7 @@ private partial def guardAtoms (cfg : PAScrapeConfig) (e : Expr)
   if let some atom ← arithmeticAtom? cfg e then
     return if out.atoms.contains atom then out else { out with atoms := out.atoms.push atom }
   -- Descending through Eq Prop, Iff, Not, and decide exposes their data tests.
-  -- Quantified subformulas are left intact: their binders are not clause parameters.
+  -- Positive existential guards are opened by `guardedPremises`.
   let mut out := out
   for a in e.getAppArgs do out ← guardAtoms cfg a out (depth + 1)
   return out
@@ -389,6 +389,31 @@ private def guardedPredicates (cfg : PAScrapeConfig) (props : Array Expr) : Scra
         for p in #[property, ← negateAtom property] do
           addPredicate cfg "guarded clause" .guarded (mkApp2 (mkConst ``Or) (← negateAtom g) p)
 
+/-- Explore guard branches separately; close witness parameters before leaving their scope. -/
+private partial def guardedPremises (cfg : PAScrapeConfig) (head : Expr)
+    (pending : List (Expr × Nat)) (props : Array Expr := #[]) : ScrapeM Unit := do
+  if (← get).guarded.size >= cfg.maxGuardedQualifiers ||
+      (← get).guardPairs >= cfg.maxGuardPairs then return
+  match pending with
+  | [] => guardedPredicates cfg (props.push head)
+  | (premise, depth) :: rest =>
+    unless ← visit cfg depth do return
+    let premise := premise.consumeMData.headBeta
+    if let .letE _ _ value body _ := premise then
+      guardedPremises cfg head ((body.instantiate1 value, depth + 1) :: rest) props
+    else if let some (left, right) := premise.and? then
+      guardedPremises cfg head ((left, depth + 1) :: (right, depth + 1) :: rest) props
+    else if premise.isAppOfArity ``Or 2 then
+      guardedPremises cfg head ((premise.getArg! 0, depth + 1) :: rest) props
+      guardedPremises cfg head ((premise.getArg! 1, depth + 1) :: rest) props
+    else if premise.isAppOfArity ``Exists 2 then
+      let domain := premise.getArg! 0
+      let predicate := premise.getArg! 1
+      withLocalDeclD `witness domain fun witness =>
+        guardedPremises cfg head ((predicate.beta #[witness], depth + 1) :: rest) props
+    else
+      guardedPremises cfg head rest (props.push premise)
+
 private partial def guardedClauses (cfg : PAScrapeConfig) (e : Expr)
     (safety : Bool) (premises : Array Expr := #[]) (depth : Nat := 0) : ScrapeM Unit := do
   if (← get).guarded.size >= cfg.maxGuardedQualifiers ||
@@ -407,7 +432,8 @@ private partial def guardedClauses (cfg : PAScrapeConfig) (e : Expr)
     guardedClauses cfg r safety premises (depth + 1)
   else
     let isSafety := !(← predicateApplication e)
-    if isSafety == safety then guardedPredicates cfg (premises.push e)
+    if isSafety == safety then
+      guardedPremises cfg e (premises.toList.map (·, 0))
 
 /-- Propose at most three variants of a closed numeric qualifier.
     Replace a literal bound with a parameter, or propose `≤` from `<`.

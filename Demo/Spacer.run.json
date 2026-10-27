@@ -1,0 +1,12 @@
+{
+  "command": [
+    "/Users/jamkabeeralikhan/.elan/toolchains/leanprover--lean4---v4.34.0/bin/lean",
+    "--setup",
+    "/Users/jamkabeeralikhan/Documents/Programming/Flex/Demo/Spacer.setup.json",
+    "--error=hasSorry",
+    "/Users/jamkabeeralikhan/Documents/Programming/Flex/Demo/Spacer.lean"
+  ],
+  "exit_code": 0,
+  "wall_ms": 2625,
+  "timeout_seconds": 60
+}

@@ -75,4 +75,26 @@ theorem fuelConservation :
   spacer
   grind
 
+def nonnegativeAt (f : Int → Int) (x : Int) : Prop := 0 ≤ f x
+
+-- Infer through observations of maps, then certify against the original functions.
+theorem mapObservations :
+    ∃ inv : (Int → Int) → Int → (Int → Int) → Prop,
+      (∀ f x, nonnegativeAt f x → inv f x f) ∧
+      (∀ f x initial next y, inv f x initial → next = f →
+        nonnegativeAt next y → inv next y initial) ∧
+      (∀ f x initial, inv f x initial → nonnegativeAt initial x) := by
+  spacer
+  grind
+
+def width (c : Int) : Int := if c < 128 then 1 else 2
+
+-- Definition equations suffice; no invariant or auxiliary theorem is supplied.
+theorem variableStep :
+    ∃ inv : Int → Prop,
+      inv 0 ∧ (∀ x c, inv x → inv (x + width c)) ∧
+      (∀ x, inv x → 0 ≤ x) := by
+  spacer (defs := [width])
+  grind [width]
+
 end SpacerDemo

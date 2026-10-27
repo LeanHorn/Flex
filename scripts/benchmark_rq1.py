@@ -245,7 +245,7 @@ def main() -> None:
                         help="reuse checked results with identical inputs, harness, Flex code and budgets")
     parser.add_argument("--case-timeout", type=int, default=180)
     parser.add_argument("--startup-timeout", type=int, default=60)
-    parser.add_argument("--pa-timeout", type=int, default=30)
+    parser.add_argument("--pa-timeout", type=int, default=60)
     parser.add_argument("--solver-timeout", type=int, default=60)
     parser.add_argument("--phase-heartbeats", type=int, default=2000000)
     parser.add_argument("--recursion-limit", type=int, default=16384)

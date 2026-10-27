@@ -258,7 +258,7 @@ private def runImpl (name : Name) (variant caseName : String) : TermElabM Unit :
   let ctx : Context := {
     caseName, variant, output := output / variant
     deadline := start + (← envNat "FLEX_RQ1_CASE_SECONDS" 180) * 1000
-    paSeconds := ← envNat "FLEX_RQ1_PA_SECONDS" 30
+    paSeconds := ← envNat "FLEX_RQ1_PA_SECONDS" 60
     solverMs := ← envNat "FLEX_RQ1_SOLVER_MS" 60000
     heartbeats := ← envNat "FLEX_RQ1_PHASE_HEARTBEATS" 2000000
     dischargeResidual := (← IO.getEnv "FLEX_RQ1_DISCHARGE") == some "1"

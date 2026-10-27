@@ -1,0 +1,220 @@
+S/E extension plan — evidence and design, 2026-10-27
+
+STATUS
+
+Public zap; spacer now synthesizes and eliminates the remaining predicates in
+Str.NextMatch and Str.NextMatchBack, without lemma hints for synthesis. Their
+residual Lean proofs are complete and kernel checked: coverage rises 47 -> 49/61.
+The other four validated prototypes below are not automatic coverage gains.
+Program-specific semantic lemmas or manual projection/model lifting do not
+qualify them as automatic successes.
+
+Validated prototypes (all kernel checked; only standard Lean axioms):
+
+  VC                         Cyclic candidate       Other predicates
+  Str.NextMatch              Eldarica Loop          10 eliminated by Zap
+  Str.NextMatchBack          Eldarica Loop          10 eliminated by Zap
+  Char.NextMatch             Eldarica main Loop      3 cyclic + 7 acyclic manual
+  Str.Next                  Eldarica Forward        5 existing manual joins
+  Str.NextBack              Eldarica Backward       5 existing manual joins
+  FibFasto                  Eldarica Inv            none
+
+All six residual proofs are complete. The returned main-loop models were not
+replaced by handwritten invariants. Char's prototype has three additional manual
+predicates classified cyclic by the source graph. An actual Zap run removes
+those intermediates and leaves only the main loop predicate. These are
+feasibility results, not six new public spacer/eldarica successes. Only the first
+two have since passed through the public pipeline without synthesis lemma hints.
+
+Evidence, source hashes, queries, solver transcripts and proofs:
+  results/se-derisk-20261027/          original 14-case assessment and probes
+  results/se-match-20261027/           first two complete proofs
+  results/se-more-20261027/            four further complete proofs
+  results/se-connected-20261027/       public-tactic baseline and proof harness
+These local result directories are gitignored; this plan is tracked.
+
+MOTIVATING EXAMPLE: FIX AND S/E CAN COMPLEMENT EACH OTHER
+
+Illustrative CHCs, not a measured Fix-versus-S/E result. Let a : Int -> Int and
+i, p, v, j : Int. update(a,i,v) changes only entry i to v.
+
+  init:    kappa(a, 0, p)
+  step:    kappa(a, i, p) /\ v <= p
+             -> kappa(update(a, i, v), i + 1, p)
+  safety:  kappa(a, i, p) /\ 0 <= j /\ j < i -> a(j) <= p
+
+A sufficient invariant is the bounded prefix property:
+
+  P(a, i, p) := forall j, 0 <= j -> j < i -> a(j) <= p
+
+Initialization is vacuous because the prefix is empty. Preservation splits on
+j = i: the new entry uses v <= p; otherwise integer arithmetic gives j < i,
+the update leaves a(j) unchanged, and the old prefix property applies.
+
+  Fix: If P is among its candidates and its oracle discharges the obligations,
+       it can certify preservation inside Lean using the update definition,
+       reusable update lemmas and arithmetic. Discovering P is a separate task.
+
+  S/E: Treating P as an opaque Boolean observation does not express how an
+       update changes it. The solver needs an encoding that exposes this
+       relationship, such as suitable array reasoning or generic derived facts.
+       This is a limit of that projection, not an impossibility for S/E.
+
+Expected overlap is strong for arithmetic bounds and linear relations. Frames
+and preserved semantic atoms can also work through observation projection.
+Quantified collection properties and recursive definitions can require more
+semantic support. Neither backend is guaranteed to solve every such case.
+
+Evaluation rule: use generated definitions, source assumptions, reusable library
+facts and facts derived by general automation. Requiring a new program-specific
+preservation or monotonicity proof is an assisted experiment, not automatic
+invariant synthesis coverage. For example, a handwritten Fibonacci monotonicity
+lemma cannot be used to claim that the pipeline handles Fibonacci unaided.
+
+This motivates testing complementary coverage. It does not establish that any
+particular successful Fix case is beyond S/E; that needs a controlled comparison.
+
+WHAT THE SIX CASES REQUIRE
+
+1. Str.NextMatch / NextMatchBack
+   Preserve frames and a semantic state predicate over records/maps. The saved
+   model uses boundary observations; a checked equivalence recovers the full
+   source ghost_str_inv under its original assumptions. Whole semantic state
+   atoms now work through the public observation-projection frontend.
+   Opaque UTF8 internals need not become SMT axioms. The independent nonempty
+   occurrence branch remains a Lean residual. NextMatch equivalence is proved
+   in se-match-20261027/workspace/Candidate.lean.
+
+2. Char.NextMatch
+   Project the 10-argument cyclic k3 to bounds, frame equalities and the back
+   boundary. The returned Loop is fully adequate; its extra initial-finger
+   lower bound follows from the original boundary assumption. Preserve the
+   existing conditional callback contract. Exact character widths and checked
+   arithmetic matter to that contract. No new UTF8 induction was required.
+   The saved Return model was not used to replace the ten other manual
+   predicates: three are cyclic, seven acyclic (corrected source-graph audit).
+
+3. Str.Next / NextBack
+   Project 36 source arguments to relevant scalar state and observations.
+   The returned Forward/Backward definitions ignore their boundary-array
+   parameter: scalar model import is sufficient for these particular models.
+   The useful inferred disjunctions are mem=MAX or mem=0, and memb=MAX or memb=k.
+   They were NOT assumed in synthesis. Original lead/tail callback contracts,
+   dynamic-state facts, and checked endpoint lemmas justify them in Lean.
+   boundary(n) and boundary(0) also establish safe increment/decrement.
+
+4. FibFasto
+   Add observations fib(i-1), fib(i), fib(n), plus a symbolic cap. Instantiate
+   the model at the original cap 2^64-1. Checked bridges: base cases, recurrence,
+   monotonicity, and equality congruence. The lifted model proves initialization,
+   preservation, arithmetic safety and the result equality. Scalar import is
+   already adequate. The literal-cap probes timed out at 5s; symbolic-cap
+   Eldarica succeeded. This supports testing general bound parameterization,
+   not a claim that it always improves solving.
+
+SHARED ARCHITECTURE
+
+A. Keep original and synthesis views separate.
+   Preserve original predicate slots and the original VC for certification.
+   Build fresh projected slots for the solver. An independent clause containing
+   no kappa anywhere may stay solely as a residual obligation. Never omit a
+   safety clause merely because its head is not a kappa: a kappa in its guard
+   constrains the adequacy of the inferred invariant.
+
+B. Explicit, typed projection metadata.
+   Mapping { original : KVar, projected : KVar, arguments : Array Expr }
+   ProjectedGoal { kvars : List KVar, body : Expr, mappings : Array Mapping }
+   Each argument is a CLOSED lambda over ALL original predicate arguments,
+   returning Int, Bool or Prop. Retain scalar identities, source-derived
+   semantic observations, and useful equality observations. Record provenance,
+   original order/types and unused arguments; reject escaping/dependent terms.
+   Lift M to fun xs => M (projection1 xs) ... without adding assumptions.
+
+C. Conservative clause abstraction with conditional congruence.
+   Repeated observations must have consistent identities. Preserve connectives
+   and branch conditions. Normalize unconditional equality aliases and checked
+   constructor projections. Aliasing alone is insufficient: a frame equality
+   carried as a Boolean feature can justify transporting a semantic atom.
+   Generate bounded equality/congruence constraints for observed terms:
+     x=y -> (P(x,z) <-> P(y,z)).
+   Do not assume injectivity for arbitrary functions or semantics for opaque
+   predicates. Finite abstraction may be incomplete; UNSAT then does not show
+   that the original VC is false.
+
+D. Checked semantic facts, distinct from invariant hints.
+   Some examples need more than equality congruence: endpoint facts, source
+   callback contracts, Fibonacci recurrence/monotonicity. Any additional fact
+   must come from the source assumptions, a definitional equation, or a checked
+   Lean lemma. Design a general proof-bearing fact/rewrite interface; no VC
+   names, assumed invariants or domain axioms in Flex. Observation discovery
+   and choosing which proved facts to instantiate remain engineering work.
+
+E. Model import and certification.
+   Reuse the existing strict scalar importer where sufficient. Validate the
+   projected signature, all projection result types, closure and original
+   predicate identity before lifting. Kernel-check candidates and certify
+   ORIGINAL heads; retain every residual obligation. Keep separate statuses
+   for solver SAT, model import, instantiation, head elimination and full proof.
+   Preserve the existing strict arithmetic path for ordinary CHC-COMP inputs.
+
+F. Bounded work and rollback.
+   Invocation-local caps for features, visited nodes, observed terms, equality/
+   congruence pairs and clauses. Deduplicate before expansion. Avoid unrestricted
+   cubic equality generation. Keep preparation, solver and certification budgets
+   separate. Failed speculative stages restore caller state. Limits must yield
+   explicit conservative failure/omission, never invented facts. No PA sweep.
+
+REMAINING EIGHT: EVIDENCE AND OPEN REPRESENTATION CHOICES
+
+  SortPartition
+    No useful semantic model from the 5s screen. Needs partition prefix/order,
+    pivot/frame facts and existential range-membership witnesses. The source
+    permutation predicate is range membership plus frame, not a multiset theorem.
+
+  SortMerge
+    Copy and two-phase merge probes unresolved. Needs cross-array sorted prefixes,
+    multiple loop mappings and existential source-membership (is_mix) facts.
+    Exact source-clause correspondence of the manual core still needs auditing.
+
+  MoveElementsFromList / MoveElements
+    Numeric projections solved; recursive append/insert/absorb semantics did not.
+    Direct recursive-function encoding was rejected/unresolved. An Append Horn
+    graph avoided Eldarica's rejection but timed out at 5s; installed Spacer
+    crashed under two inlining configurations. This is not an impossibility result.
+    Need recursive ADT graphs or checked fold summaries, plus prefix/suffix frames.
+
+  TwoWay.Next / MaximalSuffix / ReverseMaximalSuffix / NextBack
+    Numeric projections solved; useful semantic models remain unvalidated.
+    Requirements include bytes_eq, quantified periodicity, nonlinear divisibility,
+    forall-exists-forall lexicographic witnesses, and reverse UTF8 boundaries.
+    Spacer rejected quantifiers in the tested recursive rules; Eldarica returned
+    inconclusive or reached the short cap. NextBack's partial query omitted its
+    full boundary semantics. These failures do not establish infeasibility.
+
+For these families, compare direct theory export with checked semantic summaries
+before committing to an encoding. Pure numeric SAT is not evidence of sufficient
+invariants. Any required new prefix/fold/semantic observation generation must be
+identified explicitly; representation support alone may not discover it.
+
+FUTURE THEORY SUPPORT
+
+Observation projection is not full array/ADT support. Proper direct support
+requires coordinated recursive sorts, export operators, model reconstruction,
+and witness adaptation. lean-smt currently has no array translator; the pinned
+SMTLib-to-Lean standalone Model API accepts only Bool/Int. Its general translator
+already has array/ADT machinery with abstract interpretations. Extend that API
+properly if direct theory support proves useful; do not bypass its restrictions
+by disguising definitions as assertions or changing only Flex's allowlist.
+
+DECISION GATES BEFORE THE COMBINED IMPLEMENTATION
+
+1. Retain these six checked candidates as integration fixtures; resolve which
+   semantic facts and observation templates a general frontend must discover.
+2. Validate a faithful semantic component for each remaining representation
+   family. Record failed/partial evidence rather than promising eight unlocks.
+3. Finalize common projection/lifting contracts and the separate direct-theory
+   API using those results. Then implement shared stages with bounded behavior.
+4. Exercise public zap; spacer/eldarica on the original six VCs, including Zap's
+   treatment of all acyclic joins. Complete residual proofs and audit axioms.
+5. Check strict scalar CHC regressions and focused prior RQ1 successes once the
+   integration works. Count gains only from these public-pipeline runs.

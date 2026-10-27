@@ -10,11 +10,11 @@ register_option flex.spacer.executable : String := {
 namespace Flex.CHC
 
 /-- Instantiate invariants and prove heads, leaving one structured residual VC. -/
-def solverTactic (config : Config) : TacticM Unit := withMainContext do
+def solverTactic (config : Config) (facts : Facts.Config := {}) : TacticM Unit := withMainContext do
   let name := match config.backend with
     | .spacer => "spacer"
     | .eldarica => "eldarica"
-  let report ← match ← solveGoal (← getMainGoal) config (headsOnly := true) with
+  let report ← match ← solveGoal (← getMainGoal) config (headsOnly := true) (facts := facts) with
     | .solved report | .partial report => pure report
     | .failed failure =>
       if let some solver := failure.solver then
@@ -30,8 +30,16 @@ def solverTactic (config : Config) : TacticM Unit := withMainContext do
 
 end Flex.CHC
 
-/-- Synthesize with Spacer, report invariants, and certify predicate heads. -/
-elab "spacer" : tactic => do
-  Flex.CHC.solverTactic {
-    backend := .spacer
-    executable := some (flex.spacer.executable.get (← getOptions)) }
+/-- Synthesize and certify invariants; optional lemmas and equations supply proved facts. -/
+syntax "spacer" (atomic("(" &"lemmas" ":=") "[" ident,* "]" ")")?
+  (atomic("(" &"defs" ":=") "[" ident,* "]" ")")? : tactic
+
+elab_rules : tactic
+  | `(tactic| spacer $[(lemmas := [$lemmas:ident,*])]? $[(defs := [$defs:ident,*])]?) => do
+    let resolve (names : Array (TSyntax `ident)) : TacticM (Array Name) :=
+      names.mapM fun name => do return ← realizeGlobalConstNoOverloadWithInfo name
+    let lemmas ← resolve (lemmas.map (·.getElems) |>.getD #[])
+    let defs ← resolve (defs.map (·.getElems) |>.getD #[])
+    Flex.CHC.solverTactic {
+      backend := .spacer
+      executable := some (flex.spacer.executable.get (← getOptions)) } { lemmas, defs }

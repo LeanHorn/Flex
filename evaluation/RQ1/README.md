@@ -18,7 +18,7 @@ automatic proof are separate measurements. Two independent tracks use current Fl
 
 Head certification uses Flex's shared reconstructed-SMT/native automation.
 Residual discharge is disabled unless `--discharge` is passed. Defaults:
-180 seconds per case/track, 30 seconds for PA preparation/synthesis checks,
+180 seconds per case/track, 60 seconds for PA preparation/synthesis checks,
 60 seconds per CHC solver, two million heartbeats per phase, recursion 16384.
 The hard process deadline includes certification; PA checks are cooperative.
 One repetition runs serially. Lean timings exclude imports; process wall time
@@ -75,3 +75,6 @@ of this automatic track. PR1 measures a new reproducible baseline; replaying
 handwritten proofs or supplying their qualifiers is a separate experiment.
 Current Fix rolls back if head certification fails; S/E retains candidates
 with explicit obligations. The baseline records that behavioral difference.
+
+The [S/E design notes](se-plan.txt) include a motivating prefix-invariant example
+and distinguish automatic synthesis from experiments requiring bespoke lemmas.

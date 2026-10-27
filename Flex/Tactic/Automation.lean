@@ -6,6 +6,8 @@ import Flex.PA.Smt
 
 open Lean Meta Elab Term Tactic
 
+initialize registerTraceClass `flex.synthesis
+
 register_option flex.automation.proofHeartbeats : Nat := {
   defValue := 20000
   descr := "Heartbeats per proof leaf; conjunctions share their combined budget. Zero disables attempts."
@@ -27,6 +29,29 @@ register_option flex.automation.structureSteps : Nat := {
 }
 
 namespace Flex.Automation
+
+/-- Expose a named specification before applying the native discharger. -/
+private def exposeTarget : TacticM Unit := withMainContext do
+  let goal ← getMainGoal
+  let target ← goal.getType
+  let exposed ← withTransparency .default <| whnf target
+  if exposed == target then throwError "target is already exposed"
+  replaceMainGoal [← goal.replaceTargetDefEq exposed]
+
+private def generalizeRecordFields : TacticM Unit := withMainContext do
+  let goal ← getMainGoal
+  let hypotheses ← Smt.Preprocess.getPropHyps
+  let types ← hypotheses.mapM fun id => id.getType
+  let fields ← Flex.PA.recordFields (types.push (← goal.getType))
+  unless fields.isEmpty do
+    let args := fields.mapIdx fun i field =>
+      ({ expr := field, xName? := some (Name.mkSimple s!"field_{i}") } : GeneralizeArg)
+    let (_, inputs, goal) ← goal.generalizeHyp args hypotheses
+    let mut goal := goal
+    for input in inputs do
+      goal ← goal.withContext do
+        goal.replaceLocalDeclDefEq input (← whnf (← input.getType))
+    replaceMainGoal [goal]
 
 private def proofLeaves : Expr → Nat
   | .app (.app (.const ``And _) left) right => proofLeaves left + proofLeaves right
@@ -88,8 +113,18 @@ def proofOracle : Flex.CHC.ProofOracle := fun target => do
           first | omega | grind |
             aesop (config := { maxRuleApplications := 200 }) (add unsafe 20% (by omega))))
         target then return some proof
+    if let some proof ← attempt
+        (← `(tactic|
+          (simp (config := { maxSteps := 10000, failIfUnchanged := false })
+            [List.eq_replicate_iff] at *) <;> intros <;>
+            (run_tac generalizeRecordFields) <;>
+            smt (timeout := some $(quote timeout)) (trust := false) [*])) target then
+      return some proof
   for tactic in #[← `(tactic| omega), ← `(tactic| grind),
-      ← `(tactic| constructor <;> grind)] do
+      ← `(tactic| (run_tac exposeTarget) <;> intros <;> grind),
+      ← `(tactic| constructor <;> grind),
+      ← `(tactic| (simp (config := { maxSteps := 10000, failIfUnchanged := true })
+        [List.eq_replicate_iff] at *) <;> intros <;> grind)] do
     if let some proof ← attempt tactic target then return some proof
   let needsSearch := fun e : Expr =>
     (e.find? fun e => e.isAppOfArity ``Exists 2 || e.isAppOfArity ``Or 2).isSome
@@ -107,25 +142,44 @@ Unsupported or inconclusive SMT queries fall back to bounded native proofs. -/
 def synthOracle (checkBudget : TermElabM Unit := pure ()) : PASynthOracle := fun targets => do
   checkBudget
   let timeout := flex.automation.synthTimeout.get (← getOptions)
-  let results ← if timeout == 0 then
+  let start ← IO.monoMsNow
+  let mut results ← if timeout == 0 then
     pure (targets.map fun _ => PASynthResult.unknown "SMT synthesis disabled")
     else Flex.PA.smtOracle (timeout * 1000) targets
   checkBudget
   unless results.size == targets.size do
     throwError "PA synthesis oracle returned the wrong number of decisions"
-  targets.zipWithM (fun target result => do
+  trace[flex.synthesis] "scalar SMT: {targets.size} queries, {(← IO.monoMsNow) - start}ms"
+  let pending := (Array.range results.size).filter fun i =>
+    match results[i]! with | .unknown _ => true | _ => false
+  if timeout != 0 && !pending.isEmpty then
+    let start ← IO.monoMsNow
+    let retry ← Flex.PA.simplifiedSmtOracle (timeout * 1000) (pending.map (targets[·]!))
+    checkBudget
+    trace[flex.synthesis] "simplified SMT: {pending.size} queries, \
+      {(retry.filter (· == .valid)).size} valid, {(← IO.monoMsNow) - start}ms"
+    for i in [:pending.size] do
+      if let .valid := retry[i]! then results := results.set! pending[i]! .valid
+  let pending := results.countP fun result => match result with | .unknown _ => true | _ => false
+  let start ← IO.monoMsNow
+  let answers ← targets.zipWithM (fun target result => do
     checkBudget
     match result with
     | .valid | .invalid => return result
     | .unknown reason =>
       trace[flex.oracle] "SMT synthesis inconclusive: {reason}"
       for tactic in #[← `(tactic| omega), ← `(tactic| grind),
-          ← `(tactic| constructor <;> grind)] do
+          ← `(tactic| (run_tac exposeTarget) <;> intros <;> grind),
+          ← `(tactic| constructor <;> grind),
+          ← `(tactic| (simp (config := { maxSteps := 10000, failIfUnchanged := true })
+            [List.eq_replicate_iff] at *) <;> intros <;> grind)] do
         checkBudget
         let proof ← attempt tactic target
         checkBudget
         if proof.isSome then return .valid
       return result) results
+  trace[flex.synthesis] "native fallback: {pending} queries, {(← IO.monoMsNow) - start}ms"
+  return answers
 
 /-- The structural walk used by `solve_fixpoint`, with checked leaf proofs and
 finite progress. Definitions are retried only after their target changes; goals

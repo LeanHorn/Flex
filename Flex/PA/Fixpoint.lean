@@ -4,6 +4,7 @@ import Flex.Core
 import Flex.PA.Qualifier
 import Flex.PA.Instantiation
 import Flex.PA.Weaken
+import Flex.PA.Scrape
 
 open Lean Meta Elab Term Tactic
 
@@ -26,7 +27,7 @@ private structure InitialCandidates where
     Per-κ limits bound unique candidates and visited slot assignments. -/
 def buildInitialAssignment (cyclicKs : List KVar) (extraQualifiers : Array Expr := #[])
     (maxCandidates : Option Nat := none)
-    (maxInstances : Option Nat := none)
+    (maxInstances : Option Nat := none) (anchored : Array PAAnchoredQualifier := #[])
     : MetaM (List (KVar × List (Expr × List Nat))) := do
   let qs := (← getQualifiers) ++ extraQualifiers
   cyclicKs.mapM fun κ => do
@@ -50,6 +51,27 @@ def buildInitialAssignment (cyclicKs : List KVar) (extraQualifiers : Array Expr 
       logWarning m!"fix: candidate limit ({state.entries.size}) reached for {κ.name}; additional candidates omitted"
     if state.instancesTruncated then
       logWarning m!"fix: instance limit ({state.instances}) reached for {κ.name}; further slot assignments omitted"
+    -- Source-directed candidates have a separate bounded budget and never displace templates.
+    for candidate in anchored do
+      unless candidate.kvar == κ.mvarId do continue
+      unless candidate.slots.all (· < params.size) do
+        throwError "fix: source candidate refers to an invalid predicate slot"
+      withNewMCtxDepth do
+        if candidate.qualifier.hasMVar || candidate.qualifier.hasLooseBVars then
+          throwError "fix: source candidate contains unresolved variables"
+        check candidate.qualifier
+        forallTelescopeReducing (← inferType candidate.qualifier) fun arguments result => do
+          unless result.isProp && arguments.size == candidate.slots.length do
+            throwError "fix: source candidate has an invalid signature"
+          for argument in arguments, slot in candidate.slots do
+            unless ← isDefEq (← inferType argument) κ.paramTypes[slot]! do
+              throwError "fix: source candidate argument does not match its predicate slot"
+      let body ← Expr.instQualifier candidate.qualifier
+        (candidate.slots.toArray.map (params[·]!))
+      unless state.seen.contains body do
+        state := { state with
+          entries := state.entries.push (candidate.qualifier, candidate.slots)
+          seen := state.seen.insert body }
     return (κ, state.entries.toList)
 
 private structure PAClause where

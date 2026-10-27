@@ -24,10 +24,12 @@ register_option flex.benchOracles : Bool := {
 private def reportScrapedQualifiers (result : PAScrapeResult) : TacticM Unit := do
   let qs := result.qualifiers
   withOptions (·.setBool `pp.funBinderTypes true) do
-    let header := m!"fix: scraped qualifiers ({qs.size})"
+    let header := m!"fix: scraped qualifiers ({qs.size} templates, {result.anchored.size} source instances)"
     let entries := qs.toList.mapIdx fun i q =>
       m!"  {i + 1}. {q} [{result.origins[i]!}]"
-    logInfo (MessageData.joinSep (header :: entries) "\n")
+    let instances := result.anchored.toList.map fun candidate =>
+      m!"  {candidate.qualifier} [{candidate.origin}; slots {candidate.slots}]"
+    logInfo (MessageData.joinSep (header :: entries ++ instances) "\n")
   trace[flex.scrape] "visited={result.visitedNodes} definitions={result.inspectedDefinitions} rejected={result.rejected}"
 
 /-- Report a phase's elapsed wall time when benchmarking is enabled. -/
@@ -92,7 +94,7 @@ private def runFix
     let ordinaryCount := extraQualifiers.size - scraped.observationCount
     let qualifiers := extraQualifiers.extract 0 ordinaryCount ++ standardQualifiers ++
       extraQualifiers.extract ordinaryCount extraQualifiers.size
-    let initial ← buildInitialAssignment kvarsInOrder qualifiers candidateLimit instanceLimit
+    let initial ← buildInitialAssignment kvarsInOrder qualifiers candidateLimit instanceLimit scraped.anchored
     observe (.setup extraQualifiers.size standardQualifiers.size (← getQualifiers).size
       (initial.toArray.map fun (κ, cs) => (κ.name, cs.length)))
     let aStar ← benchFixPhase "synthesis" <|

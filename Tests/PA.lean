@@ -2,6 +2,33 @@ import Flex.Tactic.Tactics.Fix
 import Flex.Tactic.Tactics.Fusion
 import Flex.Fusion.Flatten
 
+namespace PADischargeTests
+
+example (x : Int) (p : Prop) (hp : p) : x < x + 1 ∧ p := by
+  flex_discharge
+
+set_option flex.automation.proofHeartbeats 0 in
+example (p : Prop) (hp : p) : True ∧ (True → p) := by
+  flex_discharge
+  guard_target = p
+  exact hp
+
+private def counter : Prop := ∃ k : Int → Prop,
+  k 0 ∧ (∀ n, k n → k (n + 1)) ∧ (∀ n, k n → 0 ≤ n)
+
+set_option flex.automation.proofHeartbeats 0 in
+example : counter := by
+  unfold counter
+  fail_if_success fix (synth := omega)
+  fix (synth := omega) (proof := omega)
+
+set_option flex.automation.proofHeartbeats 0 in
+example : counter := by
+  unfold counter
+  fix (oracle := omega)
+
+end PADischargeTests
+
 namespace PABatchTests
 
 open Lean Meta Elab Term

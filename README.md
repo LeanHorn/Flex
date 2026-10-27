@@ -57,7 +57,9 @@ Scraping is off by default. Add `(defs := [fib])` to select definitions explicit
 Use `set_option flex.reportQualifiers true` to inspect scraped candidates in the Infoview.
 Disable guarded templates with `(scrapeConfig := { maxGuardedQualifiers := 0 })`.
 By default, `fix` batches integer/Boolean SMT checks in short-lived Z3 processes,
-rechecks affected clauses after weakening, and certifies the result with Lean proofs.
+rechecks affected clauses after weakening, and uses kernel-checked SMT proofs and
+Lean automation for certification and residual goals. `flex_discharge` runs this
+proof automation separately, leaving unsolved goals for manual proof.
 
 Optional SMT backends can be selected separately for synthesis and proofs:
 

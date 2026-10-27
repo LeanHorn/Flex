@@ -228,3 +228,6 @@ def discharge : TacticM Unit := do
     throw error
 
 end Flex.Automation
+
+/-- Prove residual VCs with checked SMT and Lean automation, leaving unsolved goals. -/
+elab "flex_discharge" : tactic => Flex.Automation.discharge

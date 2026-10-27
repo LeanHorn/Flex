@@ -146,7 +146,8 @@ private declare_config_elab elabScrapeLimits PAScrapeLimits
     Rejected or inconclusive candidates leave the entry goal unchanged.
     Validated candidates may leave unproved residual goals.
     Uses the standard qualifier bank unless `flex.standardQualifiers` is disabled.
-    Default synthesis batches SMT checks; certificate leaves require Lean proofs.
+    Default synthesis batches SMT decisions; certification and residual goals use
+    kernel-checked SMT proofs and Lean automation.
     `scrape`: `basic` extracts heads; `standard` adds premises, guarded arithmetic,
     definitions, and relations between semantic observations;
     `deep` also explores helpers and generalizes numeric templates.
@@ -183,7 +184,7 @@ elab_rules : tactic
         let stx ← `(Lean.Parser.Term.optConfig| (config := $value))
         elabScrapeLimits stx (logExceptions := false)
 
-    -- Each phase inherits the shared oracle unless explicitly overridden.
+    -- Preserve explicit oracle overrides; the default proof phase uses checked automation.
     let defaultOracle ← match fallback with
       | none => pure proveLeaf
       | some tac => pure (withPAFallback (← `(tactic| ($tac:tacticSeq))))
@@ -191,7 +192,7 @@ elab_rules : tactic
       | none => pure defaultOracle
       | some tac => pure (withPAPriority (← `(tactic| ($tac:tacticSeq))))
     let proofOracle ← match proof with
-      | none => pure defaultOracle
+      | none => pure (if fallback.isSome then defaultOracle else Flex.Automation.proofOracle)
       | some tac => pure (withPAPriority (← `(tactic| ($tac:tacticSeq))))
     let batchOracle := if synth.isNone && fallback.isNone then
       some Flex.Automation.synthOracle else none

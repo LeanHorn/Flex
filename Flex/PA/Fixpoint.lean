@@ -23,6 +23,17 @@ private structure InitialCandidates where
   truncated : Bool := false
   instancesTruncated : Bool := false
 
+/-- Ignore tautologies and compare equalities independently of their orientation. -/
+private def candidateKey? (body : Expr) : Option Expr :=
+  let body := body.consumeMData
+  if body.isConstOf ``True then none
+  else if body.isAppOfArity ``Eq 3 then
+    let lhs := body.getArg! 1
+    let rhs := body.getArg! 2
+    if lhs == rhs then none
+    else some (if rhs.lt lhs then mkApp3 body.getAppFn (body.getArg! 0) rhs lhs else body)
+  else some body
+
 /-- Instantiate tagged qualifiers, then the supplied extras, deduplicating predicates.
     Per-κ limits bound unique candidates and visited slot assignments. -/
 def buildInitialAssignment (cyclicKs : List KVar) (extraQualifiers : Array Expr := #[])
@@ -40,12 +51,13 @@ def buildInitialAssignment (cyclicKs : List KVar) (extraQualifiers : Array Expr 
         let state := { state with instances := state.instances + 1 }
         let args := (slots.map fun i => params[i]!).toArray
         let body ← Expr.instQualifier q args
-        if state.seen.contains body then return (state, true)
+        let some key := candidateKey? body | return (state, true)
+        if state.seen.contains key then return (state, true)
         if maxCandidates.any (state.entries.size >= ·) then
           return ({ state with truncated := true }, false)
         return ({ state with
           entries := state.entries.push (q, slots)
-          seen := state.seen.insert body }, true)
+          seen := state.seen.insert key }, true)
       if state.truncated || state.instancesTruncated then break
     if state.truncated then
       logWarning m!"fix: candidate limit ({state.entries.size}) reached for {κ.name}; additional candidates omitted"
@@ -68,10 +80,11 @@ def buildInitialAssignment (cyclicKs : List KVar) (extraQualifiers : Array Expr 
               throwError "fix: source candidate argument does not match its predicate slot"
       let body ← Expr.instQualifier candidate.qualifier
         (candidate.slots.toArray.map (params[·]!))
-      unless state.seen.contains body do
+      let some key := candidateKey? body | continue
+      unless state.seen.contains key do
         state := { state with
           entries := state.entries.push (candidate.qualifier, candidate.slots)
-          seen := state.seen.insert body }
+          seen := state.seen.insert key }
     return (κ, state.entries.toList)
 
 private structure PAClause where

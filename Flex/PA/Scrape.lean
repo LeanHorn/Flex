@@ -26,6 +26,8 @@ structure PAScrapeLimits where
   maxAnchoredCandidatesPerKappa : Nat := 64
   maxAnchoredAttempts : Nat := 256
   maxAnchoredNodes : Nat := 5000
+  /-- Optional broader search; extra candidates can increase certification cost. -/
+  maxCompoundCandidatesPerKappa : Nat := 0
 
 structure PAScrapeConfig extends PAScrapeLimits where
   mode : PAScrapeMode := .no
@@ -571,7 +573,7 @@ private partial def observationAtoms (cfg : PAScrapeConfig) (raw : Expr)
   return out
 
 private inductive ObservationMode where
-  | relate | quantify | arguments | anchored
+  | relate | quantify | arguments | anchored | compound
   deriving BEq
 
 /-- Abstract compound κ arguments, such as record fields, into template parameters. -/
@@ -688,6 +690,17 @@ private def observationPredicates (cfg : PAScrapeConfig) (mode : ObservationMode
     (props : Array Expr) : ScrapeM Unit := do
   let mut found : Observations := {}
   for p in props do found ← observationAtoms cfg p found
+  if mode == .compound then
+    for relation in found.relations do
+      if (← get).anchoredAttempts >= cfg.maxAnchoredAttempts then return
+      let .mvar kvar := relation.getAppFn | continue
+      let count := ((← get).anchored.filter fun q =>
+        q.kvar == kvar && q.origin == "compound arguments").size
+      let budget := min 24 (min (cfg.maxCompoundCandidatesPerKappa - count)
+        (cfg.maxAnchoredAttempts - (← get).anchoredAttempts))
+      for candidate in ← Structured.compoundCandidates found.predicates relation.getAppArgs budget do
+        anchorPredicate cfg "compound arguments" candidate relation
+    return
   let fixed := (← get).fixed
   let observations := if mode == .anchored then
       found.predicates ++ found.equalities else found.predicates
@@ -767,7 +780,7 @@ private def observationPredicates (cfg : PAScrapeConfig) (mode : ObservationMode
 
 private partial def observationClauses (cfg : PAScrapeConfig) (mode : ObservationMode) (raw : Expr)
     (premises : Array Expr := #[]) (depth : Nat := 0) : ScrapeM Unit := do
-  if mode == .anchored then
+  if mode == .anchored || mode == .compound then
     if (← get).anchoredAttempts >= cfg.maxAnchoredAttempts then return
   else if (← get).observations.size >= cfg.maxObservationQualifiers ||
       (← get).observationPairs >= cfg.maxObservationPairs then return
@@ -785,6 +798,25 @@ private partial def observationClauses (cfg : PAScrapeConfig) (mode : Observatio
     observationClauses cfg mode right premises (depth + 1)
   else
     observationPredicates cfg mode (premises.push e)
+
+private def interleavePredicates (candidates : Array PAAnchoredQualifier) (cap : Nat)
+    : Array PAAnchoredQualifier := Id.run do
+  let mut families : Array (MVarId × Name × Array PAAnchoredQualifier) := #[]
+  for candidate in candidates do
+    let mut body := candidate.qualifier
+    while body.isLambda do body := body.bindingBody!
+    let name := body.getAppFn.constName?.getD .anonymous
+    if let some i := families.findIdx? (fun (k, n, _) => k == candidate.kvar && n == name) then
+      let (k, n, old) := families[i]!
+      families := families.set! i (k, n, old.push candidate)
+    else
+      families := families.push (candidate.kvar, name, #[candidate])
+  let mut result := #[]
+  for i in [:cap] do
+    for (k, _, family) in families do
+      if let some candidate := family[i]? then
+        if (result.filter (·.kvar == k)).size < cap then result := result.push candidate
+  return result
 
 private def collect (cfg : PAScrapeConfig) (body : Expr) : ScrapeM Unit := do
   for name in cfg.defs do
@@ -821,6 +853,19 @@ private def collect (cfg : PAScrapeConfig) (body : Expr) : ScrapeM Unit := do
     observationClauses cfg .arguments body
   if automatic cfg && cfg.maxAnchoredCandidatesPerKappa > 0 then
     observationClauses { cfg with maxNodes := (← get).nodes + cfg.maxAnchoredNodes } .anchored body
+    -- Gather twice the supplemental quota, then share it across named predicates.
+    if cfg.maxCompoundCandidatesPerKappa > 0 then
+      let ordinary := (← get).anchored
+      let quota := 2 * cfg.maxCompoundCandidatesPerKappa
+      observationClauses { cfg with
+        maxNodes := (← get).nodes + cfg.maxAnchoredNodes
+        maxAnchoredAttempts := (← get).anchoredAttempts + cfg.maxAnchoredAttempts
+        maxCompoundCandidatesPerKappa := quota
+        maxAnchoredCandidatesPerKappa :=
+          cfg.maxAnchoredCandidatesPerKappa + quota } .compound body
+      let extra := (← get).anchored.extract ordinary.size (← get).anchored.size
+      let selected := interleavePredicates extra cfg.maxCompoundCandidatesPerKappa
+      modify fun s => { s with anchored := ordinary ++ selected }
 
 /-- Interleave sources so a large goal cannot consume every definition/template slot. -/
 private def finish (cfg : PAScrapeConfig) (s : ScrapeState) : PAScrapeResult := Id.run do

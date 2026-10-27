@@ -23,6 +23,11 @@ register_option flex.automation.synthTimeout : Nat := {
   descr := "Seconds per SMT synthesis batch; zero disables external synthesis."
 }
 
+register_option flex.automation.functionSmt : Bool := {
+  defValue := false
+  descr := "Try an additional CVC5 synthesis batch for function-valued inputs."
+}
+
 register_option flex.automation.structureSteps : Nat := {
   defValue := 10000
   descr := "Maximum structural steps in residual discharge."
@@ -30,12 +35,15 @@ register_option flex.automation.structureSteps : Nat := {
 
 namespace Flex.Automation
 
-/-- Expose a named specification before applying the native discharger. -/
+/-- Expose named quantified specifications without unfolding arithmetic relations. -/
 private def exposeTarget : TacticM Unit := withMainContext do
   let goal ← getMainGoal
   let target ← goal.getType
+  let .const name _ := target.getAppFn | throwError "expected a named specification"
+  let .defnInfo _ ← getConstInfo name | throwError "expected a definition"
   let exposed ← withTransparency .default <| whnf target
-  if exposed == target then throwError "target is already exposed"
+  unless exposed.isForall do throwError "specification is not quantified"
+  if ← isProp exposed.bindingDomain! then throwError "expected a data quantifier"
   replaceMainGoal [← goal.replaceTargetDefEq exposed]
 
 private def generalizeRecordFields : TacticM Unit := withMainContext do
@@ -99,6 +107,10 @@ private def attempt (tactic : TSyntax `tactic) (target : Expr)
 /-- Simplify conjunctions, then try reconstructed SMT and the native portfolio.
 Every accepted proof is kernel checked and uses only Lean's standard axioms. -/
 def proofOracle : Flex.CHC.ProofOracle := fun target => do
+  let quickLimit := min 500 (flex.automation.proofHeartbeats.get (← getOptions))
+  if let some proof ← withOptions (·.set `flex.automation.proofHeartbeats quickLimit) <|
+      attempt (← `(tactic| (run_tac exposeTarget) <;> intros <;> grind)) target
+        (budgetLeaves := 1) then return some proof
   if target.isAppOfArity ``And 2 then
     if let some proof ← attempt
         (← `(tactic| (try simp_all (config := { maxSteps := 10000 })) <;> grind))
@@ -160,6 +172,16 @@ def synthOracle (checkBudget : TermElabM Unit := pure ()) : PASynthOracle := fun
       {(retry.filter (· == .valid)).size} valid, {(← IO.monoMsNow) - start}ms"
     for i in [:pending.size] do
       if let .valid := retry[i]! then results := results.set! pending[i]! .valid
+  let pending := (Array.range results.size).filter fun i =>
+    match results[i]! with | .unknown _ => true | _ => false
+  if flex.automation.functionSmt.get (← getOptions) && timeout != 0 && !pending.isEmpty then
+    let start ← IO.monoMsNow
+    let retry ← Flex.PA.functionSmtOracle (timeout * 1000) (pending.map (targets[·]!))
+    checkBudget
+    trace[flex.synthesis] "function SMT: {pending.size} queries, \
+      {(retry.filter (· == .valid)).size} valid, {(← IO.monoMsNow) - start}ms"
+    for i in [:pending.size] do
+      if let .valid := retry[i]! then results := results.set! pending[i]! .valid
   let pending := results.countP fun result => match result with | .unknown _ => true | _ => false
   let start ← IO.monoMsNow
   let answers ← targets.zipWithM (fun target result => do
@@ -169,7 +191,6 @@ def synthOracle (checkBudget : TermElabM Unit := pure ()) : PASynthOracle := fun
     | .unknown reason =>
       trace[flex.oracle] "SMT synthesis inconclusive: {reason}"
       for tactic in #[← `(tactic| omega), ← `(tactic| grind),
-          ← `(tactic| (run_tac exposeTarget) <;> intros <;> grind),
           ← `(tactic| constructor <;> grind),
           ← `(tactic| (simp (config := { maxSteps := 10000, failIfUnchanged := true })
             [List.eq_replicate_iff] at *) <;> intros <;> grind)] do

@@ -2,6 +2,7 @@ import Flex.PA.Check
 import Flex.CHC.Export
 import Flex.CHC.Process
 import Smt
+import Mathlib.Tactic.Simproc.ExistsAndEq
 
 namespace Flex.PA
 
@@ -15,22 +16,22 @@ private partial def withSharedPrefix (queries : Array Expr)
     (k : Array Expr → Array Expr → Array Expr → MetaM α) (scalars : Bool := true) : MetaM α :=
   go queries #[] #[]
 where
-  go (queries variables premises : Array Expr) : MetaM α := do
+  go (queries inputs premises : Array Expr) : MetaM α := do
     let queries ← queries.mapM CHC.Prepare.expose
     let some (Expr.forallE name domain _ bi) := queries[0]?
-      | k variables premises queries
+      | k inputs premises queries
     unless queries.all (fun e => e.isForall && e.bindingDomain! == domain) do
-      return ← k variables premises queries
+      return ← k inputs premises queries
     if ← isProp domain then
       if queries.any (fun e => e.bindingBody!.hasLooseBVar 0) then
         throwError "PA SMT: proof-dependent premises are unsupported"
       withLocalDecl name bi domain fun proof =>
-        go (queries.map (·.bindingBody!.instantiate1 proof)) variables (premises.push domain)
+        go (queries.map (·.bindingBody!.instantiate1 proof)) inputs (premises.push domain)
     else
       if scalars then discard <| CHC.Fragment.valueSort domain
       let domain ← if scalars then pure domain else whnf domain
       withLocalDecl name bi domain fun input =>
-        go (queries.map (·.bindingBody!.instantiate1 input)) (variables.push input) premises
+        go (queries.map (·.bindingBody!.instantiate1 input)) (inputs.push input) premises
 
 private structure Batch where
   script : String
@@ -58,7 +59,7 @@ private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch :=
         if error.isInterrupt then throw error
         -- A local value of an unsupported type may witness an empty type.
         omittedAssumptions := true
-  withSharedPrefix queries fun variables premises conclusions => do
+  withSharedPrefix queries fun inputs premises conclusions => do
     let mut omittedAssumptions := omittedAssumptions
     let mut results := unknowns queries.size "unsupported query"
     let mut supported := #[]
@@ -70,20 +71,20 @@ private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch :=
       catch error =>
         if error.isInterrupt then throw error
         results := results.set! i (.unknown (← error.toMessageData.toString))
-    let mut variables := variables
+    let mut inputs := inputs
     for expression in premises ++ supported.map (·.2) ++ assumptions do
       for id in (collectFVars {} expression).fvarIds do
         let input := mkFVar id
-        unless variables.contains input do variables := variables.push input
+        unless inputs.contains input do inputs := inputs.push input
     let mut names : Std.HashMap FVarId String := {}
     let mut script := s!"(set-option :print-success false)\n(set-option :produce-models false)\n(set-option :produce-proofs false)\n(set-option :produce-unsat-cores false)\n(set-option :timeout {timeoutMs})\n(set-logic ALL)\n"
-    for input in variables, i in [:variables.size] do
+    for input in inputs, i in [:inputs.size] do
       let sort ← CHC.Fragment.valueSort (← inferType input)
       let name := s!"pa_{i}"
       names := names.insert input.fvarId! name
       let sort := match sort with | .int => "Int" | .bool => "Bool"
       script := script ++ s!"(declare-const {name} {sort})\n"
-    let symbols := variables.map fun input => names[input.fvarId!]!
+    let symbols := inputs.map fun input => names[input.fvarId!]!
     -- The context and symbol mapping stay fixed for this batch. Commit only
     -- checked translations, so a rejected candidate cannot contaminate the cache.
     let translation ← IO.mkRef ({ uniqueFVarNames := names } : Smt.TranslationM.State)
@@ -128,6 +129,25 @@ private def parseResponses (output : String) (count : Nat) : Except String (Arra
     | "unknown" => pure (.unknown "solver returned unknown")
     | _ => throw s!"unexpected SMT response: {line}"
 
+/-- On timeout, preserve complete responses and leave unfinished queries unknown. -/
+def decodeSmtResponses (response : CHC.Process.Result) (count : Nat)
+    : Except String (Array PASynthResult) := do
+  match response.completion with
+  | .exited 0 => parseResponses response.stdout count
+  | .timedOut =>
+    unless response.stderr.trimAscii.isEmpty do throw "SMT timeout with diagnostics"
+    let lines := response.stdout.splitOn "\n"
+    let tail := (lines.getLast?.getD "").trimAscii.toString
+    unless ["sat", "unsat", "unknown"].any (·.startsWith tail) do
+      throw "malformed incomplete SMT response"
+    let complete := lines.dropLast |>.map (·.trimAscii.toString) |>.filter (!·.isEmpty)
+    if complete.length > count || (complete.length == count && !tail.isEmpty) then
+      throw "extra SMT responses"
+    let answers ← parseResponses ("\n".intercalate complete) complete.length
+    return answers ++ unknowns (count - answers.size) "SMT batch timed out"
+  | .spawnError message | .ioError message => throw message
+  | .exited code => throw s!"SMT process exited with code {code}"
+
 /-- Check a batch using one bounded Z3 process. Results guide synthesis only;
 the selected predicates still require independent Lean certification. -/
 def smtOracle (timeoutMs : Nat := 2000) : PASynthOracle := fun queries => do
@@ -145,11 +165,7 @@ def smtOracle (timeoutMs : Nat := 2000) : PASynthOracle := fun queries => do
       let response ← CHC.Process.run {
         executable := "z3", args := #["-in", "-smt2"], timeoutMs } batch.script
       Core.checkInterrupted
-      let answers := match response.completion with
-        | .exited 0 => parseResponses response.stdout batch.indices.size
-        | .timedOut => .error "SMT batch timed out"
-        | .spawnError message | .ioError message => .error message
-        | .exited code => .error s!"SMT process exited with code {code}"
+      let answers := decodeSmtResponses response batch.indices.size
       let mut results := batch.results
       match answers with
       | .ok answers =>
@@ -219,13 +235,52 @@ private partial def conjuncts (e : Expr) : Array Expr :=
   if e.isAppOfArity ``And 2 then conjuncts e.appFn!.appArg! ++ conjuncts e.appArg!
   else #[e]
 
-/-- Simplify shared assumptions once and name each conclusion with a Boolean flag.
-The ordinary lean-smt translator supplies declarations for functions and datatypes. -/
-private def buildRichBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch := do
+/-- Normalize function signatures without expanding the functions themselves. -/
+private partial def firstOrderType? (type : Expr) : MetaM (Option Expr) := do
+  let type ← whnf type
+  if type.isConstOf ``Int || type.isConstOf ``Bool || type == mkSort .zero then
+    return some type
+  if let .forallE _ domain body _ := type then
+    if body.hasLooseBVars then return none
+    let some domain ← firstOrderType? domain | return none
+    let some body ← firstOrderType? body | return none
+    return some (← mkArrow domain body)
+  return none
+
+/-- Share fixed first-order functions as uninterpreted inputs with normalized types. -/
+private def withNamedFunctions (expressions : Array Expr)
+    (k : Array Expr → MetaM Batch) : MetaM Batch := do
+  let mut constants : NameSet := {}
+  let mut translation : Smt.TranslationM.State := {}
+  for expression in expressions do
+    try
+      let ((_, names, _), next) ← (Smt.Translator.translateExpr expression).run translation
+      constants := constants ∪ names
+      translation := next
+    catch error =>
+      if error.isInterrupt then throw error
+  let mut originals := #[]
+  let mut declarations := #[]
+  for name in constants.toArray do
+    let info ← getConstInfo name
+    unless info.levelParams.isEmpty do continue
+    let some type ← firstOrderType? info.type | continue
+    originals := originals.push (Lean.mkConst name)
+    declarations := declarations.push (name, type)
+  withLocalDeclsDND declarations fun inputs => do
+    let replacements := (originals.zip inputs).foldl (init := ({} : ExprMap Expr)) fun m (e, input) =>
+      m.insert e input
+    k (expressions.map fun e => e.replace replacements.get?)
+
+/-- Simplify shared assumptions once and expose record fields. -/
+private def withSimplifiedBatch (compact : Bool) (queries : Array Expr)
+    (k : Array Expr → Array Expr → MetaM Batch) : MetaM Batch := do
   withSharedPrefix queries (fun _ premises conclusions => do
     let context ← Simp.mkContext { maxSteps := 10000, failIfUnchanged := false }
       #[← getSimpTheorems] (← getSimpCongrTheorems)
-    let simprocs := #[← Simp.getSimprocs]
+    let mut simprocs := #[← Simp.getSimprocs]
+    if compact then
+      simprocs := simprocs.push (← ({} : Simp.Simprocs).add ``ExistsAndEq.existsAndEq true)
     let simplify (e : Expr) : MetaM Expr := do
       unfoldAbbreviations (← Meta.simp (← instantiateMVars e) context simprocs).1.expr
     let mut assumptions := premises
@@ -238,6 +293,25 @@ private def buildRichBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batc
     assumptions := assumptions.flatMap conjuncts
     let conclusions ← conclusions.mapM simplify
     withRecordFields (assumptions ++ conclusions) fun expressions => do
+    let assumptions := expressions.extract 0 assumptions.size
+    let conclusions := expressions.extract assumptions.size expressions.size
+    k assumptions conclusions)
+    (scalars := false)
+
+/-- lean-smt prints function sorts infix; SMT-LIB higher-order sorts use prefix arrows. -/
+private partial def solverSexp : Sexp → Sexp
+  | .atom s => .atom s
+  | .expr xs =>
+    let xs := xs.map solverSexp
+    if xs.length >= 3 && xs.length % 2 == 1 &&
+        xs.zipIdx.all (fun (x, i) => i % 2 == 0 || x == .atom "->") then
+      .expr (.atom "->" :: (xs.zipIdx.filterMap fun (x, i) => if i % 2 == 0 then some x else none))
+    else .expr xs
+private def buildRichBatch (queries : Array Expr) (timeoutMs : Nat)
+    (functions : Bool := false) : MetaM Batch :=
+  withSimplifiedBatch functions queries fun assumptions conclusions => do
+    let prepare := if functions then withNamedFunctions else fun es k => k es
+    prepare (assumptions ++ conclusions) fun expressions => do
     let assumptions := expressions.extract 0 assumptions.size
     let conclusions := expressions.extract assumptions.size expressions.size
     let flags := conclusions.mapIdx fun i _ => (Name.mkSimple s!"pa_answer_{i}", mkSort .zero)
@@ -274,19 +348,56 @@ private def buildRichBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batc
         let (_, commands) ← StateT.run
           (graph.graph.orderedDfs roots.toList (Smt.Translate.Query.emitVertex graph.commands)) []
         let mut script := s!"(set-option :print-success false)\n(set-option :produce-proofs false)\n(set-option :timeout {timeoutMs})\n(set-logic ALL)\n"
-        script := script ++ Smt.Translate.Command.cmdsAsQuery commands.reverse ++ "\n"
+        if functions then
+          script := s!"(set-option :print-success false)\n(set-option :produce-proofs false)\n(set-option :tlimit-per {timeoutMs})\n(set-logic HO_ALL)\n"
+          script := script ++ Sexp.serializeMany (commands.reverse.map (solverSexp ∘ ToSexp.toSexp)) ++ "\n"
+        else
+          script := script ++ Smt.Translate.Command.cmdsAsQuery commands.reverse ++ "\n"
         for index in indices do
           let name := Smt.Term.quoteSymbol names[flags[index]!.fvarId!]!
           script := script ++ s!"(push 1)\n(assert (not {name}))\n(check-sat)\n(pop 1)\n"
         return {
           script := script ++ "(exit)\n"
           indices, results
-          omittedAssumptions := true })
-    (scalars := false)
+          omittedAssumptions := true }
+
+/-- Use the existing CVC5 binding; each batch owns its solver and deadline. -/
+private def runFunctionBatch (script : String) (count timeoutMs : Nat)
+    : MetaM (Except String (Array PASynthResult)) := do
+  let deadline := (← IO.monoMsNow) + timeoutMs
+  let result ← cvc5.run (m := MetaM) do
+    let manager ← cvc5.TermManager.new
+    let solver ← cvc5.Solver.new manager
+    solver.setOption "incremental" "true"
+    let parser ← cvc5.InputParser.new solver
+    let symbols ← parser.getSymbolManager
+    parser.setStringInput script .SMT_LIB_2_6
+    let mut answers := #[]
+    while true do
+      Core.checkInterrupted
+      let now ← IO.monoMsNow
+      if now >= deadline then break
+      let command ← parser.nextCommand
+      if command.isNull then break
+      let checking := command.getCommandName == "check-sat"
+      if checking then
+        let now ← IO.monoMsNow
+        if now >= deadline then break
+        solver.setOption "tlimit-per" (toString (deadline - now))
+      let response := (← command.invoke solver symbols).trimAscii.toString
+      if checking || !response.isEmpty then answers := answers.push response
+    return answers
+  match result with
+  | .error error => return .error error.toString
+  | .ok answers =>
+    if answers.size > count then return .error "extra CVC5 responses"
+    return do
+      let parsed ← parseResponses ("\n".intercalate answers.toList) answers.size
+      return parsed ++ unknowns (count - parsed.size) "CVC5 batch timed out"
 
 /-- A bounded, decision-only retry after simplification. SAT remains inconclusive:
 unfolding may leave fixed Lean functions uninterpreted in the SMT approximation. -/
-def simplifiedSmtOracle (timeoutMs : Nat := 2000) : PASynthOracle := fun queries => do
+private def richSmtOracle (timeoutMs : Nat) (functions : Bool) : PASynthOracle := fun queries => do
   if queries.isEmpty then return #[]
   if timeoutMs == 0 then return unknowns queries.size "SMT timeout must be positive"
   withNewMCtxDepth do
@@ -295,17 +406,16 @@ def simplifiedSmtOracle (timeoutMs : Nat := 2000) : PASynthOracle := fun queries
       let queries ← queries.mapM fun query => do zetaReduce (← instantiateMVars query)
       if queries.any (fun q => q.hasMVar || q.hasLooseBVars) then
         return unknowns queries.size "unresolved metavariable or loose binder"
-      let batch ← buildRichBatch queries timeoutMs
+      let batch ← buildRichBatch queries timeoutMs functions
       if batch.indices.isEmpty then return batch.results
       Core.checkInterrupted
-      let response ← CHC.Process.run {
-        executable := "z3", args := #["-in", "-smt2"], timeoutMs } batch.script
+      let answers ← if functions then
+        runFunctionBatch batch.script batch.indices.size timeoutMs
+      else do
+        let response ← CHC.Process.run {
+          executable := "z3", args := #["-in", "-smt2"], timeoutMs } batch.script
+        pure (decodeSmtResponses response batch.indices.size)
       Core.checkInterrupted
-      let answers := match response.completion with
-        | .exited 0 => parseResponses response.stdout batch.indices.size
-        | .timedOut => .error "simplified SMT batch timed out"
-        | .spawnError message | .ioError message => .error message
-        | .exited code => .error s!"simplified SMT exited with code {code}: {response.stdout} {response.stderr}"
       let mut results := batch.results
       match answers with
       | .ok answers =>
@@ -320,5 +430,14 @@ def simplifiedSmtOracle (timeoutMs : Nat := 2000) : PASynthOracle := fun queries
     finally
       set saved.elab
       CHC.restoreMetaState saved.meta
+
+
+/-- Simplify and translate a batch with lean-smt's ordinary first-order encoding. -/
+def simplifiedSmtOracle (timeoutMs : Nat := 2000) : PASynthOracle :=
+  richSmtOracle timeoutMs false
+
+/-- Normalize fixed function signatures and use CVC5's higher-order input syntax. -/
+def functionSmtOracle (timeoutMs : Nat := 2000) : PASynthOracle :=
+  richSmtOracle timeoutMs true
 
 end Flex.PA

@@ -217,6 +217,87 @@ def slotCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 2
             if result.size >= maxCandidates then return result
   return result
 
+private def matchingSlots (value : Expr) (arguments : Array Expr) : MetaM (Array Expr) := do
+  let type ← inferType value
+  if type.hasMVar || (← isProp type) || (← whnf type).isSort then return #[]
+  arguments.filterM fun arg => do
+    if arg.hasMVar then return false
+    let argType ← inferType arg
+    if argType.hasMVar then return false
+    return ← isDefEq type argType
+
+private def compoundVariants (property : Expr) (arguments : Array Expr) (limit : Nat)
+    : MetaM (Array Expr) := do
+  if property.hasMVar || property.hasLooseBVars || !(← isProp property) then return #[]
+  let fn := property.getAppFn
+  let .const name _ := fn | return #[]
+  let .defnInfo _ ← getConstInfo name | return #[]
+  let args := property.getAppArgs
+  let mut bases := #[]
+  let mut positions := #[]
+  let mut fuel := 32 * limit
+  for i in [:args.size] do
+    let arg := args[i]!
+    if arguments.contains arg || !arg.hasFVar then continue
+    if ← numeric (← inferType arg) then
+      positions := positions.push i
+    else
+      if bases.size >= 4 then continue
+      for slot in ← matchingSlots arg arguments do
+        unless (arg.find? (· == slot)).isSome do continue
+        if fuel == 0 then return bases.extract 0 limit
+        fuel := fuel - 1
+        let base := mkAppN fn (args.set! i slot)
+        if !bases.contains base && (← checked base) then bases := bases.push base
+        if bases.size >= 4 then break
+  if bases.isEmpty then
+    if positions.isEmpty then return #[]
+    bases := #[property]
+  let mut result := bases.filter (· != property)
+  for base in bases do
+    let baseArgs := base.getAppArgs
+    for i in positions do
+      let original := args[i]!
+      let slots ← matchingSlots original arguments
+      -- Try new loop parameters first; retain source parameters in companion positions.
+      let fresh := slots.filter fun slot => (property.find? (· == slot)).isNone
+      let rest := slots.filter (!fresh.contains ·)
+      let support := slots.filter fun slot => (original.find? (· == slot)).isSome
+      let companions := support ++ slots.filter (!support.contains ·)
+      for slot in fresh ++ rest do
+        if fuel == 0 then return result.extract 0 limit
+        fuel := fuel - 1
+        let changed := baseArgs.set! i slot
+        let candidate := mkAppN fn changed
+        if !result.contains candidate && (← checked candidate) then result := result.push candidate
+        if result.size >= limit then return result.extract 0 limit
+        for j in [:args.size] do
+          if j == i || !(← numeric (← inferType args[j]!)) then continue
+          for companion in companions do
+            if companion == changed[j]! then continue
+            if fuel == 0 then return result.extract 0 limit
+            fuel := fuel - 1
+            let candidate := mkAppN fn (changed.set! j companion)
+            if !result.contains candidate && (← checked candidate) then result := result.push candidate
+            if result.size >= limit then return result.extract 0 limit
+  return result.extract 0 limit
+
+/-- Abstract compound source arguments, then vary at most two numeric positions. -/
+def compoundCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 24)
+    : MetaM (Array Expr) := do
+  if maxCandidates == 0 then return #[]
+  let mut families := #[]
+  for property in properties.extract 0 32 do
+    let candidates ← compoundVariants property arguments maxCandidates
+    unless candidates.isEmpty do families := families.push candidates
+  let mut result := #[]
+  for i in [:maxCandidates] do
+    for family in families do
+      if let some candidate := family[i]? then
+        unless result.contains candidate do result := result.push candidate
+        if result.size >= maxCandidates then return result
+  return result
+
 private def listType? (type : Expr) : MetaM (Option Expr) := do
   let type ← whnf type
   return if type.isAppOfArity ``List 1 then some type.appArg! else none
@@ -281,6 +362,37 @@ def listCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 2
         if initial == remaining then continue
         let difference ← mkAppM ``Int.sub #[initial, remaining]
         let candidate ← mkEq length difference
+        if ← checked candidate then
+          unless result.contains candidate do result := result.push candidate
+          if result.size >= maxCandidates then return result
+  return result
+
+/-- Restrict a homogeneous-list specification to each candidate loop prefix. -/
+def listPrefixCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 16)
+    : MetaM (Array Expr) := do
+  if maxCandidates == 0 then return #[]
+  let repeated ← repeatedElements properties
+  if repeated.isEmpty then return #[]
+  let bounds ← arguments.filterM fun arg => do
+    if arg.hasMVar || arg.hasLooseBVars then return false
+    let type ← inferType arg
+    return !type.hasMVar && (← numeric type)
+  let mut result := #[]
+  for list in arguments do
+    if list.hasMVar || list.hasLooseBVars then continue
+    let some elementType ← listType? (← inferType list) | continue
+    if elementType.hasMVar then continue
+    for (type, item) in repeated do
+      if type.hasMVar || item.hasMVar then continue
+      unless ← isDefEq type elementType do continue
+      for bound in bounds do
+        let candidate ← withLocalDeclD `index (mkConst ``Nat) fun index => do
+          let upper ← if (← whnf (← inferType bound)).isConstOf ``Int then
+              mkAppM ``LT.lt #[← mkAppM ``Int.ofNat #[index], bound]
+            else mkAppM ``LT.lt #[index, bound]
+          let value ← mkAppM ``GetElem?.getElem? #[list, index]
+          let equality ← mkEq value (← mkAppM ``Option.some #[item])
+          mkForallFVars #[index] (← mkArrow upper equality)
         if ← checked candidate then
           unless result.contains candidate do result := result.push candidate
           if result.size >= maxCandidates then return result

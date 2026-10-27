@@ -119,6 +119,28 @@ run_elab do
     unless result.all (fun | .unknown _ => true | _ => false) do
       throwError "unsupported or proof-dependent quantifier was accepted"
 
+run_elab do
+  let decode (output : String) (count : Nat) (stderr := "") :=
+    Flex.PA.decodeSmtResponses { completion := .timedOut, stdout := output, stderr } count
+  let .ok answers := decode "unsat\nsat\nunknown\nun" 5
+    | throwError "rejected complete SMT response prefix"
+  unless answers == #[.valid, .invalid, .unknown "solver returned unknown",
+      .unknown "SMT batch timed out", .unknown "SMT batch timed out"] do
+    throwError "timeout response indices changed"
+  let .ok answers := decode "unsat" 1 | throwError "rejected incomplete response"
+  unless answers == #[.unknown "SMT batch timed out"] do
+    throwError "accepted a response without its newline"
+  unless (decode "unsat\n" 1).toOption == some #[.valid] do
+    throwError "lost a completed batch at timeout"
+  for (output, count) in #[("unsat\n(error \"bad\")\n", 2), ("unsat\n(error", 2),
+      ("unsat\nmalformed", 2), ("unsat\nsat\n", 1), ("unsat\nun", 1)] do
+    if (decode output count).isOk then throwError "accepted malformed or extra SMT output"
+  if (decode "unsat\n" 1 "error").isOk then throwError "ignored solver diagnostics"
+  if (Flex.PA.decodeSmtResponses { completion := .exited 0, stdout := "unsat\n" } 2).isOk then
+    throwError "accepted missing responses from a completed solver"
+  if (Flex.PA.decodeSmtResponses { completion := .exited 1, stdout := "unsat\n" } 1).isOk then
+    throwError "accepted responses from a failed solver"
+
 end PABatchTests
 
 namespace PASimplifiedSmtTests
@@ -866,4 +888,61 @@ run_elab do
     unless candidates.isEmpty do throwError "list candidates accepted an unresolved element type"
     if ← type.mvarId!.isAssigned then throwError "list scraping assigned the caller's type"
 
+private def region (a : Int → Int) (l m r p : Int) : Prop :=
+  ∀ x, l ≤ x → x < m → a x ≤ a p ∧ m ≤ r
+
+run_elab do
+  let source ← elabTerm (← `(fun (i j : Int) (a : Int → Int) (lo hi : Int) =>
+    region (update a i (a hi)) lo i (hi + 1) i)) none
+  synthesizeSyntheticMVarsNoPostponing
+  lambdaTelescope (← instantiateMVars source) fun xs property => do
+    let candidates ← PAScrape.Structured.compoundCandidates #[property] xs
+    let expected := mkAppN (mkConst ``region) #[xs[2]!, xs[3]!, xs[0]!, xs[1]!, xs[4]!]
+    unless candidates.contains expected do throwError "missing compound-argument candidate"
+    for q in candidates do
+      check q
+      if q.hasMVar || q.hasLooseBVars then throwError "unresolved compound candidate"
+      unless (collectFVars {} q).fvarIds.all (fun id => xs.contains (mkFVar id)) do
+        throwError "compound candidate retained a temporary binder"
+    unless (← PAScrape.Structured.compoundCandidates #[property] xs 0).isEmpty &&
+        (← PAScrape.Structured.compoundCandidates #[property] xs 1).size == 1 do
+      throwError "compound candidate limit ignored"
+    unless (← PAScrape.Structured.compoundCandidates #[property, property] xs) == candidates do
+      throwError "duplicate source changed compound candidates"
+    let r ← mkFreshExprMVar (some (← mkForallFVars xs (mkSort .zero)))
+    let body ← mkForallFVars xs (← mkArrow (mkAppN r xs) property)
+    let old ← scrapePAQualifiersWithReport body
+      { mode := .deep, maxCompoundCandidatesPerKappa := 0 }
+    let new ← scrapePAQualifiersWithReport body
+      { mode := .deep, maxCompoundCandidatesPerKappa := 24 }
+    unless !old.anchored.isEmpty && new.anchored.any (·.origin == "compound arguments") do
+      throwError "missing ordinary or supplemental anchor"
+    unless old.qualifiers == new.qualifiers do throwError "compound pass changed ordinary templates"
+    for candidate in old.anchored do
+      unless new.anchored.any (fun q => q.kvar == candidate.kvar &&
+          q.slots == candidate.slots && q.qualifier == candidate.qualifier) do
+        throwError "compound pass displaced an ordinary anchor"
+
 end PAStructuredTests
+
+namespace PAFunctionBatchTests
+open Lean Meta Elab Term
+private abbrev Mapping (α β : Type) [Inhabited β] := α → β
+private def related (a : Mapping Int Int) (i : Int) : Prop := a i ≤ a (i + 1)
+run_elab do
+  let stxs ← pure #[
+    ← `(∀ (a b : Mapping Int Int) (i : Int), a = b → related a i → related b i),
+    ← `(∀ (a b : Mapping Int Int) (i : Int), a = b → related a i → False),
+    ← `(∀ (a b : Mapping Int Int) (i : Int), a = b → related a i → a i = b i)]
+  let queries ← stxs.mapM (fun stx => elabTerm stx none)
+  synthesizeSyntheticMVarsNoPostponing
+  let queries ← queries.mapM instantiateMVars
+  let results ← Flex.PA.functionSmtOracle 2000 queries
+  unless results.size == 3 && results[0]! == .valid && results[2]! == .valid do
+    throwError "function-valued batch lost a valid candidate: {repr results}"
+  if results[1]! == .valid then throwError "function batch mixed candidate assertions"
+  let x ← mkFreshExprMVar (some (mkConst ``Int))
+  let result ← Flex.PA.functionSmtOracle 2000 #[← mkEq x (mkIntLit 0)]
+  if result[0]! == .valid || (← x.mvarId!.isAssigned) then
+    throwError "function batch accepted or assigned an unresolved input"
+end PAFunctionBatchTests

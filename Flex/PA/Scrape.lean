@@ -716,7 +716,8 @@ private def observationPredicates (cfg : PAScrapeConfig) (mode : ObservationMode
       let families := #[
         ("array prefix", ← Structured.prefixCandidates props arguments budget),
         ("semantic arguments", ← Structured.slotCandidates found.predicates arguments budget),
-        ("list structure", ← Structured.listCandidates props arguments budget)]
+        ("list structure", ← Structured.listCandidates props arguments budget),
+        ("list prefix", ← Structured.listPrefixCandidates props arguments budget)]
       for i in [:families.foldl (fun n (_, candidates) => max n candidates.size) 0] do
         for (origin, candidates) in families do
           if let some candidate := candidates[i]? then

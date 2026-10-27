@@ -946,3 +946,46 @@ run_elab do
   if result[0]! == .valid || (← x.mvarId!.isAssigned) then
     throwError "function batch accepted or assigned an unresolved input"
 end PAFunctionBatchTests
+
+namespace PAListPrefixTests
+open Lean Meta Elab Term
+
+run_elab do
+  let source ← elabTerm (← `(fun (xs : List Int) (i : Int) (n : Nat) =>
+    xs = List.replicate n 37)) none
+  synthesizeSyntheticMVarsNoPostponing
+  lambdaTelescope (← instantiateMVars source) fun xs property => do
+    let candidates ← PAScrape.Structured.listPrefixCandidates #[property] xs
+    let template ← elabTerm (← `(fun (xs : List Int) (i : Int) =>
+      ∀ j : Nat, (j : Int) < i → xs[j]? = some 37)) none
+    let expected := (mkAppN template #[xs[0]!, xs[1]!]).headBeta
+    unless ← candidates.anyM (fun q => do isDefEq expected q) do
+      throwError "missing Int-indexed prefix: {candidates}"
+    let template ← elabTerm (← `(fun (xs : List Int) (n : Nat) =>
+      ∀ j : Nat, j < n → xs[j]? = some 37)) none
+    let expected := (mkAppN template #[xs[0]!, xs[2]!]).headBeta
+    unless ← candidates.anyM (fun q => do isDefEq expected q) do
+      throwError "missing Nat-indexed prefix"
+    unless (← PAScrape.Structured.listPrefixCandidates #[property] xs 0).isEmpty &&
+        (← PAScrape.Structured.listPrefixCandidates #[property] xs 1).size == 1 do
+      throwError "prefix limit ignored"
+    unless (← PAScrape.Structured.listPrefixCandidates #[property, property] xs) == candidates do
+      throwError "duplicate source changed prefixes"
+    for candidate in candidates do
+      check candidate
+      if candidate.hasMVar || candidate.hasLooseBVars then throwError "unresolved prefix candidate"
+      unless (collectFVars {} candidate).fvarIds.all (fun id => xs.contains (mkFVar id)) do
+        throwError "escaped prefix binder"
+    let bound ← mkFreshExprMVar (some (mkConst ``Int))
+    unless (← PAScrape.Structured.listPrefixCandidates #[property] #[xs[0]!, bound]).isEmpty do
+      throwError "accepted unresolved prefix bound"
+    if ← bound.mvarId!.isAssigned then throwError "assigned caller's prefix bound"
+
+
+set_option flex.automation.smtTimeout 0 in
+example (xs : List (List Int)) (i : Int) (bound : xs.length ≤ i)
+    (h : ∀ j : Nat, (j : Int) < i → xs[j]? = some [4, 9]) :
+    (xs.map List.length).sum = 2 * xs.length := by
+  flex_discharge
+
+end PAListPrefixTests

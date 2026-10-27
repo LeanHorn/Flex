@@ -367,7 +367,7 @@ def listCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 2
           if result.size >= maxCandidates then return result
   return result
 
-/-- Restrict a homogeneous-list specification to each candidate loop prefix. -/
+/-- Propose processed prefixes and preserved lengths from homogeneous-list specifications. -/
 def listPrefixCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 16)
     : MetaM (Array Expr) := do
   if maxCandidates == 0 then return #[]
@@ -377,11 +377,29 @@ def listPrefixCandidates (properties arguments : Array Expr) (maxCandidates : Na
     if arg.hasMVar || arg.hasLooseBVars then return false
     let type ← inferType arg
     return !type.hasMVar && (← numeric type)
-  let mut result := #[]
+  let mut lists := #[]
   for list in arguments do
     if list.hasMVar || list.hasLooseBVars then continue
     let some elementType ← listType? (← inferType list) | continue
     if elementType.hasMVar then continue
+    unless ← repeated.anyM (fun (type, _) => do
+        return !type.hasMVar && (← isDefEq type elementType)) do continue
+    unless lists.any (fun (other, _) => other == list) do
+      lists := lists.push (list, elementType)
+  let mut result := #[]
+  let lengthLimit := max 1 (maxCandidates / 4)
+  for i in [:lists.size] do
+    for j in [:i] do
+      if result.size >= lengthLimit then break
+      let (list, elementType) := lists[i]!
+      let (other, otherType) := lists[j]!
+      unless ← isDefEq elementType otherType do continue
+      let lhs ← mkAppM ``Int.ofNat #[← mkAppM ``List.length #[list]]
+      let rhs ← mkAppM ``Int.ofNat #[← mkAppM ``List.length #[other]]
+      let candidate ← mkEq lhs rhs
+      if ← checked candidate then result := result.push candidate
+      if result.size >= maxCandidates then return result
+  for (list, elementType) in lists do
     for (type, item) in repeated do
       if type.hasMVar || item.hasMVar then continue
       unless ← isDefEq type elementType do continue

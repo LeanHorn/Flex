@@ -104,9 +104,96 @@ private def attempt (tactic : TSyntax `tactic) (target : Expr)
       Core.checkInterrupted
       return none)
 
+private theorem listEqReplicateOfPrefix {α : Type u} (xs : List α) (i : Int) (value : α)
+    (bound : xs.length ≤ i)
+    (h : ∀ j : Nat, (j : Int) < i → xs[j]? = some value) :
+    xs = List.replicate xs.length value := by
+  apply List.ext_getElem?
+  intro j
+  simp only [List.getElem?_replicate]
+  split <;> grind
+
+private def listPrefixShape (e : Expr) : Bool :=
+  let e := e.consumeMData
+  e.isForall && e.bindingDomain!.isConstOf ``Nat &&
+    e.bindingBody!.isForall &&
+    e.bindingBody!.bindingBody!.isAppOfArity ``Eq 3 &&
+    e.bindingBody!.bindingBody!.appArg!.isAppOfArity ``Option.some 2 &&
+    (e.bindingBody!.bindingBody!.getArg! 1).isAppOfArity ``GetElem?.getElem? 7
+
+/-- At a completed homogeneous prefix, expose the corresponding constant list. -/
+private def completeListPrefixes : TacticM Unit := withMainContext do
+  let mut pending := (← getLCtx).getFVars
+  let mut fuel := 128
+  let mut rewritten := false
+  let mut seen : ExprSet := {}
+  while !pending.isEmpty && fuel > 0 do
+    fuel := fuel - 1
+    let proof := pending.back!
+    pending := pending.pop
+    let type := (← instantiateMVars (← inferType proof)).headBeta
+    if type.isAppOfArity ``And 2 then
+      pending := pending.push (← mkAppM ``And.left #[proof])
+        |>.push (← mkAppM ``And.right #[proof])
+    else if listPrefixShape type then
+      let data ← withLocalDeclD `j (mkConst ``Nat) fun j => do
+        let body := type.bindingBody!.instantiate1 j
+        let guard := body.bindingDomain!
+        let args := guard.getAppArgs
+        let index? := if guard.isAppOfArity ``LT.lt 4 && args[0]!.isConstOf ``Int then
+            some (args[2]!, args[3]!)
+          else if guard.isAppOfArity ``Int.lt 2 then some (args[0]!, args[1]!) else none
+        let some (cast, index) := index? | return none
+        unless ← isDefEq cast (mkApp (mkConst ``Int.ofNat) j) do return none
+        let equality := body.bindingBody!
+        if equality.hasLooseBVar 0 then return none
+        let read := equality.getArg! 1
+        let xs := read.getArg! 5
+        let value := equality.appArg!.appArg!
+        if xs.containsFVar j.fvarId! || index.containsFVar j.fvarId! ||
+            value.containsFVar j.fvarId! then return none
+        unless ← isDefEq (read.getArg! 6) j do return none
+        return some (xs, index, value)
+      let some (xs, index, value) := data | continue
+      if seen.contains xs then continue
+      let listType ← whnf (← inferType xs)
+      unless listType.isAppOfArity ``List 1 do continue
+      let length ← mkAppM ``List.length #[xs]
+      let bound ← mkAppM ``LE.le #[mkApp (mkConst ``Int.ofNat) length, index]
+      let some boundProof ← proveLeafWith (← `(tactic|
+        first | omega | (dsimp (config := { maxSteps := 10000 }) at *; omega))) bound
+        | continue
+      let equality ← mkAppM ``listEqReplicateOfPrefix #[xs, index, value, boundProof, proof]
+      try
+        let goal ← getMainGoal
+        let result ← goal.rewrite (← goal.getType) equality
+        unless result.mvarIds.isEmpty do throwError "prefix rewrite created obligations"
+        replaceMainGoal [← goal.replaceTargetEq result.eNew result.eqProof]
+        rewritten := true
+        seen := seen.insert xs
+      catch error =>
+        if error.isInterrupt then throw error
+  unless rewritten do throwError "no completed list prefix"
+
+private def proveCompletedPrefix (target : Expr) : TermElabM (Option Expr) := do
+  let target ← instantiateMVars target
+  let mut found := (target.find? listPrefixShape).isSome
+  unless found do
+    for decl in ← getLCtx do
+      if ((← instantiateMVars decl.type).find? listPrefixShape).isSome then
+        found := true
+        break
+  unless found do return none
+  let limit := min 5000 (flex.automation.proofHeartbeats.get (← getOptions))
+  withOptions (·.set `flex.automation.proofHeartbeats limit) <|
+    attempt (← `(tactic| (run_tac completeListPrefixes) <;>
+      simp (config := { maxSteps := 10000 }) <;> intros <;> grind)) target
+      (budgetLeaves := 1)
+
 /-- Simplify conjunctions, then try reconstructed SMT and the native portfolio.
 Every accepted proof is kernel checked and uses only Lean's standard axioms. -/
 def proofOracle : Flex.CHC.ProofOracle := fun target => do
+  if let some proof ← proveCompletedPrefix target then return some proof
   let quickLimit := min 500 (flex.automation.proofHeartbeats.get (← getOptions))
   if let some proof ← withOptions (·.set `flex.automation.proofHeartbeats quickLimit) <|
       attempt (← `(tactic| (run_tac exposeTarget) <;> intros <;> grind)) target

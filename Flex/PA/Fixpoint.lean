@@ -36,12 +36,12 @@ private def candidateKey? (body : Expr) : Option Expr :=
 
 /-- Instantiate tagged qualifiers, then the supplied extras, deduplicating predicates.
     Per-κ limits bound unique candidates and visited slot assignments. -/
-def buildInitialAssignment (cyclicKs : List KVar) (extraQualifiers : Array Expr := #[])
+def buildInitialAssignment (cutVars : List KVar) (extraQualifiers : Array Expr := #[])
     (maxCandidates : Option Nat := none)
     (maxInstances : Option Nat := none) (anchored : Array PAAnchoredQualifier := #[])
     : MetaM (List (KVar × List (Expr × List Nat))) := do
   let qs := (← getQualifiers) ++ extraQualifiers
-  cyclicKs.mapM fun κ => do
+  cutVars.mapM fun κ => do
     let params := (κ.params.map fun n => Expr.fvar (FVarId.mk n)).toArray
     let mut state : InitialCandidates := {}
     for q in qs do
@@ -156,16 +156,12 @@ partial def solveFixpoint
   observe (.converged count)
   return out
 
-/-- One-shot PA: from cyclic κ list + flat constraint + κ-context, run the full
-    Houdini pipeline and return the final solution Expr per κ.
-
-    Typical caller:  after zap has eliminated acyclic κ's, hand the still-
-    cyclic κ's and the residual flat clauses to this function. -/
+/-- Synthesize predicates for the retained cut variables after Zap elimination. -/
 def predicateAbstraction
     (kctx     : KContext)
-    (cyclicKs : List KVar)
+    (cutVars : List KVar)
     (flatCs   : List Expr)
     : TermElabM (List (KVar × Expr)) := do
-  let initial ← buildInitialAssignment cyclicKs
+  let initial ← buildInitialAssignment cutVars
   let fixed   ← solveFixpoint kctx flatCs initial
   finalizeSolutions fixed

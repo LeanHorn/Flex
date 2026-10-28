@@ -55,7 +55,7 @@ partial def simplifyAndExists (e : Expr) : Expr :=
 -- Certificate helpers.
 
 /-- Replace metavariables in `e` with the expressions mapped by `subst`.
-Zap uses this to restore cyclic predicate locals before rebuilding binders and proofs. -/
+Zap uses this to restore cut predicate locals before rebuilding binders and proofs. -/
 def replaceKMvarsWithFvars (subst : List (MVarId × Expr)) (e : Expr) : Expr :=
   e.replace fun sub =>
     if sub.isMVar then

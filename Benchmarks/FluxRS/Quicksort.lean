@@ -154,7 +154,7 @@ theorem SortQuicksortRange_proof' : SortQuicksortRange := by
   refine ⟨?_, ?_⟩
   · -- base case: ¬ lo₀ < hi₀
     intro hnlt
-    refine ⟨rfl, ?_, ?_⟩
+    refine ⟨?_, ?_⟩
     · simp [sort_is_sorted_between]; grind
     · apply sort_is_perm_id
   · -- recursive case: lo₀ < hi₀

@@ -81,10 +81,10 @@ private def runFix
     let extraQualifiers := scraped.qualifiers
     let body ← reduce rawBody
 
-    let (acyclic, _) ← (exprPartitionKVars body).run kctx
-    unless acyclic.isEmpty do
-      logWarning m!"fix: {acyclic.length} acyclic κ(s) present \
-        ({acyclic.map (·.name)}) — run `zap` first. Treating all κ as cut."
+    let (elimVars, _) ← (exprPartitionKVars body).run kctx
+    unless elimVars.isEmpty do
+      logWarning m!"fix: {elimVars.length} non-cut κ(s) present \
+        ({elimVars.map (·.name)}) — run `zap` first. Treating all κ as cut."
     let flatCs  ← (exprFlat body).run kctx
     let candidateLimit := if scrape.mode == .no && scrape.defs.isEmpty then none
       else some scrape.maxCandidatesPerKappa

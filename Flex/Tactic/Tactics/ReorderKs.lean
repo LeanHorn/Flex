@@ -12,8 +12,8 @@ open Lean Meta Elab Tactic
 
   Given a goal `∃ κ₁ … κₙ, P(κ₁, …, κₙ)`, `reorderKs`:
 
-  1. **Reorders** the ∃-chain (via `rewriteKs`) so the cyclic κ's come first,
-     then the acyclic κ's in topological order (sinks first).
+  1. **Reorders** the ∃-chain (via `rewriteKs`) so the cut κ's come first,
+     then the non-cut κ's in dependency order.
   2. **Explodes** each `∃ κ : T` into a fresh `syntheticOpaque` κ-mvar supplied
      as the `Exists.intro` witness (via `peelExistentialsAndIntro`), leaving the
      constraint body `P(?κ₁, …, ?κₙ)` as the residual.
@@ -21,20 +21,20 @@ open Lean Meta Elab Tactic
      later with `exact (fun z₀ z₁ … => …)`), in the reordered order, with the
      constraint `P` as the final subgoal.
 
-  Resulting goal list (cyclic-first):
+  Resulting goal list (cut-first):
 
-      ⊢ Tᵏ¹  …  ⊢ Tᵏᵐ            -- one synthesis goal per κ (cyclic, then acyclic)
+      ⊢ Tᵏ¹  …  ⊢ Tᵏᵐ            -- one synthesis goal per κ (cut, then non-cut)
       ⊢ P(?κ₁, …, ?κₙ)           -- the constraint, with κ's as scoped mvars
 
   Every κ-mvar lives in the original goal's local context, so the metavariables
-  carry the right scope. Downstream the acyclic κ's are dispatched by `sol`/
-  `zap`, the cyclic κ's by `fixpoint`. -/
+  carry the right scope. Downstream the non-cut κ's are dispatched by `sol`/
+  `zap`, the cut κ's by `fixpoint`. -/
 
 syntax "reorderKs" : tactic
 
 elab_rules : tactic
   | `(tactic| reorderKs) => withMainContext do
-      -- 1. Reorder the ∃-chain: cyclic κ's first, acyclic in topo order.
+      -- 1. Reorder the ∃-chain: cut κ's first, non-cut in topo order.
       --    Best-effort — `rewriteKs` is a no-op (it just logs) when the chain
       --    is already in optimal order, and throws on a non-∃ goal (caught here).
       let _ ← attemptTactic (evalTactic (← `(tactic| rewriteKs)))
@@ -48,7 +48,7 @@ elab_rules : tactic
         return
 
       -- 3. Expose every κ-mvar as its own synthesis subgoal (reordered order:
-      --    cyclic first), with the constraint body as the final subgoal.
+      --    cut first), with the constraint body as the final subgoal.
       setGoals (kvarsInOrder.map (·.mvarId) ++ [bodyGoal])
       logInfo m!"reorderKs: exploded {kvarsInOrder.length} κ \
                  {kvarsInOrder.map (·.name)} into synthesis subgoals + 1 constraint goal"

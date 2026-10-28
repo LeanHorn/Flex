@@ -4,17 +4,17 @@
 With `flex.benchPhases` on, each call to solve_fixpoint prints a consecutive
 pair of lines (with the option off it prints nothing, so pass
 `-Dflex.benchPhases=true` to Lean):
-  [solve_fixpoint] Acyclic κ: [...]
-  [solve_fixpoint] Cyclic κ:  [...]
+  [solve_fixpoint] Elimination κ: [...]
+  [solve_fixpoint] Cut κ: [...]
 
 This module pairs them up so that files with multiple theorems produce one
 classification per invocation rather than one per file.
 
 Classifications:
   none         – both lists empty
-  acyclic_only – only acyclic κs present
-  cyclic_only  – only cyclic κs present
-  both         – acyclic and cyclic κs present
+  acyclic_only – elimination variables only
+  cyclic_only  – cut variables only
+  both         – elimination and cut variables present
 
 Usage:
     python3 scripts/kappa_classify.py < output.txt
@@ -30,7 +30,7 @@ from pathlib import Path
 
 # Matches either line so we can scan in document order.
 EITHER_RE = re.compile(
-    r"\[solve_fixpoint\] (Acyclic|Cyclic) κ:\s*\[([^\]]*)\]"
+    r"\[solve_fixpoint\] (Elimination|Cut|Acyclic|Cyclic) κ:\s*\[([^\]]*)\]"
 )
 
 
@@ -39,39 +39,38 @@ def _items(raw: str) -> list[str]:
 
 
 def parse_invocations(text: str) -> list[tuple[list[str], list[str]]]:
-    """Return one (acyclic, cyclic) pair per solve_fixpoint call.
+    """Return one (elim_vars, cut_vars) pair per solve_fixpoint call.
 
-    Lines are consumed in document order.  Each Acyclic line opens a new
-    invocation; the next Cyclic line closes it.  Unmatched lines are grouped
-    into a final catch-all invocation so nothing is silently dropped.
+    Each Elimination line opens an invocation; the next Cut line closes it.
+    Legacy labels are also accepted. Unmatched lines form partial invocations.
     """
     invocations: list[tuple[list[str], list[str]]] = []
-    pending_acyclic: list[str] | None = None
+    pending_elim: list[str] | None = None
 
     for m in EITHER_RE.finditer(text):
         kind, raw = m.group(1), m.group(2)
-        if kind == "Acyclic":
-            if pending_acyclic is not None:
-                # previous Acyclic had no matching Cyclic
-                invocations.append((pending_acyclic, []))
-            pending_acyclic = _items(raw)
-        else:  # Cyclic
-            acyclic = pending_acyclic if pending_acyclic is not None else []
-            invocations.append((acyclic, _items(raw)))
-            pending_acyclic = None
+        if kind in {"Elimination", "Acyclic"}:
+            if pending_elim is not None:
+                # Previous elimination list had no matching cut list.
+                invocations.append((pending_elim, []))
+            pending_elim = _items(raw)
+        else:  # Cut
+            elim_vars = pending_elim if pending_elim is not None else []
+            invocations.append((elim_vars, _items(raw)))
+            pending_elim = None
 
-    if pending_acyclic is not None:
-        invocations.append((pending_acyclic, []))
+    if pending_elim is not None:
+        invocations.append((pending_elim, []))
 
     return invocations
 
 
-def classify(acyclic: list[str], cyclic: list[str]) -> str:
-    if acyclic and cyclic:
+def classify(elim_vars: list[str], cut_vars: list[str]) -> str:
+    if elim_vars and cut_vars:
         return "both"
-    if acyclic:
+    if elim_vars:
         return "acyclic_only"
-    if cyclic:
+    if cut_vars:
         return "cyclic_only"
     return "none"
 
@@ -88,12 +87,12 @@ def main() -> None:
         return
 
     tally: dict[str, int] = {"none": 0, "acyclic_only": 0, "cyclic_only": 0, "both": 0}
-    for i, (acyclic, cyclic) in enumerate(invocations):
-        label = classify(acyclic, cyclic)
+    for i, (elim_vars, cut_vars) in enumerate(invocations):
+        label = classify(elim_vars, cut_vars)
         tally[label] += 1
         print(f"invocation {i+1:>2} : {label}")
-        print(f"  acyclic kappas : {acyclic or '[]'}")
-        print(f"  cyclic  kappas : {cyclic  or '[]'}")
+        print(f"  elimination kappas : {elim_vars or '[]'}")
+        print(f"  cut kappas         : {cut_vars or '[]'}")
 
     if len(invocations) > 1:
         print("\ntally:")

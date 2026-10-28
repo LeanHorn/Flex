@@ -10,18 +10,18 @@ open Lean Elab Meta Tactic
 
 /-! ## `fixpoint` tactic
 
-  Predicate abstraction for the *cyclic* κ's of a constraint — the second half
-  of the solver, complementing `zap` (which handles the acyclic κ's).
+  Predicate abstraction for retained cut variables, after `zap` eliminates
+  the non-cut predicates.
 
   Per the pipeline contract:
   - **assumes κ's as meta-vars** — peels the head ∃-chain into κ-mvars first, so
     it works directly on `∃ κ, P` goals (e.g. the residual `zap` leaves);
-  - **predicate abstraction** — seeds every cyclic κ with the union of all
+  - **predicate abstraction** — seeds every cut κ with the union of all
     `@[qualif]`-tagged predicates and runs Houdini weakening to a fixpoint;
   - **existentials handled too** — the ∃-peeling means no manual `Exists.intro`
     is needed before calling it.
 
-  Acyclic κ's are *not* solved here — run `zap` first. Any acyclic κ still
+  Non-cut predicates are not solved here — run `zap` first. Any such predicate still
   present (or any κ PA fails to solve) is surfaced as a user goal `⊢ T`. -/
 
 private def fixpointImpl : TacticM Unit := withMainContext do
@@ -33,16 +33,16 @@ private def fixpointImpl : TacticM Unit := withMainContext do
       let bodyGoal ← getMainGoal
       let body ← reduce (← bodyGoal.getType)
 
-      -- Partition κ's; PA only ever solves the cyclic ones.
-      let (acyclic, cyclic) ← (exprPartitionKVars body).run kctx
-      unless acyclic.isEmpty do
-        logInfo m!"[fixpoint] ⚠ acyclic κ present — run `zap` first: \
-                   {acyclic.map (·.name)}"
+      -- PA handles only the retained cut variables.
+      let (elimVars, cutVars) ← (exprPartitionKVars body).run kctx
+      unless elimVars.isEmpty do
+        logInfo m!"[fixpoint] ⚠ non-cut κ present — run `zap` first: \
+                   {elimVars.map (·.name)}"
 
       benchPhase "fixpoint" "pa" do
-        if !cyclic.isEmpty then
+        if !cutVars.isEmpty then
           let flatCs ← (exprFlat body).run kctx
-          let paSols ← predicateAbstraction kctx cyclic flatCs
+          let paSols ← predicateAbstraction kctx cutVars flatCs
           for (κ, sol) in paSols do
             logInfo m!"[fixpoint] PA sol for {κ.name} := {← ppExpr sol}"
             κ.assignSol sol)

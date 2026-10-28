@@ -12,11 +12,8 @@ initialize registerTraceClass `Zap.debug
 
 syntax "zap" : tactic
 
-/-- Build the bridge proof `(∃ κ_cyclic, P') → (∃ κ₁ … κₙ, P)`: ∃-eliminate the
-    cyclic-κ witnesses out of the supplied proof (recursing over `cycRem`), then
-    re-introduce all κ's over the original ∃-chain — acyclic κ's via their
-    solutions `kLams`, cyclic κ's via the eliminated fvars — with `cert`
-    supplying the body proof. -/
+/-- Rebuild the original existential VC from a proof of the residual over cut
+variables, using `kLams` for eliminated predicates and local witnesses for the cut. -/
 partial def destructAndBuild
     (leaf   : LeafHandler)
     (kvars  : Array KVar)
@@ -24,26 +21,26 @@ partial def destructAndBuild
     (bodyWithMvars  : Expr)
     (originalType   : Expr)
     (curWit : Expr) (curWitTy : Expr)
-    (cycRem : List KVar)
-    (cycAcc : Array (KVar × Expr)) :
+    (cutRem : List KVar)
+    (cutAcc : Array (KVar × Expr)) :
     TermElabM Expr := do
-  match cycRem with
+  match cutRem with
   | [] =>
-    -- curWit : c′_with_cyclic_fvars. Use it as h_c' for cert.
-    -- An acyclic κ's solution σ̂ may reference a cyclic κ (e.g. σ̂(k1) mentions
-    -- k0 for the clause `k0 i → k1 i`). Here the cyclic κ is in scope only as
+    -- curWit : c′_with_cut_fvars. Use it as h_c' for cert.
+    -- An elimination κ's solution σ̂ may reference a cut κ (e.g. σ̂(k1) mentions
+    -- k0 for the clause `k0 i → k1 i`). Here the cut κ is in scope only as
     -- its fvar `fv` (bound by the enclosing `Exists.elim`), not as its mvar, so
-    -- substitute cyclic mvars → fvars in BOTH the body and the κ-solutions
-    -- before emitting; otherwise the unassigned cyclic mvar leaks into the
+    -- substitute cut mvars → fvars in BOTH the body and the κ-solutions
+    -- before emitting; otherwise the unassigned cut mvar leaks into the
     -- proof term ("(kernel) declaration has metavariables").
-    let cycSubst := cycAcc.toList.map fun (κ, fv) => (κ.mvarId, fv)
-    let bodyFV := replaceKMvarsWithFvars cycSubst bodyWithMvars
+    let cutSubst := cutAcc.toList.map fun (κ, fv) => (κ.mvarId, fv)
+    let bodyFV := replaceKMvarsWithFvars cutSubst bodyWithMvars
     let kLams  := kLams.map fun (κ, lam) =>
-      (κ, replaceKMvarsWithFvars cycSubst lam)
-    -- Assign acyclic κ-mvars to their (cyclic-fvar-substituted) solutions HERE,
-    -- inside the cyclic fvars' scope, so defeq β-reduces κ-applications in
+      (κ, replaceKMvarsWithFvars cutSubst lam)
+    -- Assign elimination κ-mvars to their (cut-fvar-substituted) solutions HERE,
+    -- inside the cut fvars' scope, so defeq β-reduces κ-applications in
     -- bodyFV to σ̂ over the SAME fvars the residual c′ uses. Doing it at
-    -- analysis time (before `κfv` existed) baked in the cyclic mvar and made
+    -- analysis time (before `κfv` existed) baked in the cut mvar and made
     -- k-use/guard types disagree with `curWit` (`h_c'`).
     for (κ, lam) in kLams do κ.mvarId.assign lam
     let bodyProof ← cert leaf kLams bodyFV curWit [] [] []
@@ -51,8 +48,8 @@ partial def destructAndBuild
     let kLamMap : Std.HashMap MVarId Expr :=
       kLams.foldl (fun m (κ, lam) => m.insert κ.mvarId lam)
         (∅ : Std.HashMap MVarId Expr)
-    let cycFvMap : Std.HashMap MVarId Expr :=
-      cycAcc.foldl (fun m (κ, fv) => m.insert κ.mvarId fv)
+    let cutFvMap : Std.HashMap MVarId Expr :=
+      cutAcc.foldl (fun m (κ, fv) => m.insert κ.mvarId fv)
         (∅ : Std.HashMap MVarId Expr)
     let rec buildIntros (curType : Expr) (idx : Nat) : TermElabM Expr := do
       let curType ← whnf curType
@@ -63,7 +60,7 @@ partial def destructAndBuild
         let witness ← match kLamMap.get? κmvar with
           | some lam => pure lam
           | none =>
-            match cycFvMap.get? κmvar with
+            match cutFvMap.get? κmvar with
             | some fv => pure fv
             | none => throwError "zap: no witness for κ idx={idx}"
         let restType := pred.beta #[witness]
@@ -81,7 +78,7 @@ partial def destructAndBuild
       let nextTy := pred.beta #[κfv]
       withLocalDeclD `h_inner nextTy fun innerFv => do
         let innerProof ← destructAndBuild leaf kvars kLams bodyWithMvars
-          originalType innerFv nextTy rest (cycAcc.push (κ, κfv))
+          originalType innerFv nextTy rest (cutAcc.push (κ, κfv))
         let elimLam ← mkLambdaFVars #[κfv, innerFv] innerProof
         mkAppOptM ``Exists.elim
           #[some α, some pred, none, some curWit, some elimLam]
@@ -122,12 +119,12 @@ def zapImpl (s : LeafStrategy) : TacticM Unit := focus <| withMainContext do
   -- Stash data computed inside the withPeeledExists closure.
   let dataRef : IO.Ref (Option (
       Expr                              -- newGoalType
-    × List (KVar × Expr)                -- kLams (acyclic only)
-    × List KVar                         -- acyclic κs
-    × List KVar                         -- cyclic κs
+    × List (KVar × Expr)                -- kLams (eliminated only)
+    × List KVar                         -- elimination κs
+    × List KVar                         -- cut κs
     × Array KVar                        -- kvars in original ∃-order
     × Expr                              -- bodyWithMvars
-    × Std.HashMap MVarId (Nat × Nat × Nat)  -- prefixInfo (per acyclic κ)
+    × Std.HashMap MVarId (Nat × Nat × Nat)  -- prefixInfo (per elimination κ)
     )) ← IO.mkRef none
 
   withPeeledExists originalType #[] fun binders body => do
@@ -149,18 +146,18 @@ def zapImpl (s : LeafStrategy) : TacticM Unit := focus <| withMainContext do
     let kctxMap := kvars.foldl
       (fun acc k => acc.insert k.mvarId k) (∅ : Std.HashMap MVarId KVar)
     let kctx : KContext := { kvars := kctxMap }
-    let (acyclic, cyclic) ← (exprPartitionKVars bodyWithMvars).run kctx
+    let (elimVars, cutVars) ← (exprPartitionKVars bodyWithMvars).run kctx
 
-    if acyclic.isEmpty then
+    if elimVars.isEmpty then
       dataRef.set none
       return
 
-    -- Acyclic loop: compute kLams + curr + prefixInfo.
+    -- Elimination loop: compute kLams + curr + prefixInfo.
     let (curr, kLams, prefixInfo) ← benchPhase s.label "sol" do
       let mut curr := bodyWithMvars
       let mut kLams : List (KVar × Expr) := []
       let mut prefixInfo : Std.HashMap MVarId (Nat × Nat × Nat) := ∅
-      for κ in acyclic do
+      for κ in elimVars do
         -- LCA-scoped, structure-preserving σ̂ + prefix counts (= "same level
         -- of scope as original zap": prefix binders fold into κ-params,
         -- no extra ∃/guards in the solution).
@@ -173,30 +170,30 @@ def zapImpl (s : LeafStrategy) : TacticM Unit := focus <| withMainContext do
         curr   ← (exprElimStar κ sol curr).run kctx
       pure (curr, kLams, prefixInfo)
 
-    -- (Acyclic κ-mvars are assigned later, inside `destructAndBuild`'s
-    -- cyclic-fvar scope, to their cyclic-fvar-substituted solutions.)
+    -- (Eliminated κ-mvars are assigned later, inside `destructAndBuild`'s
+    -- cut-fvar scope, to their cut-fvar-substituted solutions.)
 
-    -- Substitute cyclic-κ-mvars in curr with original fvars (still in scope).
-    let cyclicSubst : List (MVarId × Expr) := cyclic.map fun κ =>
+    -- Substitute cut-κ-mvars in curr with original fvars (still in scope).
+    let cutSubst : List (MVarId × Expr) := cutVars.map fun κ =>
       let idx := (kvars.findIdx? (·.mvarId == κ.mvarId)).getD 0
       (κ.mvarId, binders[idx]!.2.2)
-    let curr_fv := replaceKMvarsWithFvars cyclicSubst curr
+    let curr_fv := replaceKMvarsWithFvars cutSubst curr
 
-    -- Build new goal type by abstracting cyclic fvars into an ∃-chain.
-    let cyclicBinders : Array (Name × Expr × Expr) :=
-      cyclic.toArray.map fun κ =>
+    -- Build new goal type by abstracting cut fvars into an ∃-chain.
+    let cutBinders : Array (Name × Expr × Expr) :=
+      cutVars.toArray.map fun κ =>
         let idx := (kvars.findIdx? (·.mvarId == κ.mvarId)).getD 0
         binders[idx]!
-    let newGoalType ← mkExistsChain cyclicBinders curr_fv
+    let newGoalType ← mkExistsChain cutBinders curr_fv
 
-    dataRef.set (some (newGoalType, kLams, acyclic, cyclic, kvars,
+    dataRef.set (some (newGoalType, kLams, elimVars, cutVars, kvars,
                        bodyWithMvars, prefixInfo))
 
   -- ─── Back in original lctx ─────────────────────────────────────────
-  let some (newGoalType, kLams, acyclic, cyclic, kvars, bodyWithMvars, prefixInfo)
+  let some (newGoalType, kLams, elimVars, cutVars, kvars, bodyWithMvars, prefixInfo)
     ← dataRef.get
     | do
-        trace[Zap.debug] m!"zap: no acyclic κs to eliminate"
+        trace[Zap.debug] m!"zap: no predicates to eliminate"
         return
 
   -- Create bridge and new-goal mvars in original lctx.
@@ -212,7 +209,7 @@ def zapImpl (s : LeafStrategy) : TacticM Unit := focus <| withMainContext do
   let bridge ← benchPhase s.label "build" <|
     withLocalDeclD `h newGoalType fun h_fv => do
       let inner ← destructAndBuild (s.mkHandler prefixInfo residualOut) kvars kLams
-        bodyWithMvars originalType h_fv newGoalType cyclic #[]
+        bodyWithMvars originalType h_fv newGoalType cutVars #[]
       mkLambdaFVars #[h_fv] inner
 
   bridgeMvar.mvarId!.assign bridge
@@ -233,9 +230,9 @@ def zapImpl (s : LeafStrategy) : TacticM Unit := focus <| withMainContext do
         let cleanM ← mkFreshExprMVar (some clean) (kind := .syntheticOpaque)
         m.assign (← mkAppM ``Iff.mpr #[iff, cleanM])
         return cleanM.mvarId!
-  trace[Zap.debug] m!"zap: eliminated {acyclic.length} acyclic κ \
-            {acyclic.map (·.name)}; new goal is ∃ \
-            {cyclic.length} cyclic κ + body; \
+  trace[Zap.debug] m!"zap: eliminated {elimVars.length} κ \
+            {elimVars.map (·.name)}; new goal is ∃ \
+            {cutVars.length} retained cut κ + body; \
             {residuals.length} residual obligation(s)"
   replaceMainGoal cleanGoals
 

@@ -1,8 +1,9 @@
 import Flex.Tactic.Tactics.Flex
 
-/-! `flex`: `zap`, then `fix` / `spacer` / `eldarica` for the cyclic κs, accepted
-only when automation closes everything left. Spacer requires `z3` on PATH;
-a missing `eld` only makes the Eldarica attempt fail. -/
+/-! `flex`: `zap`, then `fix` / `spacer` / `eldarica` for the cyclic κs. An
+invariant is kept only when automation closes every clause that depends on it.
+Spacer requires `z3` on PATH; a missing `eld` only makes the Eldarica attempt
+fail. Larger examples from the FluxRS benchmarks are in `Demo/FlexBench/`. -/
 namespace FlexDemo
 
 -- Cyclic only: `zap` just normalizes, `fix` finds `0 ≤ i`.
@@ -28,13 +29,12 @@ theorem boundedLoop :
   flex (backends := [spacer])
 
 -- A closer that proves nothing rejects every backend: the goal is left as after `zap`.
-theorem rejected : ∃ κ1 : Int → Prop, ∃ κ2 : Int → Prop,
-      (∀ y : Int, κ1 y → κ1 (y + 1))
-    ∧ (∀ ν : Int, ν = 0 → κ1 ν)
-    ∧ (∀ ν : Int, ν = 0 → κ2 ν)
-    ∧ (∀ z : Int, κ2 z → 0 ≤ z) := by
+-- Here `fix` leaves the safety clause `k i → 0 ≤ i` for the closer.
+theorem rejected :
+    ∃ k : Int → Prop,
+      k 5 ∧ (∀ i, k i → 1 ≤ i → k (i - 1)) ∧ (∀ i, k i → 0 ≤ i) := by
   flex (backends := [fix]) (closer := fail "no")
-  exact ⟨fun y => 0 ≤ y, by grind⟩
+  exact ⟨fun i => 0 ≤ i, by grind⟩
 
 -- An exhausted budget is not an error; the proof continues by hand.
 theorem starved :
@@ -42,6 +42,23 @@ theorem starved :
       k 5 ∧ (∀ i, k i → 1 ≤ i → k (i - 1)) ∧ (∀ i, k i → 0 ≤ i) := by
   flex (backends := [fix]) (config := { heartbeats := 1 })
   exact ⟨fun i => 0 ≤ i, by grind⟩
+
+-- Clauses that mention no κ are split off before the backends run, so one that
+-- automation cannot prove (it needs induction) does not reject the invariant.
+def double : Nat → Nat
+  | 0 => 0
+  | n + 1 => double n + 2
+
+theorem keepsInvariant :
+    ∃ k : Int → Prop,
+      k 5 ∧ (∀ i, k i → 1 ≤ i → k (i - 1)) ∧ (∀ i, k i → 0 ≤ i) ∧
+      (∀ n, double n = n + n) := by
+  flex
+  -- Only `double n = n + n` is left.
+  rename_i n
+  induction n with
+  | zero => rfl
+  | succ n ih => simp only [double, ih]; omega
 
 /-! ### Failure cases
 

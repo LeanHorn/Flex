@@ -1,4 +1,4 @@
-import Flex.Tactic.Tactics.Fusion
+import Flex.Tactic.Tactics.Zap
 import Flex.Tactic.Tactics.Fix
 import Flex.Tactic.Tactics.Eldarica
 

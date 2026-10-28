@@ -84,3 +84,20 @@ Install `z3` and `eld` on `PATH`, or set `flex.spacer.executable` and
 
 `Flex.CHC.solveGoal` provides the underlying library API, including complete
 certification, residual obligations, and rollback on failure.
+
+## `flex`
+
+Import `Flex.Tactic.Tactics.Flex` for `flex`, which runs `zap`, then tries `fix`,
+`spacer`, and `eldarica` on the cyclic predicates. An invariant is kept only if
+`flex_discharge` then proves every clause that mentions a predicate; clauses that
+mention none are left as separate goals. Each step runs under an equal heartbeat
+budget and is rolled back on any failure, so an unsolved goal is left as `zap`
+produced it for manual proof.
+
+```lean4
+flex (backends := [fix, spacer]) (scrape := standard) (closer := grind)
+  (config := { heartbeats := 100000, solverTimeout := 10 })
+```
+
+See [Demo/Flex.lean](Demo/Flex.lean) for successes and recoverable failures, and
+[Demo/FlexBench](Demo/FlexBench) for FluxRS benchmarks.

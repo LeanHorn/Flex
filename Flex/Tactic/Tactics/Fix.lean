@@ -142,6 +142,16 @@ def fixImpl
 
 private declare_config_elab elabScrapeLimits PAScrapeLimits
 
+/-- Parse a `scrape := …` mode; `tactic` names the caller in the error. -/
+def parseScrapeMode (tactic : String) : Option Ident → TacticM PAScrapeMode
+  | none => pure .no
+  | some mode => match mode.getId with
+    | `no => pure .no
+    | `basic => pure .basic
+    | `standard => pure .standard
+    | `deep => pure .deep
+    | _ => throwErrorAt mode "{tactic}: scrape must be `no`, `basic`, `standard`, or `deep`"
+
 /-- Solve existential predicates by PA, retaining only safety-validated candidates.
     Rejected or inconclusive candidates leave the entry goal unchanged.
     Validated candidates may leave unproved residual goals.
@@ -167,12 +177,7 @@ elab_rules : tactic
       $[(scrapeConfig := $limits:term)]? $[(oracle := $fallback:tacticSeq)]? $[(synth := $synth:tacticSeq)]?
       $[(proof := $proof:tacticSeq)]?) => do
     -- Parse scraping options and resolve definition names.
-    let mode ← match mode.map (·.getId) with
-      | none | some `no => pure PAScrapeMode.no
-      | some `basic => pure PAScrapeMode.basic
-      | some `standard => pure PAScrapeMode.standard
-      | some `deep => pure PAScrapeMode.deep
-      | _ => throwError "fix: scrape must be `no`, `basic`, `standard`, or `deep`"
+    let mode ← parseScrapeMode "fix" mode
     let defs ← match defs with
       | none => pure #[]
       | some names => names.getElems.mapM fun name =>

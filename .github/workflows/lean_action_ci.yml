@@ -40,3 +40,5 @@ jobs:
           build-args: "Flex Demo flex"
       - name: Run CLI
         run: .lake/build/bin/flex
+      - name: Check flex checkpoints
+        run: lake --log-level=error lean Tests/Flex.lean -- --error=hasSorry

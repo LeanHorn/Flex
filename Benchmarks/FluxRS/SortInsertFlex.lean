@@ -10,3 +10,9 @@ theorem F.SortInsert_flex : F.SortInsert := by
   fix (scrape := deep)
 
 #print axioms F.SortInsert_flex
+
+/-- The same insertion benchmark through the unified tactic. -/
+theorem F.SortInsert_unified : F.SortInsert := by
+  flex (scrape := deep) (config := { heartbeats := 1500000 })
+
+#print axioms F.SortInsert_unified

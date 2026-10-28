@@ -1,7 +1,7 @@
 import Flex.Tactic.Tactics.RewriteKs
 import Flex.Tactic.Utils
 import Flex.Core
-import Flex.Preprocess.FalsePredicates
+import Flex.Preprocess.Cleanup
 import Flex.Fusion
 import Flex.Zap
 
@@ -95,23 +95,11 @@ structure LeafStrategy where
 def emitStrategy : LeafStrategy := { label := "zap", mkHandler := emitLeaf }
 
 /-- The `zap` pipeline, parameterised by what happens at each κ-head leaf. -/
-def zapImpl (s : LeafStrategy) : TacticM Unit := focus <| withMainContext do
-  -- Remove trivial guards before synthesis and certification inspect the goal.
-  liftMetaTactic fun goal => do
-    return [← goal.change (← whnf (← goal.getType))]
-  evalTactic (← `(tactic| simp (config := { failIfUnchanged := false, maxSteps := 1000000 }) only
-    [true_implies, true_and, and_true]))
-  if (← getGoals).isEmpty then return
-  -- Keep safety clauses explicit instead of synthesizing an error predicate.
-  let goal ← getMainGoal
-  let type ← goal.getType
-  let (normalized, proof) ← Flex.Preprocess.inlineFalsePredicates type
-  if normalized != type then
-    let next ← mkFreshExprMVar normalized (kind := .syntheticOpaque)
-    goal.assign (← mkAppM ``Iff.mpr #[proof, next])
-    replaceMainGoal [next.mvarId!]
-    evalTactic (← `(tactic| simp (config := { failIfUnchanged := false, maxSteps := 1000000 }) only
-      [false_implies, true_implies, true_and, and_true, forall_const]))
+def zapImpl (s : LeafStrategy) (preprocess : Bool := true) : TacticM Unit := focus <| withMainContext do
+  if preprocess then
+    liftMetaTactic fun goal => do
+      let goal ← Flex.Preprocess.prepareGoal goal
+      return if ← goal.isAssignedOrDelayedAssigned then [] else [goal]
   if (← getGoals).isEmpty then return
   let goal ← getMainGoal
   let originalType ← goal.getType

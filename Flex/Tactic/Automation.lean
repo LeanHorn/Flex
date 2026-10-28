@@ -104,6 +104,10 @@ private def attempt (tactic : TSyntax `tactic) (target : Expr)
       Core.checkInterrupted
       return none)
 
+/-- Run a tactic in isolation and accept only kernel-checked evidence. -/
+def proveWith (tactic : TSyntax `tactic) (target : Expr) : TermElabM (Option Expr) :=
+  attempt tactic target
+
 private theorem listEqReplicateOfPrefix {α : Type u} (xs : List α) (i : Int) (value : α)
     (bound : xs.length ≤ i)
     (h : ∀ j : Nat, (j : Int) < i → xs[j]? = some value) :
@@ -292,7 +296,7 @@ def synthOracle (checkBudget : TermElabM Unit := pure ()) : PASynthOracle := fun
 /-- The structural walk used by `solve_fixpoint`, with checked leaf proofs and
 finite progress. Definitions are retried only after their target changes; goals
 that still mention unresolved predicates are retained for the caller. -/
-private def dischargeImpl : TacticM Unit := do
+private def dischargeImpl (oracle : Flex.CHC.ProofOracle) : TacticM Unit := do
   let mut pending := (← getGoals).map fun goal => (goal, ([] : List Expr))
   let mut remaining := []
   let mut fuel := flex.automation.structureSteps.get (← getOptions)
@@ -314,7 +318,7 @@ private def dischargeImpl : TacticM Unit := do
       if exposed.isConstOf ``True then
         goal.assign (mkConst ``True.intro)
         return some []
-      if let some proof ← proofOracle target then
+      if let some proof ← oracle target then
         goal.assign proof
         return some []
       if let some unfolded ← unfoldDefinition? target then
@@ -328,9 +332,9 @@ private def dischargeImpl : TacticM Unit := do
   setGoals (remaining.reverse ++ pending.map Prod.fst)
 
 /-- Restore the complete entry state if structural traversal itself fails. -/
-def discharge : TacticM Unit := do
+def discharge (oracle : Flex.CHC.ProofOracle := proofOracle) : TacticM Unit := do
   let saved ← Tactic.saveState
-  tryCatchRuntimeEx dischargeImpl fun error => do
+  tryCatchRuntimeEx (dischargeImpl oracle) fun error => do
     Flex.CHC.restoreTermState saved.term
     set saved.tactic
     throw error

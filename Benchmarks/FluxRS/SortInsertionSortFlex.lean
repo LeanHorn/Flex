@@ -24,3 +24,9 @@ theorem F.SortInsertionSort_flex : F.SortInsertionSort := by
   fix (scrape := deep)
 
 #print axioms F.SortInsertionSort_flex
+
+/-- The same sorting benchmark through the unified tactic. -/
+theorem F.SortInsertionSort_unified : F.SortInsertionSort := by
+  flex (scrape := deep)
+
+#print axioms F.SortInsertionSort_unified

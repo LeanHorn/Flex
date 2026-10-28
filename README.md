@@ -87,17 +87,21 @@ certification, residual obligations, and rollback on failure.
 
 ## `flex`
 
-Import `Flex.Tactic.Tactics.Flex` for `flex`, which runs `zap`, then tries `fix`,
-`spacer`, and `eldarica` on the cyclic predicates. An invariant is kept only if
-`flex_discharge` then proves every clause that mentions a predicate; clauses that
-mention none are left as separate goals. Each step runs under an equal heartbeat
-budget and is rolled back on any failure, so an unsolved goal is left as `zap`
-produced it for manual proof.
+`import Flex` provides `flex`: preprocessing, optional nesting, Zap, then Fix
+(with deep scraping) and Spacer/Eldarica. It uses checked SMT and Lean automation
+for proofs, retaining validated invariants and a structured residual VC when
+manual work remains. Failed phases preserve earlier progress.
 
 ```lean4
-flex (backends := [fix, spacer]) (scrape := standard) (closer := grind)
-  (config := { heartbeats := 100000, solverTimeout := 10 })
+flex
+flex (backends := [fix]) (scrape := basic)
+flex (backends := []) (config := { nesting := true }) -- Zap only
 ```
 
-See [Demo/Flex.lean](Demo/Flex.lean) for successes and recoverable failures, and
-[Demo/FlexBench](Demo/FlexBench) for FluxRS benchmarks.
+Use `proof := ...` for certification and `closer := ...` for residual proofs.
+The configuration controls phases and budgets (60 seconds for PA and each CHC
+solver; a cooperative 180-second total deadline). `report := true` enables progress
+messages; `set_option trace.flex true` exposes failed attempts. Unvalidated solver
+candidates require the explicit `keepCandidates := true` exploratory option;
+refuted candidates are discarded and every unproved obligation remains a goal.
+See [Demo/Flex.lean](Demo/Flex.lean) for complete and partial proofs.

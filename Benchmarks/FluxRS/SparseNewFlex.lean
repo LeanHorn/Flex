@@ -1,8 +1,6 @@
-import Flex.Tactic.Tactics.Flex
 import Benchmarks.FluxRS.«sparse-new»
 
-/-! A sparse-vector constructor: `fix` runs out of its heartbeat share and is
-rolled back; `spacer` then finds the invariants and the closer finishes. -/
+/-! Sparse-vector construction through the unified `flex` tactic. -/
 
 set_option maxHeartbeats 2000000
 set_option maxRecDepth 16384

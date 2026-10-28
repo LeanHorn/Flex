@@ -1,26 +1,23 @@
 import Flex.Tactic.Tactics.Flex
 
-/-! `flex`: `zap`, then `fix` / `spacer` / `eldarica` for the cyclic κs. An
-invariant is kept only when automation closes every clause that depends on it.
-Spacer requires `z3` on PATH; a missing `eld` only makes the Eldarica attempt
-fail. Larger examples from the FluxRS benchmarks are in `Demo/FlexBench/`. -/
+/-! `flex` prepares constraints, runs Zap and the invariant backends, and keeps
+validated progress when proof obligations still need manual work. -/
+
 namespace FlexDemo
 
--- Cyclic only: `zap` just normalizes, `fix` finds `0 ≤ i`.
+-- The default portfolio starts with Fix and deep qualifier scraping.
 theorem countdown :
     ∃ k : Int → Prop,
       k 5 ∧ (∀ i, k i → 1 ≤ i → k (i - 1)) ∧ (∀ i, k i → 0 ≤ i) := by
   flex
 
--- κ2 is acyclic and eliminated by `zap`; κ1 is cyclic.
-theorem mixed : ∃ κ1 : Int → Prop, ∃ κ2 : Int → Prop,
-      (∀ y : Int, κ1 y → κ1 (y + 1))
-    ∧ (∀ ν : Int, ν = 0 → κ1 ν)
-    ∧ (∀ ν : Int, ν = 0 → κ2 ν)
-    ∧ (∀ z : Int, κ2 z → 0 ≤ z) := by
+-- Zap eliminates the acyclic predicate before solving the cyclic one.
+theorem mixed : ∃ loop seed : Int → Prop,
+    seed 0 ∧ (∀ i, seed i → loop i) ∧
+    (∀ i, loop i → loop (i + 1)) ∧ (∀ i, loop i → 0 ≤ i) := by
   flex
 
--- A single CHC backend.
+-- Select a single backend when desired; Spacer needs z3 on PATH.
 theorem boundedLoop :
     ∃ inv : Int → Int → Prop,
       (∀ limit, 0 ≤ limit → inv 0 limit) ∧
@@ -28,94 +25,35 @@ theorem boundedLoop :
       (∀ x limit, inv x limit → 0 ≤ x ∧ x ≤ limit) := by
   flex (backends := [spacer])
 
--- A closer that proves nothing rejects every backend: the goal is left as after `zap`.
--- Here `fix` leaves the safety clause `k i → 0 ≤ i` for the closer.
-theorem rejected :
-    ∃ k : Int → Prop,
-      k 5 ∧ (∀ i, k i → 1 ≤ i → k (i - 1)) ∧ (∀ i, k i → 0 ≤ i) := by
-  flex (backends := [fix]) (closer := fail "no")
-  exact ⟨fun i => 0 ≤ i, by grind⟩
-
--- An exhausted budget is not an error; the proof continues by hand.
-theorem starved :
-    ∃ k : Int → Prop,
-      k 5 ∧ (∀ i, k i → 1 ≤ i → k (i - 1)) ∧ (∀ i, k i → 0 ≤ i) := by
-  flex (backends := [fix]) (config := { heartbeats := 1 })
-  exact ⟨fun i => 0 ≤ i, by grind⟩
-
--- Clauses that mention no κ are split off before the backends run, so one that
--- automation cannot prove (it needs induction) does not reject the invariant.
 def double : Nat → Nat
   | 0 => 0
   | n + 1 => double n + 2
 
-theorem keepsInvariant :
+-- A failing closer keeps the validated invariant and leaves a structured VC.
+set_option linter.unusedTactic false in
+set_option linter.unreachableTactic false in
+theorem manualResidual :
     ∃ k : Int → Prop,
-      k 5 ∧ (∀ i, k i → 1 ≤ i → k (i - 1)) ∧ (∀ i, k i → 0 ≤ i) ∧
-      (∀ n, double n = n + n) := by
-  flex
-  -- Only `double n = n + n` is left.
-  rename_i n
-  induction n with
-  | zero => rfl
-  | succ n ih => simp only [double, ih]; omega
+      k 5 ∧ (∀ i, k i → 1 ≤ i → k (i - 1)) ∧
+      (∀ i, k i → 0 ≤ i) ∧ (∀ n, double n = n + n) := by
+  flex (backends := [fix]) (closer := fail "manual residual")
+  have hd : ∀ n, double n = n + n := by
+    intro n
+    induction n with
+    | zero => rfl
+    | succ n ih => simp only [double, ih]; omega
+  all_goals grind
 
-/-! ### Failure cases
-
-Every failure below leaves a goal the proof can continue from. When `flex`
-changes nothing, the unused-tactic linter says so; a closer that never succeeds
-is reported as never executed, because its attempts were rolled back. -/
-
--- `fix`'s standard bank has no `x + y = 10`, so its invariant is too weak and
--- is rolled back; `spacer` then succeeds on the same goal.
-theorem conserved :
-    ∃ inv : Int → Int → Prop,
-      inv 0 10 ∧
-      (∀ x y, inv x y → 0 < y → inv (x + 1) (y - 1)) ∧
-      (∀ x y, inv x y → x + y = 10) := by
+-- Predicate constraints can occur under quantifiers and conjunctions.
+theorem nested : ∀ start : Int, 0 ≤ start →
+    (∃ k : Int → Prop,
+      k start ∧ (∀ i, k i → k (i + 1)) ∧ (∀ i, k i → 0 ≤ i)) ∧
+    0 ≤ start + 1 := by
   flex
 
--- Same goal with `fix` alone: nothing is solved, the goal is left as after `zap`.
-theorem conservedByHand :
-    ∃ inv : Int → Int → Prop,
-      inv 0 10 ∧
-      (∀ x y, inv x y → 0 < y → inv (x + 1) (y - 1)) ∧
-      (∀ x y, inv x y → x + y = 10) := by
-  flex (backends := [fix])
-  exact ⟨fun x y => x + y = 10, by grind⟩
-
--- A solver that cannot be started is an ordinary failed attempt.
-set_option flex.spacer.executable "no-such-solver" in
-theorem missingSolver : ∃ κ1 : Int → Prop, ∃ κ2 : Int → Prop,
-      (∀ y : Int, κ1 y → κ1 (y + 1))
-    ∧ (∀ ν : Int, ν = 0 → κ1 ν)
-    ∧ (∀ ν : Int, ν = 0 → κ2 ν)
-    ∧ (∀ z : Int, κ2 z → 0 ≤ z) := by
-  flex (backends := [spacer])
-  exact ⟨fun y => 0 ≤ y, by grind⟩
-
--- A tight global budget: every step runs out and is rolled back, and the
--- reserved share is left for the manual proof.
-set_option maxHeartbeats 800 in
-theorem tightBudget :
-    ∃ k : Int → Prop,
-      k 5 ∧ (∀ i, k i → 1 ≤ i → k (i - 1)) ∧ (∀ i, k i → 0 ≤ i) := by
-  flex
-  refine ⟨fun i => 0 ≤ i, ?_, ?_, ?_⟩ <;> intros <;> omega
-
--- `zap` and `fix` hit `maxRecDepth`; both are rolled back and `spacer` succeeds.
-set_option maxRecDepth 30 in
-theorem shallowRecursion :
-    ∃ k : Int → Prop,
-      k 5 ∧ (∀ i, k i → 1 ≤ i → k (i - 1)) ∧ (∀ i, k i → 0 ≤ i) := by
-  flex
-
--- An unprovable goal (the counter is unbounded): `flex` reports instead of
--- throwing, and the goal is left for the user. The `sorry` is intentional.
-theorem unbounded :
-    ∃ k : Int → Prop,
-      k 0 ∧ (∀ i, k i → k (i + 1)) ∧ (∀ i, k i → i ≤ 5) := by
-  flex
-  sorry
+-- Nesting is optional, and an empty backend list gives the Zap-only pipeline.
+theorem zapOnly : ∃ k : Int → Prop,
+    (∀ i, 0 ≤ i → k i) ∧ (∀ i, k i → 0 ≤ i) := by
+  flex (backends := []) (config := { nesting := true })
 
 end FlexDemo

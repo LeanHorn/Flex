@@ -1,8 +1,6 @@
-import Flex.Tactic.Tactics.Flex
 import Benchmarks.FluxRS.MkPairsWithBound
 
-/-! Building a bounded vector of pairs: `zap` removes the acyclic κs and `fix`
-solves the loop invariant. -/
+/-! Bounded pairs using the benchmark's handwritten `@[qualif]` declarations. -/
 
 set_option maxHeartbeats 2000000
 set_option maxRecDepth 16384

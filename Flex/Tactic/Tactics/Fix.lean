@@ -55,12 +55,26 @@ private def validatePASafety (synth : PASynthOracle) (prove : PAOracle) : PAOrac
       if let some proof ← prove target then return some proof
       throwError "fix: could not validate a safety clause for the synthesized predicates; goal unchanged"
 
+/-- Validation decisions describe candidate suitability, not completed Lean proofs.
+Only completed certification traversals report; rejected candidates roll back. -/
+structure PACertificationReport where
+  /-- Predicate heads proved or independently validated in their local context. -/
+  validatedHeads : Nat := 0
+  /-- Validated heads retained as explicit Lean proof obligations. -/
+  remainingHeads : Nat := 0
+  validatedSafety : Nat := 0
+  /-- All predicate-dependent obligations were proved or validated. -/
+  allValidated : Bool := true
+  deriving Inhabited, Repr
+
 private def runFix
   (oracle : PAOracle := proveLeaf)
   (scrape : PAScrapeConfig := {})
   (proofOracle : Option PAOracle := none)
   (observe : PAObserver := fun _ => pure ())
   (synthOracle : Option PASynthOracle := none)
+  (allowUnprovedHeads : Bool := false)
+  (onCertification : PACertificationReport → TacticM Unit := fun _ => pure ())
     : TacticM Unit := withMainContext do
   let (kctx, kvarsInOrder) ← peelKVars
 
@@ -110,13 +124,39 @@ private def runFix
       κ.assignSol sol
 
     let residualOut ← IO.mkRef (#[] : Array MVarId)
+    let certification ← IO.mkRef ({} : PACertificationReport)
     let certificateCalls ← IO.mkRef 0
     let certify : PAOracle := fun target => do
       certificateCalls.modify (· + 1)
       (proofOracle.getD oracle) target
+    let validateSafety : PAOracle := fun target => do
+      let proof ← validatePASafety (synthOracle.getD oracle.toSynth)
+        (proofOracle.getD oracle) target
+      certification.modify fun r => { r with validatedSafety := r.validatedSafety + 1 }
+      return proof
+    let unprovedHead : Option (Expr → TermElabM Expr) :=
+      if allowUnprovedHeads then
+        some fun target => do
+          let target ← instantiateMVars target
+          let results ← (synthOracle.getD oracle.toSynth) #[target]
+          unless results.size == 1 do
+            throwError "fix: head validation oracle returned the wrong number of decisions"
+          match results[0]! with
+          | .valid =>
+            let residual ← mkFreshExprMVar (some target) (kind := .syntheticOpaque)
+            residualOut.modify (·.push residual.mvarId!)
+            certification.modify fun r => { r with remainingHeads := r.remainingHeads + 1 }
+            return residual
+          | .invalid =>
+            throwError "fix: synthesized predicates do not satisfy a head clause; goal unchanged"
+          | .unknown _ =>
+            throwError "fix: could not validate an unproved predicate head; goal unchanged"
+      else none
+    let onHead : TermElabM Unit :=
+      certification.modify fun r => { r with validatedHeads := r.validatedHeads + 1 }
     let proof ← benchFixPhase "certificate" <|
-      walkPAProof aStar body residualOut certify
-        (validatePASafety (synthOracle.getD oracle.toSynth) (proofOracle.getD oracle))
+      walkPAProof aStar body residualOut certify validateSafety
+        (unprovedHead := unprovedHead) (onHead := onHead)
     bodyGoal.assign proof
     if flex.benchOracles.get (← getOptions) then
       IO.println s!"FIX_CERTIFICATE calls={← certificateCalls.get}"
@@ -124,28 +164,35 @@ private def runFix
     let residual := (← residualOut.get).toList
     setGoals residual
     logInfo m!"fix: bridge built and assigned; \
-      {residual.length} κ-free residual goal(s) left as c′."
+      {residual.length} residual proof goal(s) left as c′."
+    onCertification (← certification.get)
 
 /-- Keep predicate assignments only after head certification and safety validation.
-    Any failed attempt restores the entry goal, including prior Zap progress. -/
+With `allowUnprovedHeads`, independently valid head clauses may remain as explicit
+proof goals. Unknown or refuted heads reject the candidate. Validation decisions
+never enter the proof term. Any failure restores the entry goal. -/
 def fixImpl
   (oracle : PAOracle := proveLeaf)
   (scrape : PAScrapeConfig := {})
   (proofOracle : Option PAOracle := none)
   (observe : PAObserver := fun _ => pure ())
-  (synthOracle : Option PASynthOracle := none) : TacticM Unit := do
+  (synthOracle : Option PASynthOracle := none)
+  (allowUnprovedHeads : Bool := false)
+  (onCertification : PACertificationReport → TacticM Unit := fun _ => pure ()) : TacticM Unit := do
   let saved ← Tactic.saveState
-  tryCatchRuntimeEx (runFix oracle scrape proofOracle observe synthOracle) fun error => do
+  tryCatchRuntimeEx
+      (runFix oracle scrape proofOracle observe synthOracle allowUnprovedHeads onCertification)
+      (fun error => do
     Flex.CHC.restoreTermState saved.term
     set saved.tactic
-    throw error
+    throw error)
 
 private declare_config_elab elabScrapeLimits PAScrapeLimits
 
 /-- Parse a `scrape := …` mode; `tactic` names the caller in the error. -/
 def parseScrapeMode (tactic : String) : Option Ident → TacticM PAScrapeMode
   | none => pure .no
-  | some mode => match mode.getId with
+  | some mode => match mode.getId.eraseMacroScopes with
     | `no => pure .no
     | `basic => pure .basic
     | `standard => pure .standard

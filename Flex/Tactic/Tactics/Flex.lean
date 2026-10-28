@@ -1,32 +1,19 @@
 import Flex.Tactic.Tactics.Zap
 import Flex.Tactic.Tactics.Fix
 import Flex.Tactic.Tactics.Eldarica
+import Flex.Preprocess.Cleanup
+import Flex.Preprocess.Nesting
+import Flex.Tactic.Residual
 
 open Lean Meta Elab Tactic
 
-/-! ## `flex` — `zap`, then a portfolio of invariant backends
-
-  1. `zap` eliminates the acyclic κs (skipped when the goal has none). If it
-     fails, `flex` continues on the original goal.
-  2. Clauses of the remaining `∃ κs, …` goal that mention no κ are split off
-     into their own goal: they hold or fail regardless of the invariant.
-  3. The κ goal goes to the backends in order (default `fix`, `spacer`,
-     `eldarica`), each solving all its κs at once. An attempt counts only if the
-     closer then discharges every goal it left; otherwise the invariant was too
-     weak (or the goal is false) and the attempt is rolled back before the next
-     backend.
-  4. The closer tries the κ-free goals (split-off clauses and `zap`'s leftover
-     leaves), keeping what it cannot close.
-
-  Every step runs under the same heartbeat budget, and any failure — including
-  heartbeat exhaustion and `maxRecDepth` — restores the state from before that
-  step. When no backend succeeds, the κ goal is left as `zap` produced it, minus
-  its κ-free clauses, so the proof can continue by hand. Interrupts propagate. -/
-
 namespace Flex.Portfolio
+
+initialize registerTraceClass `flex
 
 inductive Backend where
   | fix | spacer | eldarica
+  deriving BEq, Repr
 
 instance : ToString Backend where
   toString
@@ -34,79 +21,101 @@ instance : ToString Backend where
     | .spacer => "spacer"
     | .eldarica => "eldarica"
 
-/-- The default backends, in the order they are tried. -/
 def Backend.all : List Backend := [.fix, .spacer, .eldarica]
 
-/-- Knobs that are not syntax arguments of `flex`. -/
+/-- Phase limits remain subject to the caller's heartbeat limit. Times are seconds. -/
 structure Config where
-  /-- Eliminate acyclic κs with `zap` before calling the backends. -/
+  preprocess : Bool := true
+  nesting : Bool := false
   zap : Bool := true
-  /-- Heartbeats (in thousands, like `maxHeartbeats`) for each step: `zap`, each
-  backend attempt with its closer, and closing the κ-free goals. Zero splits
-  what remains at entry equally among the steps, keeping one share for the rest
-  of the proof. -/
-  heartbeats : Nat := 0
-  /-- Wall-clock seconds for each external CHC solver call. -/
-  solverTimeout : Nat := 30
-  /-- Try the closer on the κ-free goals: split-off clauses and `zap`'s leftover
-  leaves. -/
+  postprocess : Bool := true
   closeLeaves : Bool := true
-  /-- Move clauses that mention no κ out of each κ goal before the backends run,
-  so only clauses that depend on the invariant must be closed to accept it. -/
   splitFree : Bool := true
-  /-- Scraping limits for `fix`; the mode comes from `scrape := …`. -/
+  /-- Expose unvalidated solver candidates for manual exploration. Refuted ones are rejected. -/
+  keepCandidates : Bool := false
+  report : Bool := false
+  /-- Optional common override; zero uses the individual phase limits. -/
+  heartbeats : Nat := 0
+  zapHeartbeats : Nat := 200000
+  paHeartbeats : Nat := 1500000
+  solverHeartbeats : Nat := 500000
+  dischargeHeartbeats : Nat := 500000
+  paTimeout : Nat := 60
+  solverTimeout : Nat := 60
+  /-- Cooperative overall deadline; zero disables it. -/
+  totalTimeout : Nat := 180
   scrapeLimits : PAScrapeLimits := {}
 
-/-- Backend inputs shared by every κ goal. -/
 structure Setup where
   config : Config := {}
   backends : List Backend := Backend.all
-  scrape : PAScrapeConfig := {}
+  scrape : PAScrapeConfig := { mode := .deep }
   facts : Flex.CHC.Facts.Config := {}
-  /-- Replaces `flex_discharge` as the closer when present. -/
+  synth : Option (TSyntax `tactic) := none
+  proof : Option (TSyntax `tactic) := none
   closer : Option (TSyntax `tactic) := none
 
-/-- Raw heartbeats for every step, fixed at entry so each step gets the same
-amount. Zero means unlimited. -/
-private def stepBudget (setup : Setup) : TacticM Nat := do
-  let configured := setup.config.heartbeats * 1000
-  if (← getMaxHeartbeats) == 0 then return configured
-  let remaining ← getRemainingHeartbeats
-  if configured != 0 then return max 1 (min configured remaining)
-  let steps := (if setup.config.zap then 1 else 0) + setup.backends.length +
-    (if setup.config.closeLeaves then 1 else 0)
-  return max 1 (remaining / (steps + 1))
+private structure Context where
+  setup : Setup
+  deadline : Option Nat
+  reserve : Nat
+  checkpoint : IO.Ref Tactic.SavedState
 
-/-- Run `act` with its own heartbeat budget, capped by what the caller has left. -/
-private def withBudget (budget : Nat) (act : TacticM α) : TacticM α := do
-  let mut limit := budget
+private def restore (saved : Tactic.SavedState) : TacticM Unit := do
+  let traces ← getTraceState
+  Flex.CHC.restoreTermState saved.term
+  set saved.tactic
+  modifyTraceState fun _ => traces
+
+/-- Speculation restores assignments, helper declarations, goals, and messages. -/
+private def guarded (act : TacticM α) (quiet : Bool := true) : TacticM (Except MessageData α) := do
+  let saved ← Tactic.saveState
+  let messages ← Core.getMessageLog
+  try
+    tryCatchRuntimeEx (.ok <$> act) fun error => do
+      restore saved
+      if error.isInterrupt then throw error
+      Core.checkInterrupted
+      return .error error.toMessageData
+  finally
+    if quiet then Core.setMessageLog messages
+
+private def checkTime (ctx : Context) : TermElabM Unit := do
+  Core.checkInterrupted
+  if let some deadline := ctx.deadline then
+    if (← IO.monoMsNow) >= deadline then throwError "flex: time budget exhausted"
+
+private def withBudget (ctx : Context) (heartbeats : Nat) (act : TacticM α) : TacticM α := do
+  let configured := if ctx.setup.config.heartbeats == 0 then heartbeats
+    else ctx.setup.config.heartbeats
+  let mut limit := configured * 1000
   if (← getMaxHeartbeats) != 0 then
-    limit := max 1 (min limit (← getRemainingHeartbeats))
-  withTheReader Core.Context (fun ctx => { ctx with maxHeartbeats := limit }) <|
+    let remaining ← getRemainingHeartbeats
+    if remaining <= ctx.reserve then throwError "flex: heartbeat budget exhausted"
+    let available := remaining - ctx.reserve
+    limit := if limit == 0 then available else min limit available
+  withTheReader Core.Context (fun context => { context with maxHeartbeats := limit }) <|
     Core.withCurrHeartbeats act
 
-/-- Run `act`; on any failure, including runtime limits, restore the entry state
-and return the error. Interrupts propagate after restoring. -/
-private def guarded (act : TacticM α) : TacticM (Except MessageData α) := do
-  let saved ← Tactic.saveState
-  tryCatchRuntimeEx (.ok <$> act) fun error => do
-    Flex.CHC.restoreTermState saved.term
-    set saved.tactic
-    if error.isInterrupt then throw error
-    return .error error.toMessageData
+private def phase (ctx : Context) (name : String) (heartbeats : Nat)
+    (act : TacticM α) : TacticM (Except MessageData α) := do
+  let result ← guarded <| withBudget ctx heartbeats do
+    checkTime ctx
+    act
+  if let .error message := result then trace[flex] "{name}: {message}"
+  return result
 
-/-- Whether the goal is an `∃ κ, …` over a predicate. -/
+/-- Save the full frontier, including siblings hidden by the current local operation. -/
+private def checkpoint (ctx : Context) (siblings : List MVarId) : TacticM Unit := do
+  let active ← getUnsolvedGoals
+  setGoals (active ++ siblings)
+  ctx.checkpoint.set (← Tactic.saveState)
+  setGoals active
+
 private def isKGoal (goal : MVarId) : MetaM Bool := goal.withContext do
   let type ← whnf (← instantiateMVars (← goal.getType))
-  let .app (.app (.const ``Exists _) α) _ := type | return false
-  forallTelescopeReducing α fun _ body => return body.isProp
-
-/-! ### Separating κ-free clauses
-
-  `∀`/`→` distribute over `∧`, so `∃ κs, body` follows from `∃ κs, K` and `F`,
-  where `F` collects the clauses mentioning no κ (in hypotheses or conclusion)
-  and `K` the rest. A clause under a κ-mentioning hypothesis stays in `K`.
-  `True` marks an empty side. -/
+  let .app (.app (.const ``Exists _) domain) _ := type | return false
+  forallTelescopeReducing domain fun _ body => return body.isProp
 
 private def isTrueProp (e : Expr) : Bool := e.isConstOf ``True
 
@@ -211,104 +220,267 @@ private def separateFree (goal : MVarId) : MetaM (Option (MVarId × MVarId)) :=
       return build.beta (κs ++ #[hk, fGoal]))
     return some (kGoal.mvarId!, fGoal.mvarId!)
 
-/-- Close what the closer can, keeping the rest. A user closer runs per goal and
-must close it. -/
-private def close (closer : Option (TSyntax `tactic)) : TacticM Unit := do
-  let some tac := closer | Flex.Automation.discharge
-  let mut remaining := #[]
-  for goal in ← getGoals do
-    if ← goal.isAssigned then continue
-    setGoals [goal]
-    if let .error _ ← guarded do
-        evalTactic tac
-        unless (← getGoals).isEmpty do throwError "closer left goals" then
-      remaining := remaining.push goal
-  setGoals remaining.toList
+/-- Bundle privately introduced binders and obligations into one visible VC. -/
+private def tidy (ctx : Context) (parent : MVarId) : TacticM Unit := do
+  discard <| guarded do
+    let goals ← Flex.Residual.bundle parent (← getUnsolvedGoals)
+    let goals ← if ctx.setup.config.postprocess then
+      goals.mapM fun goal => Flex.Preprocess.cleanupGoal goal else pure goals
+    setGoals (← goals.filterM fun goal => return !(← goal.isAssignedOrDelayedAssigned))
 
-private def runBackend (setup : Setup) : Backend → TacticM Unit
+private def proofOracle (ctx : Context) : PAOracle := fun target => do
+  checkTime ctx
+  if let some tactic := ctx.setup.proof then
+    if let some proof ← Flex.Automation.proveWith tactic target then return some proof
+  Flex.Automation.proofOracle target
+
+private def synthOracle (ctx : Context) : PASynthOracle := fun targets => do
+  checkTime ctx
+  let result ← match ctx.setup.synth with
+    | none => Flex.Automation.synthOracle (checkTime ctx) targets
+    | some tactic => (withPAPriority tactic).toSynth targets
+  checkTime ctx
+  return result
+
+private def close (ctx : Context) : TacticM Unit := do
+  unless ctx.setup.config.closeLeaves do return
+  let oracle : PAOracle := match ctx.setup.closer with
+    | none => proofOracle ctx
+    | some tactic => fun target => do
+        checkTime ctx
+        Flex.Automation.proveWith tactic target
+  let mut remaining := []
+  for goal in ← getGoals do
+    setGoals [goal]
+    discard <| phase ctx "discharge" ctx.setup.config.dischargeHeartbeats do
+      Flex.Automation.discharge oracle
+    remaining := remaining ++ (← getUnsolvedGoals)
+  setGoals remaining
+
+private partial def validate (ctx : Context) (target : Expr) : TermElabM PASynthResult := do
+  checkTime ctx
+  let target ← instantiateMVars target
+  if target.isConstOf ``True then return .valid
+  if target.isForall then
+    return ← withLocalDecl target.bindingName! target.bindingInfo! target.bindingDomain! fun x =>
+      validate ctx (target.bindingBody!.instantiate1 x)
+  if let some (left, right) := target.and? then
+    let a ← validate ctx left
+    if a == .invalid then return a
+    let b ← validate ctx right
+    if b == .invalid then return b
+    return if a == .valid && b == .valid then .valid else .unknown "unvalidated obligations"
+  let results ← synthOracle ctx #[target]
+  if results.size != 1 then throwError "flex: invalid validation response"
+  return results[0]!
+
+private structure Candidate where
+  backend : Backend
+  validated : Bool
+  remainingHeads : Option Nat
+
+private def runBackend (ctx : Context) (backend : Backend) : TacticM Candidate := do
+  match backend with
   | .fix =>
-    -- The defaults of a bare `fix`.
-    fixImpl proveLeaf setup.scrape (some Flex.Automation.proofOracle)
-      (synthOracle := some Flex.Automation.synthOracle)
-  | .spacer => chc .spacer flex.spacer.executable
-  | .eldarica => chc .eldarica flex.eldarica.executable
-where
-  chc (backend : Flex.CHC.Backend) (executable : Lean.Option String) : TacticM Unit := do
-    Flex.CHC.solverTactic {
-      backend
-      executable := some (executable.get (← getOptions))
-      timeoutMs := setup.config.solverTimeout * 1000 } setup.facts
+    let report ← IO.mkRef ({} : PACertificationReport)
+    let now ← IO.monoMsNow
+    let deadline := now + ctx.setup.config.paTimeout * 1000
+    let paCtx := if ctx.setup.config.paTimeout == 0 then ctx else
+      { ctx with deadline := some (ctx.deadline.map (min deadline) |>.getD deadline) }
+    fixImpl proveLeaf ctx.setup.scrape (some (proofOracle paCtx))
+      (synthOracle := some (synthOracle paCtx)) (allowUnprovedHeads := true)
+      (onCertification := fun result => report.set result)
+    let report ← report.get
+    return { backend, validated := report.allValidated, remainingHeads := some report.remainingHeads }
+  | .spacer | .eldarica =>
+    let name := if backend == .spacer then flex.spacer.executable else flex.eldarica.executable
+    let mut timeout := ctx.setup.config.solverTimeout * 1000
+    if timeout == 0 then throwError "flex: CHC solvers disabled by timeout"
+    if let some deadline := ctx.deadline then
+      timeout := min timeout (deadline - (← IO.monoMsNow))
+      if timeout == 0 then throwError "flex: time budget exhausted"
+    let result ← Flex.CHC.solveGoal (← getMainGoal) {
+      backend := if backend == .spacer then .spacer else .eldarica
+      executable := some (name.get (← getOptions))
+      timeoutMs := timeout } (proofOracle ctx) (headsOnly := true) (facts := ctx.setup.facts)
+    let report ← match result with
+      | .failed failure => throwError "{failure.message}"
+      | .solved report | .partial report => pure report
+    setGoals report.certificate.goals.toList
+    return {
+      backend := backend
+      validated := report.certificate.goals.isEmpty
+      remainingHeads := report.certificate.remainingHeads }
 
-/-- Try each backend on a κ goal; keep the first that, with the closer, leaves
-nothing. Returns whether one did, plus a note per failed attempt. -/
-private def solveKGoal (setup : Setup) (budget : Nat) (goal : MVarId) :
-    TacticM (Option Backend × Array MessageData) := do
-  let mut notes := #[]
-  for backend in setup.backends do
-    setGoals [goal]
-    let attempt ← guarded <| withBudget budget do
-      runBackend setup backend
-      close setup.closer
-      let left := (← getGoals).length
-      unless left == 0 do
-        throwError "{left} goal(s) left after closing; the invariant is too weak \
-          or the goal is not provable"
-    match attempt with
-    | .ok () => return (some backend, notes)
-    | .error error => notes := notes.push m!"{backend}: {error}"
-  return (none, notes)
+private def better (candidate best : Candidate) : Bool :=
+  if candidate.validated != best.validated then candidate.validated
+  else match candidate.remainingHeads, best.remainingHeads with
+    | some count, some old => count < old
+    | some _, none => true
+    | _, _ => false
 
-def flexImpl (setup : Setup) : TacticM Unit := focus do
-  let budget ← stepBudget setup
-  let mut notes : Array MessageData := #[]
-  -- Without κs there is nothing for `zap` to do; it would only fail.
-  if setup.config.zap && (← isKGoal (← getMainGoal)) then
-    if let .error error ← guarded (withBudget budget (zapImpl emitStrategy)) then
-      notes := notes.push m!"zap failed, continuing on the original goal: {error}"
-  -- Clauses that mention no κ cannot tell a weak invariant from a strong one.
-  let mut goals := #[]
-  let mut splitGoals : Array MVarId := #[]
-  for goal in ← getGoals do
-    if setup.config.splitFree && !(← goal.isAssigned) && (← isKGoal goal) then
-      match ← guarded (separateFree goal) with
-      | .ok (some (kGoal, fGoal)) =>
-        goals := goals.push kGoal |>.push fGoal
-        splitGoals := splitGoals.push kGoal
+/-- All alternatives start before predicate assignment. Only accepted branches survive. -/
+private def solveKGoal (ctx : Context) (goal : MVarId) : TacticM Unit := do
+  setGoals [goal]
+  let entry ← Tactic.saveState
+  let best ← IO.mkRef (none : Option (Candidate × Tactic.SavedState))
+  let search : TacticM Bool := do
+    for backend in ctx.setup.backends do
+      restore entry
+      let budget := if backend == .fix then ctx.setup.config.paHeartbeats
+        else ctx.setup.config.solverHeartbeats
+      let result ← phase ctx s!"{backend}" budget (runBackend ctx backend)
+      let .ok candidate := result | continue
+      -- Closing is separate: a failed proof search cannot undo synthesis.
+      discard <| guarded (close ctx)
+      let goals ← getUnsolvedGoals
+      if goals.isEmpty then
+        if ctx.setup.config.report then logInfo m!"flex: {backend} completed the predicate goal"
+        return true
+      let mut valid := candidate.validated
+      let mut refuted := false
+      unless valid do
+        let validation ← phase ctx "validate candidate" ctx.setup.config.solverHeartbeats do
+          let mut allValid := true
+          for pending in goals do
+            let answer ← pending.withContext do validate ctx (← pending.getType)
+            if answer == .invalid then return (false, true)
+            if answer != .valid then allValid := false
+          return (allValid, false)
+        if let .ok (checked, invalid) := validation then
+          valid := checked
+          refuted := invalid
+      if refuted || (!valid && !ctx.setup.config.keepCandidates) then
+        trace[flex] "{backend}: candidate {if refuted then "refuted" else "unvalidated"}"
         continue
-      | .ok none => pure ()
-      | .error error => notes := notes.push m!"splitting off κ-free clauses failed: {error}"
-    goals := goals.push goal
-  let mut remaining := #[]
-  let mut leaves := #[]
-  for goal in goals do
-    if ← goal.isAssigned then continue
-    unless ← isKGoal goal do
-      leaves := leaves.push goal
-      continue
-    let (solved, failures) ← solveKGoal setup budget goal
-    notes := notes ++ failures
-    match solved with
-    | some backend => notes := notes.push m!"{backend} closed a κ goal"
-    | none =>
-      let split := if splitGoals.contains goal then " (minus its κ-free clauses)" else ""
-      notes := notes.push m!"no backend closed the κ goal; left as after zap{split}"
-      remaining := remaining.push goal
-  -- Closing the κ-free goals is a single step: they share one budget.
-  if setup.config.closeLeaves && !leaves.isEmpty then
-    let (rest, failures) ← withBudget budget do
-      let mut rest := #[]
-      let mut failures := #[]
-      for goal in leaves do
-        setGoals [goal]
-        if let .error error ← guarded (close setup.closer) then
-          failures := failures.push m!"closer on a κ-free goal: {error}"
-        rest := rest ++ (← getGoals)
-      return (rest, failures)
-    leaves := rest
-    notes := notes ++ failures
-  setGoals (remaining ++ leaves).toList
-  unless notes.isEmpty do
-    logInfo (MessageData.joinSep (m!"flex:" :: notes.toList.map (m!"  " ++ ·)) "\n")
+      tidy ctx goal
+      let candidate := { candidate with validated := valid }
+      if (← best.get).all (fun (previous, _) => better candidate previous) then
+        best.set (some (candidate, ← Tactic.saveState))
+    return false
+  let completed ← tryCatchRuntimeEx search fun error => do
+    if error.isInterrupt then
+      restore entry
+      throw error
+    Core.checkInterrupted
+    trace[flex] "portfolio stopped: {error.toMessageData}"
+    return false
+  if completed then return
+  match ← best.get with
+  | none => restore entry
+  | some (candidate, state) =>
+    restore state
+    if ctx.setup.config.report then
+      let status := if candidate.validated then "validated invariant" else "provisional candidate"
+      logInfo m!"flex: {candidate.backend} retained a {status}; remaining obligations are shown"
+
+private def transform (ctx : Context) (name : String) (siblings : List MVarId)
+    (act : TacticM Unit) : TacticM Unit := do
+  discard <| phase ctx name ctx.setup.config.zapHeartbeats act
+  checkpoint ctx siblings
+
+private def cleanup (ctx : Context) (parent : MVarId) (siblings : List MVarId) : TacticM Unit := do
+  tidy ctx parent
+  checkpoint ctx siblings
+
+private def solveResidual (ctx : Context) (goal : MVarId) (siblings : List MVarId)
+    : TacticM (List MVarId) := do
+  setGoals [goal]
+  let split ← if ctx.setup.config.splitFree then
+      phase ctx "separate clauses" ctx.setup.config.zapHeartbeats (separateFree goal)
+    else pure (.ok none)
+  let (predicate, free) := match split with
+    | .ok (some (k, f)) => (k, [f])
+    | _ => (goal, [])
+  setGoals [predicate]
+  checkpoint ctx (free ++ siblings)
+  discard <| guarded (solveKGoal ctx predicate) (quiet := false)
+  let residual ← getUnsolvedGoals
+  setGoals free
+  close ctx
+  let free ← getUnsolvedGoals
+  setGoals (residual ++ free)
+  cleanup ctx goal siblings
+  getUnsolvedGoals
+
+/-- Discover predicate goals under positive quantifiers and conjunctions. -/
+private partial def walk (ctx : Context) (goal : MVarId) (siblings : List MVarId)
+    : TacticM (List MVarId) := do
+  setGoals [goal]
+  if ctx.setup.config.preprocess then
+    transform ctx "preprocess" siblings do
+      let next ← Flex.Preprocess.prepareGoal goal
+      setGoals (if ← next.isAssignedOrDelayedAssigned then [] else [next])
+  if (← getGoals).isEmpty then return []
+  let current ← getMainGoal
+  if ← isKGoal current then
+    if ctx.setup.config.nesting then
+      transform ctx "nesting" siblings do
+        let result ← current.withContext do
+          Flex.Preprocess.Nesting.nest (← whnf (← current.getType))
+        let next ← current.withContext do mkFreshExprSyntheticOpaqueMVar result.expr
+        current.assign (← mkAppM ``Iff.mpr #[result.proof, next])
+        setGoals [next.mvarId!]
+    if ctx.setup.config.zap then
+      transform ctx "zap" siblings (zapImpl emitStrategy (preprocess := false))
+    if ctx.setup.config.postprocess then
+      transform ctx "postprocess" siblings do
+        setGoals (← (← getUnsolvedGoals).mapM fun goal => Flex.Preprocess.cleanupGoal goal)
+    let mut outputs := []
+    let mut pending ← getUnsolvedGoals
+    while let next :: rest := pending do
+      pending := rest
+      let tail := outputs ++ pending ++ siblings
+      if ← isKGoal next then
+        outputs := outputs ++ (← solveResidual ctx next tail)
+      else
+        setGoals [next]
+        close ctx
+        cleanup ctx next tail
+        outputs := outputs ++ (← getUnsolvedGoals)
+    setGoals outputs
+  else
+    let type ← current.withContext do whnf (← current.getType)
+    if type.isForall || type.isAppOfArity ``And 2 then
+      let exposed ← phase ctx "expose goal" ctx.setup.config.zapHeartbeats do
+        let children ← if type.isForall then do
+          let (_, child) ← current.intro1
+          pure [child]
+        else current.apply (mkConst ``And.intro)
+        setGoals children
+        return children
+      if let .ok children := exposed then
+        checkpoint ctx siblings
+        let mut outputs := []
+        let mut pending := children
+        while let child :: rest := pending do
+          pending := rest
+          outputs := outputs ++ (← walk ctx child (outputs ++ pending ++ siblings))
+        setGoals outputs
+      else close ctx
+    else close ctx
+  cleanup ctx goal siblings
+  getUnsolvedGoals
+
+/-- Preserve the latest committed frontier even when a later traversal reaches a limit. -/
+def flexImpl (setup : Setup) : TacticM Unit := focus do
+  let parent ← getMainGoal
+  let initial ← Tactic.saveState
+  let saved ← IO.mkRef initial
+  let deadline ← if setup.config.totalTimeout == 0 then pure none else
+    pure (some ((← IO.monoMsNow) + setup.config.totalTimeout * 1000))
+  let reserve ← if (← getMaxHeartbeats) == 0 then pure 0 else
+    pure (min 20000000 ((← getRemainingHeartbeats) / 20))
+  let ctx : Context := { setup, deadline, reserve, checkpoint := saved }
+  tryCatchRuntimeEx
+    (discard <| walk ctx parent [])
+    (fun error => do
+      restore (← saved.get)
+      if error.isInterrupt then throw error
+      Core.checkInterrupted
+      trace[flex] "stopped at checkpoint: {error.toMessageData}")
+  -- Reserved resources are for presenting the retained obligations, even after timeout.
+  tidy ctx parent
 
 end Flex.Portfolio
 
@@ -319,27 +491,23 @@ syntax "fix" : flexBackend
 syntax "spacer" : flexBackend
 syntax "eldarica" : flexBackend
 
-/-- `zap`, then solve the cyclic κs with `fix`, `spacer`, or `eldarica`, accepting
-a backend only if the closer then proves every clause that mentions a κ. Clauses
-that mention no κ become separate goals for the closer. On failure the κ goal is
-left as `zap` produced it, minus those clauses.
-
-`backends`: which backends to try, in order (default `[fix, spacer, eldarica]`).
-`scrape` / `defs`: `fix`'s qualifier scraping (off by default); `defs` also
-supplies equations to the CHC backends. `lemmas`: proved facts for the CHC backends.
-`closer`: replaces `flex_discharge`; it must close a goal to count.
-`config`: a `Flex.Portfolio.Config`, e.g.
-`(config := { heartbeats := 100000, solverTimeout := 10, zap := false })`. -/
+/-- Preprocess, eliminate predicates, and discharge what can be proved.
+Deep scraping is the default. Unproved obligations remain as one structured VC.
+`proof` customizes certification; `closer` customizes residual proof search.
+`config` controls preparation, nesting, phases, budgets, and optional reporting. -/
 syntax "flex" (atomic("(" &"backends" ":=") "[" flexBackend,* "]" ")")?
   (atomic("(" &"scrape" ":=") ident ")")?
   (atomic("(" &"defs" ":=") "[" ident,* "]" ")")?
   (atomic("(" &"lemmas" ":=") "[" ident,* "]" ")")?
+  (atomic("(" &"synth" ":=") tacticSeq ")")?
+  (atomic("(" &"proof" ":=") tacticSeq ")")?
   (atomic("(" &"closer" ":=") tacticSeq ")")?
   (atomic("(" &"config" ":=") term ")")? : tactic
 
 elab_rules : tactic
   | `(tactic| flex $[(backends := [$backends:flexBackend,*])]? $[(scrape := $mode:ident)]?
       $[(defs := [$defs:ident,*])]? $[(lemmas := [$lemmas:ident,*])]?
+      $[(synth := $synth:tacticSeq)]? $[(proof := $proof:tacticSeq)]?
       $[(closer := $closer:tacticSeq)]? $[(config := $config:term)]?) => do
     let backends ← match backends with
       | none => pure Flex.Portfolio.Backend.all
@@ -357,9 +525,11 @@ elab_rules : tactic
       | some value => do
         let stx ← `(Lean.Parser.Term.optConfig| (config := $value))
         elabFlexConfig stx (logExceptions := false)
-    let mode ← parseScrapeMode "flex" mode
-    let closer ← closer.mapM fun tac => `(tactic| ($tac:tacticSeq))
+    let mode ← if mode.isNone then pure PAScrapeMode.deep else parseScrapeMode "flex" mode
+    let tactic := fun (stx : Option (TSyntax ``Lean.Parser.Tactic.tacticSeq)) =>
+      stx.mapM fun tac => `(tactic| ($tac:tacticSeq))
     Flex.Portfolio.flexImpl {
-      config, backends, closer
+      config, backends
       scrape := { config.scrapeLimits with mode, defs }
-      facts := { lemmas, defs } }
+      facts := { lemmas, defs }
+      synth := ← tactic synth, proof := ← tactic proof, closer := ← tactic closer }

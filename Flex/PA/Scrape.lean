@@ -141,13 +141,13 @@ private def addPredicate (cfg : PAScrapeConfig) (origin : String) (source : Sour
     | _ => (cfg.maxQualifiers, "templates")
   if target.size >= cap then limit label; return
   let target := target.push ⟨q, origin⟩
-  set { s with
-    seen := s.seen.insert q
-    goal := if source == Source.goal then target else s.goal
-    definitions := if source == Source.definition then target else s.definitions
-    generated := if source == Source.generated then target else s.generated
-    guarded := if source == Source.guarded then target else s.guarded
-    observations := if source == Source.observation then target else s.observations }
+  let s := { s with seen := s.seen.insert q }
+  set <| match source with
+    | .goal => { s with goal := target }
+    | .definition => { s with definitions := target }
+    | .generated => { s with generated := target }
+    | .guarded => { s with guarded := target }
+    | .observation => { s with observations := target }
   trace[flex.scrape] "{origin}: {q}"
 
 private partial def predicates (cfg : PAScrapeConfig) (origin : String) (source : Source)
@@ -868,18 +868,19 @@ private def collect (cfg : PAScrapeConfig) (body : Expr) : ScrapeM Unit := do
       let selected := interleavePredicates extra cfg.maxCompoundCandidatesPerKappa
       modify fun s => { s with anchored := ordinary ++ selected }
 
-/-- Interleave sources so a large goal cannot consume every definition/template slot. -/
+/-- Interleave ordinary sources; observations fill the remaining slots. -/
 private def finish (cfg : PAScrapeConfig) (s : ScrapeState) : PAScrapeResult := Id.run do
+  let pools := #[s.goal, s.guarded, s.definitions, s.generated]
+  let maxSize := pools.foldl (fun n pool => max n pool.size) 0
   let mut selected := #[]
-  for i in [:max s.goal.size (max s.guarded.size (max s.definitions.size s.generated.size))] do
-    for source in #[s.goal, s.guarded, s.definitions, s.generated] do
+  for i in [:maxSize] do
+    for source in pools do
       if let some q := source[i]? then
         if selected.size < cfg.maxQualifiers then selected := selected.push q
-  -- New observation templates use only slots left by existing scraping.
   let ordinaryCount := selected.size
   for candidate in s.observations do
     if selected.size < cfg.maxQualifiers then selected := selected.push candidate
-  let count := s.goal.size + s.definitions.size + s.generated.size + s.guarded.size + s.observations.size
+  let count := pools.foldl (fun n pool => n + pool.size) s.observations.size
   let limitsHit := if count > selected.size && !s.limitsHit.contains "templates" then
     s.limitsHit.push "templates" else s.limitsHit
   return {

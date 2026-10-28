@@ -144,12 +144,12 @@ theorem is_sorted_using_pivot :
 set_option maxHeartbeats 1600000 in
 theorem SortQuicksortRange_proof : SortQuicksortRange := by
   unfold SortQuicksortRange
-  fusion
+  zap
   solve_fixpoint
 
 theorem SortQuicksortRange_proof' : SortQuicksortRange := by
   unfold SortQuicksortRange
-  fusion
+  zap
   intro old₀ lo₀ hi₀ hlolen hhilen hlen hlo hhi
   refine ⟨?_, ?_⟩
   · -- base case: ¬ lo₀ < hi₀

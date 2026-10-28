@@ -1,5 +1,5 @@
 import Flex.Tactic.Tactics.Fix
-import Flex.Tactic.Tactics.Fusion
+import Flex.Tactic.Tactics.Zap
 import Flex.Fusion.Flatten
 
 namespace PADischargeTests
@@ -522,7 +522,7 @@ run_elab do
   synthesizeSyntheticMVarsNoPostponing
   let original ← instantiateMVars original
   let expected ← instantiateMVars expected
-  let (normalized, proof) ← inlineFalsePredicates original
+  let (normalized, proof) ← Flex.Preprocess.inlineFalsePredicates original
   unless ← isDefEq normalized expected do throwError "error predicate was not inlined"
   checkWithKernel proof
   unless ← isDefEq (← inferType proof) (← mkAppM ``Iff #[original, normalized]) do
@@ -534,7 +534,7 @@ run_elab do
     let input ← elabTerm term none
     synthesizeSyntheticMVarsNoPostponing
     let input ← instantiateMVars input
-    let (output, proof) ← inlineFalsePredicates input
+    let (output, proof) ← Flex.Preprocess.inlineFalsePredicates input
     unless output == input do throwError "inlined a proposition not forced false"
     checkWithKernel proof
 
@@ -545,7 +545,7 @@ run_elab do
     let input ← elabTerm term none
     synthesizeSyntheticMVarsNoPostponing
     let input ← instantiateMVars input
-    let (output, proof) ← inlineFalsePredicates input
+    let (output, proof) ← Flex.Preprocess.inlineFalsePredicates input
     if output == input then throwError "missed an error predicate under another existential"
     if proof.hasMVar || proof.hasFVar || proof.hasLooseBVars || proof.hasSorry then
       throwError "normalization leaked proof obligations"
@@ -553,7 +553,7 @@ run_elab do
   let caller ← mkFreshExprMVar (some (mkSort .zero))
   let target ← elabTerm (← `(∃ p : Prop, p ∧ (True → False))) none
   let target := target.replace fun e => if e.isConstOf ``True then some caller else none
-  discard <| inlineFalsePredicates target
+  discard <| Flex.Preprocess.inlineFalsePredicates target
   if ← caller.mvarId!.isAssigned then throwError "normalization assigned caller metavariable"
 
 namespace PAContextTests

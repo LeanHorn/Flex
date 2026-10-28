@@ -110,7 +110,7 @@ def SortQuicksortRange := ∃ k0 : (a0 : Int) -> (a1 : Int) -> (a2 : (VectorsAVe
 bench "quicksort_B" in
 theorem quicksort_B_bench : SortQuicksortRange := by
   unfold SortQuicksortRange
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "quicksort_A" in

@@ -17,7 +17,7 @@ import Flex
                    ∧ (∀ a2, k1 a2 xs1 xs2 a0 a1 ⇒ k0 (a0 :: a2) xs1 xs2)
     • Consumer:    ∀ a3, k0 a3 xs1 xs2 ⇒ a3 = xs1 ++ xs2
 
-  No self-loops → ACYCLIC → `solve_fusion`.
+  No self-loops → ACYCLIC → `zap`.
 -/
 
 def lhListAppendSet : Prop :=

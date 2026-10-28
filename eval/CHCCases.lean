@@ -5,7 +5,7 @@ import Flex.CHC
 /-! Benchmark prelude used by `scripts/benchmark_chc.py`.
 
 The solver paths use `Flex.CHC.solveGoal` on the original demo propositions,
-without predicate abstraction, fusion, or zap. Ordinary Lean automation certifies
+without predicate abstraction or Zap. Ordinary Lean automation certifies
 the candidates; partial certificates are reported separately from solver errors.
 Imports and dependency builds are excluded from the timers. -/
 

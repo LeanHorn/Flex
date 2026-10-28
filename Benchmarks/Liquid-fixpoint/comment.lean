@@ -51,5 +51,5 @@ def comment_vc : Prop :=
                     0 ≤ a11 - a0))
 
 theorem test' : comment_vc := by
-  fusion
+  zap
   solve_fixpoint

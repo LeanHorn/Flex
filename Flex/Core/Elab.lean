@@ -10,11 +10,11 @@ open Lean Meta
         `Exists.intro T (fun κ => P κ) ?κ ?proof`
     and assigns `?goal` to it, where:
       • `?κ : T` is a fresh `syntheticOpaque` mvar — the witness slot
-        that fusion will later fill via `?κ.assign`.
+        that zap will later fill via `?κ.assign`.
       • `?proof : P ?κ` is a fresh mvar — the new proof obligation.
 
     Recurses on `?proof` while its type is another `∃`. Returns:
-      • the map of κ-mvars (`MVarId` ↦ KVars) for fusion's detection,
+      • the map of κ-mvars (`MVarId` ↦ KVars) for zap's detection,
       • the κ-binder names in source order,
       • the residual proof goal — body of the innermost ∃, with each
         existentially-bound variable replaced by its mvar. -/
@@ -42,7 +42,7 @@ where
           treating it as an opaque constant. The residual goal `P ?κ` still
           mentions `?κ`, so without this any tactic run on that goal could
           unify `?κ` away. Only an explicit `MVarId.assign` can fill it,
-          which is how fusion and PA install the computed solution.
+          which is how zap and PA install the computed solution.
         -/
         let κMVar ←
               mkFreshExprMVar (some α) (kind := .syntheticOpaque) (userName := name)

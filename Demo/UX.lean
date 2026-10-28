@@ -10,11 +10,11 @@ import Flex
   The constraint `ex` packs both shapes the solver distinguishes:
 
     * `κseed` — **acyclic**: produced from `x`, consumed once by `κinv`.
-                Solved by *fusion* (Cosman–Jhala elimination).
+                Solved by *zap* (Cosman–Jhala elimination).
     * `κinv`  — **cyclic**: has a self-loop (`κinv i → κinv (i-1)`).
                 Solved by *predicate abstraction* (Houdini).
 
-  Pipeline:  `reorderKs` (reorder + explode) → `sol`/`fusion` (acyclic) →
+  Pipeline:  `reorderKs` (reorder + explode) → `sol`/`zap` (acyclic) →
              `fixpoint` (cyclic).  `solve_fixpoint` is all of it at once.
 -/
 
@@ -65,21 +65,21 @@ example : ex := by
   solve_fixpoint
 
 -- ───────────────────────────────────────────────────────────────────────────
--- 3.  `fusion` (= the `elim` step) then `fixpoint`.
---      `fusion` eliminates ALL acyclic κ's at once (repeated sol+elim), leaving
+-- 3.  `zap` (= the `elim` step) then `fixpoint`.
+--      `zap` eliminates ALL acyclic κ's at once (repeated sol+elim), leaving
 --      the cyclic κ's as an existential; `fixpoint` runs predicate abstraction.
 -- ───────────────────────────────────────────────────────────────────────────
--- After `fusion`:    ⊢ ∃ κinv, P''(κinv)
+-- After `zap`:    ⊢ ∃ κinv, P''(κinv)
 --   κseed is gone: head occurrences `… → κseed ν x` collapse to `True`, and
 --   hypothesis occurrences `κseed v x → …` are replaced by κseed's solution.
 -- After `fixpoint`:  PA finds κinv := 0 ≤ ν, discharging everything.
 example : ex := by
   unfold ex
-  fusion
+  zap
   fixpoint
 
 -- ───────────────────────────────────────────────────────────────────────────
--- 4.  `solve_fixpoint` — fusion ⨾ fixpoint fused into one push-button tactic.
+-- 4.  `solve_fixpoint` — zap ⨾ fixpoint fused into one push-button tactic.
 -- ───────────────────────────────────────────────────────────────────────────
 example : ex := by
   unfold ex

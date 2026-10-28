@@ -24,11 +24,17 @@ def geomean(xs: list[float]) -> float:
 
 
 def ph(d: dict, key: str):
-    return d.get("phases", {}).get(key, 0)
+    phases = d.get("phases", {})
+    if key in phases:
+        return phases[key]
+    # Read phase labels recorded by earlier evaluations.
+    if key.startswith("zap:"):
+        return phases.get("fusion:" + key[4:], 0)
+    return 0
 
 
-def fusion_total(B: dict) -> int:
-    return sum(ph(B, f"fusion:{p}") for p in ("sol", "build", "clean"))
+def zap_total(B: dict) -> int:
+    return sum(ph(B, f"zap:{p}") for p in ("sol", "build", "clean"))
 
 
 def main() -> int:
@@ -49,13 +55,13 @@ def main() -> int:
 
     out = []
     W = out.append
-    W("# RQ3: deterministic proof term (fusion/Zap) vs proof search (grind)\n")
+    W("# RQ3: deterministic proof term (Zap) vs proof search (grind)\n")
     W("Liquid-fixpoint and FluxRS (real Rust VC) benchmarks with ≥1 **acyclic** κ "
-      "(with none, `fusion` is a no-op so A≡B). Two pipelines on the same VC, each in "
+      "(with none, `zap` is a no-op so A≡B). Two pipelines on the same VC, each in "
       "its own `lake env lean` run (`Elab.async false`, `maxHeartbeats 4000000`):\n")
     W("- **A** = `unfold; solve_fixpoint` — acyclic κ → σ̂-assign, body closed by "
       "**grind** (`tryClosers`).")
-    W("- **B** = `unfold; fusion; all_goals solve_fixpoint` — acyclic κ → "
+    W("- **B** = `unfold; zap; all_goals solve_fixpoint` — acyclic κ → "
       "**deterministic kernel-checked proof term** (Zap), then PA+close on the residual.\n")
     W("Heartbeats (`hb`, thousands) are deterministic; `ms` indicative. Per-phase "
       "heartbeats from the gated `flex.benchPhases` instrumentation.\n")
@@ -74,16 +80,16 @@ def main() -> int:
 
     # ── per-phase locus ───────────────────────────────────────────────────
     W("\n## Per-phase heartbeats (where the cost goes)\n")
-    W("A spends in `close` (grind); B moves that into deterministic `fusion` "
+    W("A spends in `close` (grind); B moves that into deterministic `zap` "
       "(sol+build+clean) + a residual `close`. `pa` is predicate abstraction "
       "(Houdini) on the cut — independent of A/B.\n")
-    W("| benchmark | A fuse | A pa | **A close** | B fusion | B pa | B close |")
+    W("| benchmark | A fuse | A pa | **A close** | B zap | B pa | B close |")
     W("|---|--:|--:|--:|--:|--:|--:|")
     for r in rows:
         A, B = r["A"], r["B"]
         W(f"| `{r['bench']}` | {ph(A,'solve_fixpoint:fuse')} | "
           f"{ph(A,'solve_fixpoint:pa')} | **{ph(A,'solve_fixpoint:close')}** | "
-          f"{fusion_total(B)} | {ph(B,'solve_fixpoint:pa')} | "
+          f"{zap_total(B)} | {ph(B,'solve_fixpoint:pa')} | "
           f"{ph(B,'solve_fixpoint:close')} |")
 
     # ── proof-term shape / kernel ─────────────────────────────────────────
@@ -110,7 +116,7 @@ def main() -> int:
       f"over {len(ok)} benchmarks solved by both.")
     if acy:
         W(f"  - acyclic_only ({len(acy)}): **{geomean([r['spd'] for r in acy]):.1f}×** "
-          f"(fusion replaces the grind closer; the win is direct).")
+          f"(zap replaces the grind closer; the win is direct).")
     if bot:
         W(f"  - both ({len(bot)}): **{geomean([r['spd'] for r in bot]):.1f}×** "
           f"(PA on the cut dominates total cost, so the acyclic win is a small slice "
@@ -154,8 +160,8 @@ def main() -> int:
           f"{', '.join('`' + b + '`' for b in bfails)}.")
     else:
         W(f"- **Coverage:** A and B each solve all {n_total}/{n_total}.")
-    W("- **Where fusion does NOT help (×~1.0):** `scrape03`, `comment`, `Quicksort` — "
-      "fusion removes the κ (B's `fusion` phase is tiny) but the cost was never in the "
+    W("- **Where zap does NOT help (×~1.0):** `scrape03`, `comment`, `Quicksort` — "
+      "zap removes the κ (B's `zap` phase is tiny) but the cost was never in the "
       "κ-structure: it's in the residual *leaf* grind (`scrape03`, `Quicksort`: A/B "
       "`close` both huge) or in **PA on the cut** (`comment`: A `pa`≈168k of 181k). "
       "The RQ3 win is specifically on κ-structure cost.")

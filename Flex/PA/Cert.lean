@@ -70,7 +70,7 @@ partial def walkPAProof
     return ← emitPALeaf κ survivors args oracle
   if goal.getAppFn.isMVar then
     throwError "fix: head metavariable{indentExpr goal.getAppFn}\nis not a \
-      cut variable handled by PA. Eliminate acyclic κ's with `fusion` first."
+      cut variable handled by PA. Eliminate acyclic κ's with `zap` first."
   if goal.isForall then
     let dependent := dependsOnPredicates || mentionsPredicates assign goal.bindingDomain!
     let dom ← instantiateMVars goal.bindingDomain!

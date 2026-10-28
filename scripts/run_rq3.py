@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""RQ3 driver: acyclic-κ elimination — deterministic (fusion/Zap) vs proof search.
+"""RQ3 driver: acyclic-κ elimination — deterministic (Zap) vs proof search.
 
 For each benchmark with ≥1 acyclic κ, run THREE configs on the SAME VC. Each runs
 *only* the acyclic-κ elimination tactic and then leaves the rest of the VC as
 `sorry`, so the measurement is purely the elimination step:
 
-  zap   = `unfold VC; fusion;       all_goals sorry`   (deterministic proof term)
-  grind = `unfold VC; fusion_grind; all_goals sorry`   (κ-head clauses via grind)
-  aesop = `unfold VC; fusion_aesop; all_goals sorry`   (κ-head clauses via aesop)
+  zap   = `unfold VC; zap;       all_goals sorry`   (deterministic proof term)
+  grind = `unfold VC; zap_grind; all_goals sorry`   (κ-head clauses via grind)
+  aesop = `unfold VC; zap_aesop; all_goals sorry`   (κ-head clauses via aesop)
 
-`fusion_grind`/`fusion_aesop` are eval aliases in
-`Flex/Tactic/Tactics/Eval/`, backed by `zap_with`.
+`zap_grind`/`zap_aesop` are eval aliases in
+`Flex/Tactic/Tactics/Eval.lean`, backed by `zap_with`.
 They share `zapImpl` with `zap`, using proof search at κ-head leaves
 instead of `nav`. Search failure is recorded as status=FAIL and is itself
 a data point.
@@ -51,14 +51,14 @@ SUBSET = (
     + [("FluxRS", b) for b in [
         "Fix-Test4", "Fix-Test5", "Fix-Test7",                 # acyclic_only
         "FibMemoBoth", "Fix-Test1", "Fix-Test6",               # both
-        "Quicksort"]]                                          # large, fusion-first
+        "Quicksort"]]                                          # large, zap-first
 )
 
 # The three configs: (key, elimination tactic). All share `all_goals sorry`.
 CONFIGS = [
-    ("zap",   "fusion"),
-    ("grind", "fusion_grind"),
-    ("aesop", "fusion_aesop"),
+    ("zap",   "zap"),
+    ("grind", "zap_grind"),
+    ("aesop", "zap_aesop"),
 ]
 
 # κ-partition per benchmark (#acyclic, #cyclic). Stable benchmark facts, carried
@@ -93,14 +93,14 @@ def sanitize(name: str) -> str:
 def find_solver_theorem(text: str):
     """The VC theorem is the one whose proof uses the solver (not a helper
     lemma). Pick the first `theorem _ : _ := by` whose body mentions
-    `solve_fixpoint`/`fusion`; this keeps any preceding helper lemmas in `head`."""
+    `solve_fixpoint`/`zap`; this keeps any preceding helper lemmas in `head`."""
     matches = list(THM_RE.finditer(text))
     if not matches:
         return None
     for i, m in enumerate(matches):
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         window = text[m.end(): min(end, m.end() + 400)]
-        if "solve_fixpoint" in window or re.search(r"\bfusion\b", window):
+        if "solve_fixpoint" in window or re.search(r"\bzap\b", window):
             return m
     return matches[0]
 
@@ -126,7 +126,7 @@ def build_file(group: str, bench: str, config: str, tac: str) -> tuple[str, str]
     thm = f"{sanitize(bench)}_{config}"
     proof = f"by unfold {vc}; {tac}; all_goals sorry"
     src = (
-        f"import Flex.Tactic.Tactics.Eval\n"   # fusion_grind / fusion_aesop
+        f"import Flex.Tactic.Tactics.Eval\n"   # zap_grind / zap_aesop
         f"{head}\n{prelude_body()}\n\n"
         f'benchx "{thm}" in\n'
         f"theorem {thm} : {vc} := {proof}\n"

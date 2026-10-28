@@ -95,7 +95,7 @@ def solveFixpointImpl : TacticM Unit := withMainContext do
       -- κ-mvars and let the kernel re-check the final term). An acyclic κ's σ̂
       -- may reference a cut κ's mvar (e.g. `k4 a5 → k0 a5` puts `?k4` in σ̂(k0));
       -- that is fine — κ-mvars are global, so the unifier resolves `?k4` once PA
-      -- assigns the cut. Fuse every acyclic κ (exactly like `fusion`); PA then
+      -- assigns the cut. Fuse every acyclic κ (exactly like `zap`); PA then
       -- solves ONLY the genuine feedback-vertex cut.
       let curr ← benchPhase "solve_fixpoint" "fuse" do
         let mut curr := body
@@ -123,13 +123,13 @@ def solveFixpointImpl : TacticM Unit := withMainContext do
       logInfo m!"[solve_fixpoint] → leaving unfilled κs as user goals")
 
   -- 4. Expose unfilled κ-mvars as user goals so the user can `exact`
-  --    a witness when fusion or PA didn't fully solve them.
+  --    a witness when zap or PA didn't fully solve them.
   let unfilled ← kvarsInOrder.filterMapM fun κ => do
     if (← κ.mvarId.isAssigned) then return none
     else return some κ.mvarId
 
   if unfilled.isEmpty then
-    -- Refresh LCtx — fusion's mvar assignments / earlier tactics may have
+    -- Refresh LCtx — zap's mvar assignments / earlier tactics may have
     -- mutated the main goal beyond the surrounding `withMainContext` snapshot.
     benchPhase "solve_fixpoint" "close" (withMainContext closeLoop)
   else

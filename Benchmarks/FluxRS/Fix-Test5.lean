@@ -4,7 +4,7 @@ import Flex
   Reproducer: Pop2 — acyclic κ-vars (k0..k3), but `solve_fixpoint` leaves a
   residual goal of `False`.
 
-  Issue: the dependency graph is acyclic, so fusion eliminates each κ and the
+  Issue: the dependency graph is acyclic, so zap eliminates each κ and the
   remaining VC should be checkable by SMT/grind. Yet the residual proof
   obligation reduces to `False`, suggesting either:
     1. A κ-sol was assigned too strong, making a downstream clause unsatisfiable.

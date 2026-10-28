@@ -7,7 +7,7 @@ open Lean Meta Elab Tactic
 
 /-! ## `reorderKs` tactic
 
-  Front-end for the fusion/PA pipeline: it *reorders* the head ∃-chain and then
+  Front-end for the zap/PA pipeline: it *reorders* the head ∃-chain and then
   *explodes* it into per-κ synthesis subgoals.
 
   Given a goal `∃ κ₁ … κₙ, P(κ₁, …, κₙ)`, `reorderKs`:
@@ -28,7 +28,7 @@ open Lean Meta Elab Tactic
 
   Every κ-mvar lives in the original goal's local context, so the metavariables
   carry the right scope. Downstream the acyclic κ's are dispatched by `sol`/
-  `fusion`, the cyclic κ's by `fixpoint`. -/
+  `zap`, the cyclic κ's by `fixpoint`. -/
 
 syntax "reorderKs" : tactic
 

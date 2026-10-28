@@ -1,9 +1,9 @@
-# RQ3: deterministic proof term (fusion/Zap) vs proof search (grind)
+# RQ3: deterministic proof term (Zap) vs proof search (grind)
 
-Liquid-fixpoint and FluxRS (real Rust VC) benchmarks with ≥1 **acyclic** κ (with none, `fusion` is a no-op so A≡B). Two pipelines on the same VC, each in its own `lake env lean` run (`Elab.async false`, `maxHeartbeats 4000000`):
+Liquid-fixpoint and FluxRS (real Rust VC) benchmarks with ≥1 **acyclic** κ (with none, `zap` is a no-op so A≡B). Two pipelines on the same VC, each in its own `lake env lean` run (`Elab.async false`, `maxHeartbeats 4000000`):
 
 - **A** = `unfold; solve_fixpoint` — acyclic κ → σ̂-assign, body closed by **grind** (`tryClosers`).
-- **B** = `unfold; fusion; all_goals solve_fixpoint` — acyclic κ → **deterministic kernel-checked proof term** (Zap), then PA+close on the residual.
+- **B** = `unfold; zap; all_goals solve_fixpoint` — acyclic κ → **deterministic kernel-checked proof term** (Zap), then PA+close on the residual.
 
 Heartbeats (`hb`, thousands) are deterministic; `ms` indicative. Per-phase heartbeats from the gated `flex.benchPhases` instrumentation.
 
@@ -34,9 +34,9 @@ Source: **LF** = Liquid-fixpoint, **FX** = FluxRS (real Rust VCs).
 
 ## Per-phase heartbeats (where the cost goes)
 
-A spends in `close` (grind); B moves that into deterministic `fusion` (sol+build+clean) + a residual `close`. `pa` is predicate abstraction (Houdini) on the cut — independent of A/B.
+A spends in `close` (grind); B moves that into deterministic `zap` (sol+build+clean) + a residual `close`. `pa` is predicate abstraction (Houdini) on the cut — independent of A/B.
 
-| benchmark | A fuse | A pa | **A close** | B fusion | B pa | B close |
+| benchmark | A fuse | A pa | **A close** | B zap | B pa | B close |
 |---|--:|--:|--:|--:|--:|--:|
 | `kut00` | 27 | 0 | **378** | 26 | 0 | 9 |
 | `arbitrary-kvar-arg` | 159 | 0 | **6203** | 139 | 0 | 755 |
@@ -85,7 +85,7 @@ The constructive Zap term (B) is *larger* (explicit `Exists.intro`/`And.intro`/`
 ## Aggregate
 
 - **Geomean heartbeat speedup (A/B): 2.3×** over 18 benchmarks solved by both.
-  - acyclic_only (13): **3.0×** (fusion replaces the grind closer; the win is direct).
+  - acyclic_only (13): **3.0×** (zap replaces the grind closer; the win is direct).
   - both (5): **1.1×** (PA on the cut dominates total cost, so the acyclic win is a small slice — see the per-phase `A close` vs total).
 - Aggregate heartbeats: 596437 → 553255 (1.1× less) over solved-by-both.
 
@@ -98,6 +98,6 @@ The constructive Zap term (B) is *larger* (explicit `Exists.intro`/`And.intro`/`
 | A solved | 3/18 | 5/18 | 11/18 | 16/18 | 17/18 |
 | B solved | 6/18 | 11/18 | 12/18 | 16/18 | 17/18 |
 - **Coverage:** A and B each solve all 18/18.
-- **Where fusion does NOT help (×~1.0):** `scrape03`, `comment`, `Quicksort` — fusion removes the κ (B's `fusion` phase is tiny) but the cost was never in the κ-structure: it's in the residual *leaf* grind (`scrape03`, `Quicksort`: A/B `close` both huge) or in **PA on the cut** (`comment`: A `pa`≈168k of 181k). The RQ3 win is specifically on κ-structure cost.
+- **Where zap does NOT help (×~1.0):** `scrape03`, `comment`, `Quicksort` — zap removes the κ (B's `zap` phase is tiny) but the cost was never in the κ-structure: it's in the residual *leaf* grind (`scrape03`, `Quicksort`: A/B `close` both huge) or in **PA on the cut** (`comment`: A `pa`≈168k of 181k). The RQ3 win is specifically on κ-structure cost.
 
 _Heartbeats deterministic; ms one machine. Reproduce: `python3 scripts/run_rq3.py && python3 scripts/rq3_aggregate.py`._

@@ -24,12 +24,12 @@ def SimpleLoop1 :=
 
 theorem SimpleLoopProof : SimpleLoop1 := by
   unfold SimpleLoop1
-  fusion
+  zap
   fixpoint
 
 theorem SimpleLoopProof' : SimpleLoop := by
   unfold SimpleLoop
-  fusion
+  zap
   solve_fixpoint
-  -- fusion
+  -- zap
   -- fixpoint

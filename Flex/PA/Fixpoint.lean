@@ -159,7 +159,7 @@ partial def solveFixpoint
 /-- One-shot PA: from cyclic κ list + flat constraint + κ-context, run the full
     Houdini pipeline and return the final solution Expr per κ.
 
-    Typical caller:  after fusion has eliminated acyclic κ's, hand the still-
+    Typical caller:  after zap has eliminated acyclic κ's, hand the still-
     cyclic κ's and the residual flat clauses to this function. -/
 def predicateAbstraction
     (kctx     : KContext)

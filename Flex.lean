@@ -2,6 +2,8 @@
 -- Core utils, monads and infra
 import Flex.Core
 
+import Flex.Preprocess
+
 -- Fusion algorithm
 import Flex.Fusion
 

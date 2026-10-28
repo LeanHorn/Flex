@@ -10,5 +10,5 @@ theorem existsOddityProof : existsOddityProp := by
   solve_fixpoint
 
 theorem test : existsOddityProp := by
-  fusion
+  zap
   grind

@@ -1,4 +1,4 @@
-# Evaluation: `solve_fixpoint` vs `fusion` + `solve_fixpoint`
+# Evaluation: `solve_fixpoint` vs `zap` + `solve_fixpoint`
 
 Comparison over every example in `demo/basic.lean`, measuring heartbeats
 (deterministic, `IO.getNumHeartbeats`/1000) and wall-clock ms
@@ -6,8 +6,8 @@ Comparison over every example in `demo/basic.lean`, measuring heartbeats
 `set_option Elab.async false` so tactic work is measured synchronously).
 
 - **A** = `unfold; solve_fixpoint` — the integrated solver (old branch-stripping
-  scope fusion + predicate abstraction + grind/aesop discharge).
-- **B** = `unfold; fusion; all_goals solve_fixpoint` — new LCA-scoped `fusion`
+  scope zap + predicate abstraction + grind/aesop discharge).
+- **B** = `unfold; zap; all_goals solve_fixpoint` — new LCA-scoped `zap`
   eliminates the acyclic κ structurally (certifying proof term), then
   `solve_fixpoint` discharges the (clean) residual.
 
@@ -37,13 +37,13 @@ Comparison over every example in `demo/basic.lean`, measuring heartbeats
 
 - **Geometric-mean speedup (heartbeats): 4.1×** across 20 examples.
 - Aggregate: 75983 → 9746 heartbeats (7.8× less), 2557 → 382 ms (6.7× less).
-- Every example is faster with `fusion` first; the margin grows with κ-count /
+- Every example is faster with `zap` first; the margin grows with κ-count /
   nesting depth (`ex_stress`, 5 κ: 14.8×; `ex12`/`ex14`, 4 κ: ~7–9×).
 
 ## Reading
 
 `solve_fixpoint` leans on grind/aesop search to discharge clauses; the LCA-scoped
-`fusion` replaces that search with a deterministic, kernel-checked structural
+`zap` replaces that search with a deterministic, kernel-checked structural
 elimination of the acyclic κ, so the downstream grind has little or nothing left
 to do. The clean scope (prefix binders/guards folded into κ-params instead of extra
 `∃`/conjuncts) is what keeps the residual small enough for grind to close cheaply.

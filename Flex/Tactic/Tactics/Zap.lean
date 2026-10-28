@@ -1,33 +1,15 @@
 import Flex.Tactic.Tactics.RewriteKs
 import Flex.Tactic.Utils
 import Flex.Core
+import Flex.Preprocess.FalsePredicates
 import Flex.Fusion
 import Flex.Zap
 
 open Lean Meta Elab Tactic
 
-/-- Debug trace for the `fusion` tactic (per-κ σ̂ + prefix counts, elimination
-    summary). Off by default — enable with `set_option trace.Fusion.debug true`. -/
-initialize registerTraceClass `Fusion.debug
+/-- Trace Zap's solutions and elimination steps with `trace.Zap.debug`. -/
+initialize registerTraceClass `Zap.debug
 
-/-! ## `fusion` tactic
-
-  Cosman–Jhala fusion for the *acyclic* κ's of a refinement constraint — the
-  first half of the solver, complementing `fixpoint` (predicate abstraction for
-  the cyclic κ's).
-
-  On a goal `∃ κ₁ … κₙ, P`, `fusion`:
-
-  1. peels the ∃-chain into fresh κ-mvars and classifies them into acyclic /
-     cyclic (`exprPartitionKVars`);
-  2. for each acyclic κ in topological order, computes its strongest solution
-     `σ̂` (`sol`) and eliminates it (`elim*`): head-position κ-apps collapse to
-     `True`, hypothesis-position κ-apps are replaced by `σ̂`;
-  3. rebuilds the proof (the `destructAndBuild`/`cert` bridge) and leaves
-     the residual `∃ κ_cyclic, P'` — body with every acyclic κ gone, cyclic κ's
-     still bound — plus any leaf obligations fusion could not discharge.
-
-  Hand the residual to `fix`, or use `solve` (= `zap` then `fix`). -/
 syntax "zap" : tactic
 
 /-- Build the bridge proof `(∃ κ_cyclic, P') → (∃ κ₁ … κₙ, P)`: ∃-eliminate the
@@ -36,11 +18,11 @@ syntax "zap" : tactic
     solutions `kLams`, cyclic κ's via the eliminated fvars — with `cert`
     supplying the body proof. -/
 partial def destructAndBuild
-    (leaf : LeafHandler)
-    (kvars : Array KVar)
-    (kLams : List (KVar × Expr))
-    (bodyWithMvars : Expr)
-    (originalType : Expr)
+    (leaf   : LeafHandler)
+    (kvars  : Array KVar)
+    (kLams  : List (KVar × Expr))
+    (bodyWithMvars  : Expr)
+    (originalType   : Expr)
     (curWit : Expr) (curWitTy : Expr)
     (cycRem : List KVar)
     (cycAcc : Array (KVar × Expr)) :
@@ -83,7 +65,7 @@ partial def destructAndBuild
           | none =>
             match cycFvMap.get? κmvar with
             | some fv => pure fv
-            | none => throwError "fusion: no witness for κ idx={idx}"
+            | none => throwError "zap: no witness for κ idx={idx}"
         let restType := pred.beta #[witness]
         let restProof ← buildIntros restType (idx + 1)
         mkAppOptM ``Exists.intro
@@ -112,9 +94,8 @@ structure LeafStrategy where
   label     : String
   mkHandler : Std.HashMap MVarId (Nat × Nat × Nat) → IO.Ref (Array MVarId) → LeafHandler
 
-/-- `zap`'s strategy. The label `"fusion"` is frozen: `scripts/run_rq3.py`
-    keys its `[phase]` lines on it. -/
-def emitStrategy : LeafStrategy := { label := "fusion", mkHandler := emitLeaf }
+/-- Emit exact proofs at predicate heads and report Zap phase timings. -/
+def emitStrategy : LeafStrategy := { label := "zap", mkHandler := emitLeaf }
 
 /-- The `zap` pipeline, parameterised by what happens at each κ-head leaf. -/
 def zapImpl (s : LeafStrategy) : TacticM Unit := focus <| withMainContext do
@@ -127,7 +108,7 @@ def zapImpl (s : LeafStrategy) : TacticM Unit := focus <| withMainContext do
   -- Keep safety clauses explicit instead of synthesizing an error predicate.
   let goal ← getMainGoal
   let type ← goal.getType
-  let (normalized, proof) ← inlineFalsePredicates type
+  let (normalized, proof) ← Flex.Preprocess.inlineFalsePredicates type
   if normalized != type then
     let next ← mkFreshExprMVar normalized (kind := .syntheticOpaque)
     goal.assign (← mkAppM ``Iff.mpr #[proof, next])
@@ -181,10 +162,10 @@ def zapImpl (s : LeafStrategy) : TacticM Unit := focus <| withMainContext do
       let mut prefixInfo : Std.HashMap MVarId (Nat × Nat × Nat) := ∅
       for κ in acyclic do
         -- LCA-scoped, structure-preserving σ̂ + prefix counts (= "same level
-        -- of scope as original fusion": prefix binders fold into κ-params,
+        -- of scope as original zap": prefix binders fold into κ-params,
         -- no extra ∃/guards in the solution).
         let r ← (exprSolScopedPres κ curr).run kctx
-        trace[Fusion.debug] m!"sol = {r.sol}  (nB={r.nBinders} nG={r.nGuards} nOr={r.nOr})"
+        trace[Zap.debug] m!"sol = {r.sol}  (nB={r.nBinders} nG={r.nGuards} nOr={r.nOr})"
         let sol    := simplifyAndExists r.sol
         let lam    ← solToWitnessExpr sol κ.params κ.paramTypes
         kLams := kLams ++ [(κ, lam)]
@@ -215,7 +196,7 @@ def zapImpl (s : LeafStrategy) : TacticM Unit := focus <| withMainContext do
   let some (newGoalType, kLams, acyclic, cyclic, kvars, bodyWithMvars, prefixInfo)
     ← dataRef.get
     | do
-        trace[Fusion.debug] m!"fusion: no acyclic κs to eliminate"
+        trace[Zap.debug] m!"zap: no acyclic κs to eliminate"
         return
 
   -- Create bridge and new-goal mvars in original lctx.
@@ -252,7 +233,7 @@ def zapImpl (s : LeafStrategy) : TacticM Unit := focus <| withMainContext do
         let cleanM ← mkFreshExprMVar (some clean) (kind := .syntheticOpaque)
         m.assign (← mkAppM ``Iff.mpr #[iff, cleanM])
         return cleanM.mvarId!
-  trace[Fusion.debug] m!"fusion: eliminated {acyclic.length} acyclic κ \
+  trace[Zap.debug] m!"zap: eliminated {acyclic.length} acyclic κ \
             {acyclic.map (·.name)}; new goal is ∃ \
             {cyclic.length} cyclic κ + body; \
             {residuals.length} residual obligation(s)"
@@ -260,53 +241,3 @@ def zapImpl (s : LeafStrategy) : TacticM Unit := focus <| withMainContext do
 
 elab_rules : tactic
   | `(tactic| zap) => zapImpl emitStrategy
-
-/-- Backward-compatible alias — `fusion` is the former name of the acyclic
-    κ-eliminator now called `zap`. -/
-macro "fusion" : tactic => `(tactic| zap)
-
--- ───────────────────────────────────────────────────────────────────────
--- Tests for zap (also exercises the `fusion` alias)
--- ───────────────────────────────────────────────────────────────────────
-
-private def guardedCHC : Prop := ∃ κ : Int → Int → Prop,
-    (∀ x y, True → (True ∧ y = x ∧ True) → κ x y) ∧
-    (∀ x y, κ x y → y = x)
-
-example : guardedCHC := by
-  zap
-  all_goals grind
-
-/-- A-test: one acyclic κ. fusion should leave only the non-κ leaf. -/
-example : ∃ κ : Int → Int → Prop,
-    ∀ x : Int, 0 ≤ x →
-      (∀ ν : Int, ν = x - 1 → κ ν x)
-    ∧ (∀ y : Int, κ y x →
-        ∀ ν : Int, ν = y + 1 → 0 ≤ ν) := by
-  fusion
-  all_goals first | rfl | grind
-
-/-- B-test: two independent acyclic κs.  fusion should leave two
-    non-κ leaves. -/
-example :
-  ∃ κ1 : Int → Int → Prop, ∃ κ2 : Int → Int → Prop,
-    ∀ x : Int, 0 ≤ x →
-      (∀ ν : Int, ν = x + 1 → κ1 ν x)
-    ∧ (∀ ν : Int, ν = x - 1 → κ2 ν x)
-    ∧ (∀ a : Int, κ1 a x → 0 ≤ a)
-    ∧ (∀ b : Int, κ2 b x →
-        ∀ ν : Int, ν = b + 1 → 0 ≤ ν) := by
-  fusion
-  all_goals first | rfl | grind
-
-/-- D-test (Phase 5): mixed — κ1 cyclic (self-loop), κ2 acyclic.
-    fusion eliminates κ2 in-place; residual is the single ∃-form goal
-    `∃ κ1, c′`. The cyclic-κ1 witness `λ y => 0 ≤ y` is supplied manually
-    (grind cannot synthesize it). -/
-example : ∃ κ1 : Int → Prop, ∃ κ2 : Int → Prop,
-      (∀ y : Int, κ1 y → κ1 (y + 1))
-    ∧ (∀ ν : Int, ν = 0 → κ1 ν)
-    ∧ (∀ ν : Int, ν = 0 → κ2 ν)
-    ∧ (∀ z : Int, κ2 z → 0 ≤ z) := by
-  fusion
-  exact ⟨fun y => 0 ≤ y, by grind⟩

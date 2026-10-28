@@ -11,17 +11,17 @@ open Lean Elab Meta Tactic
 /-! ## `fixpoint` tactic
 
   Predicate abstraction for the *cyclic* κ's of a constraint — the second half
-  of the solver, complementing `fusion` (which handles the acyclic κ's).
+  of the solver, complementing `zap` (which handles the acyclic κ's).
 
   Per the pipeline contract:
   - **assumes κ's as meta-vars** — peels the head ∃-chain into κ-mvars first, so
-    it works directly on `∃ κ, P` goals (e.g. the residual `fusion` leaves);
+    it works directly on `∃ κ, P` goals (e.g. the residual `zap` leaves);
   - **predicate abstraction** — seeds every cyclic κ with the union of all
     `@[qualif]`-tagged predicates and runs Houdini weakening to a fixpoint;
   - **existentials handled too** — the ∃-peeling means no manual `Exists.intro`
     is needed before calling it.
 
-  Acyclic κ's are *not* solved here — run `fusion` first. Any acyclic κ still
+  Acyclic κ's are *not* solved here — run `zap` first. Any acyclic κ still
   present (or any κ PA fails to solve) is surfaced as a user goal `⊢ T`. -/
 
 private def fixpointImpl : TacticM Unit := withMainContext do
@@ -36,7 +36,7 @@ private def fixpointImpl : TacticM Unit := withMainContext do
       -- Partition κ's; PA only ever solves the cyclic ones.
       let (acyclic, cyclic) ← (exprPartitionKVars body).run kctx
       unless acyclic.isEmpty do
-        logInfo m!"[fixpoint] ⚠ acyclic κ present — run `fusion` first: \
+        logInfo m!"[fixpoint] ⚠ acyclic κ present — run `zap` first: \
                    {acyclic.map (·.name)}"
 
       benchPhase "fixpoint" "pa" do

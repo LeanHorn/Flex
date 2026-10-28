@@ -81,7 +81,7 @@ elab "perm_exists" : tactic => withMainContext do
 /-! ## `rewriteKs` tactic
 
   Reorders the head ∃-chain of the goal so that κ-vars appear in the
-  order `solve_fusion` expects: cyclic κ's first, then acyclic κ's in
+  order `zap` expects: cyclic κ's first, then acyclic κ's in
   `topoSortAcyclic` order. Uses `perm_exists` to discharge the
   resulting `Iff`.
 -/

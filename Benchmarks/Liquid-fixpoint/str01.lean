@@ -21,4 +21,4 @@ theorem str01Proof : str01Prop := by
   solve_fixpoint
 
   -- sorry
-  -- solve_fusion
+  -- zap

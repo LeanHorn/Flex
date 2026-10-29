@@ -41,10 +41,9 @@ partial def exprKVarsOrdered (e : Expr) : KM (List KVar) := do
   else
     KM.exprKVars e
 
-/-- Topologically sort the acyclic κ-vars so dependency sinks come first.
-    If `(u, v) ∈ deps` (u in body where v in head), then u must be eliminated
-    before v so v's sol doesn't leak a free reference to u. -/
-partial def topoSortAcyclic (acyclic : List KVar) (deps : List (KVar × KVar)) :
+/-- Order elimination variables so dependencies precede the heads using them.
+If `(u, v) ∈ deps` (u in the body, v in the head), eliminate u before v. -/
+partial def topoSortAcyclic (elimVars : List KVar) (deps : List (KVar × KVar)) :
     List KVar :=
   let rec go (remaining : List KVar) (acc : List KVar) : List KVar :=
     match remaining with
@@ -56,8 +55,8 @@ partial def topoSortAcyclic (acyclic : List KVar) (deps : List (KVar × KVar)) :
         !deps.any fun (u, v) => v == κ && u != κ && remaining.contains u
       match ready? with
       | some κ => go (remaining.filter (· != κ)) (κ :: acc)
-      | none   => acc.reverse ++ remaining  -- cycle in "acyclic" (shouldn't happen)
-  go acyclic []
+      | none   => acc.reverse ++ remaining  -- The elimination graph should be acyclic.
+  go elimVars []
 
 -- IMPLEMENTATION OF SCC Algorithm
 
@@ -156,12 +155,12 @@ partial def cutVarsIterative (nodes : List KVar)
     let remainingEdges := edges.filter fun (u, v) => u != pick && v != pick
     pick :: cutVarsIterative remainingNodes remainingEdges
 
--- Classify all κ-vars into (acyclicInTopoOrder, cyclic)
+/-- Return elimination variables in dependency order and the retained feedback-vertex cut. -/
 def classifyKVars (allKs : List KVar) (deps : List (KVar × KVar)) :
     List KVar × List KVar :=
-  let khat := cutVarsIterative allKs deps
-  let acyclic := allKs.filter fun k => !khat.contains k
-  let acyclicDeps := deps.filter fun (u, v) =>
-    acyclic.contains u && acyclic.contains v
-  let acyclicSorted := topoSortAcyclic acyclic acyclicDeps
-  (acyclicSorted, khat)
+  let cutVars := cutVarsIterative allKs deps
+  let elimVars := allKs.filter fun k => !cutVars.contains k
+  let elimDeps := deps.filter fun (u, v) =>
+    elimVars.contains u && elimVars.contains v
+  let elimVars := topoSortAcyclic elimVars elimDeps
+  (elimVars, cutVars)

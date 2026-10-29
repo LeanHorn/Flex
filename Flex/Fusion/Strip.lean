@@ -115,17 +115,9 @@ def findOuterBinderProjFolds (κ : KVar) (binderFvar : FVarId) (body : Expr) :
       if isProjOfX && kArgsList.all (fun args => args[i]? == some argi)
       then some (argi, i) else none
 
-/-- Split κ-vars into (acyclic, cyclic). The acyclic list is topologically
-    sorted so dependency sinks (no κ-deps) appear first — required so each
-    κ's sol is built only after its dependencies have been eliminated.
-
-    The cyclic set is a **feedback-vertex cut set** (the liquid-fixpoint
-    "kuts"): the minimal-ish set of κ's whose removal makes the dependency
-    graph acyclic (`classifyKVars`/`cutVarsIterative`). Every non-cut κ is then
-    eliminated by fusion, matching hs-fixpoint — e.g. on `SimpleLoop`
-    (`k0→k1`, `k1→k0`, `k0→k0`) the self-loop forces `k0` into the cut and `k1`
-    is fused, instead of the old reachability rule ("cyclic = on any cycle")
-    which sent the whole `{k0,k1}` SCC to PA. -/
+/-- Partition predicates into `(elimVars, cutVars)`. Elimination variables are
+ordered so their dependencies are eliminated first. Cut variables remain unknown;
+removing them from the dependency graph makes the remaining graph acyclic. -/
 def exprPartitionKVars (e : Expr) : KM (List KVar × List KVar) := do
   let allKs := (← exprKVarsOrdered e).eraseDups
   let deps  ← exprDeps e

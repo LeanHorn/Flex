@@ -81,7 +81,7 @@ elab "perm_exists" : tactic => withMainContext do
 /-! ## `rewriteKs` tactic
 
   Reorders the head ∃-chain of the goal so that κ-vars appear in the
-  order `solve_fusion` expects: cyclic κ's first, then acyclic κ's in
+  order `zap` expects: cut κ's first, then elimination κ's in
   `topoSortAcyclic` order. Uses `perm_exists` to discharge the
   resulting `Iff`.
 -/
@@ -124,8 +124,8 @@ partial def collectArrowTypes (ty : Expr) : MetaM (List Expr) := do
     return dom :: rest
   else return []
 
-/-- `rewriteKs` — reorder the head ∃-chain so cyclic κ's come first,
-    then acyclic κ's in topological-sort order (sinks first). -/
+/-- `rewriteKs` — reorder the head ∃-chain so cut κ's come first,
+    then elimination κ's in dependency order. -/
 elab "rewriteKs" : tactic => withMainContext do
   let goal ← getMainGoal
   let goalType ← goal.getType
@@ -145,14 +145,14 @@ elab "rewriteKs" : tactic => withMainContext do
         { name, params, paramTypes, mvarId := mvar.mvarId! }
       bodyWithMvars := bodyWithMvars.replaceFVar fvar mvar
 
-    -- Classify κ's into acyclic + cyclic
+    -- Classify κ's into elimVars + cutVars
     let kctxMap := kvars.foldl
       (fun acc k => acc.insert k.mvarId k) (∅ : Std.HashMap MVarId KVar)
     let kctx : KContext := { kvars := kctxMap }
-    let (acyclic, cyclic) ← (exprPartitionKVars bodyWithMvars).run kctx
+    let (elimVars, cutVars) ← (exprPartitionKVars bodyWithMvars).run kctx
 
-    -- Desired order: cyclic first, then acyclic (sinks first)
-    let desired : List KVar := cyclic ++ acyclic
+    -- Desired order: cutVars first, then elimVars in dependency order
+    let desired : List KVar := cutVars ++ elimVars
     let perm : Array Nat := desired.toArray.filterMap fun κ =>
       (List.range kvars.size).find? fun i => kvars[i]!.mvarId == κ.mvarId
 

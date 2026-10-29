@@ -84,22 +84,18 @@ def solveFixpointImpl : TacticM Unit := withMainContext do
       let body     ← bodyGoal.getType
       let body     ← reduce body
 
-      -- Partition acyclic vs cyclic κ-vars
-      let (acyclic, cyclic) ← (exprPartitionKVars body).run kctx
+      -- Order predicates for elimination and retain a feedback-vertex cut.
+      let (elimVars, cutVars) ← (exprPartitionKVars body).run kctx
       -- Parsed by scripts/kappa_classify.py, which runs Lean with -Dflex.benchPhases=true.
       if flex.benchPhases.get (← getOptions) then
-        IO.println s!"[solve_fixpoint] Acyclic κ: {acyclic.map (·.name)}"
-        IO.println s!"[solve_fixpoint] Cyclic κ:  {cyclic.map (·.name)}"
+        IO.println s!"[solve_fixpoint] Elimination κ: {elimVars.map (·.name)}"
+        IO.println s!"[solve_fixpoint] Cut κ: {cutVars.map (·.name)}"
 
-      -- Fusion for ALL acyclic κs (no proof-term construction — we just assign
-      -- κ-mvars and let the kernel re-check the final term). An acyclic κ's σ̂
-      -- may reference a cut κ's mvar (e.g. `k4 a5 → k0 a5` puts `?k4` in σ̂(k0));
-      -- that is fine — κ-mvars are global, so the unifier resolves `?k4` once PA
-      -- assigns the cut. Fuse every acyclic κ (exactly like `fusion`); PA then
-      -- solves ONLY the genuine feedback-vertex cut.
+      -- Eliminate non-cut predicates. Their solutions may reference cut
+      -- metavariables, which PA fills afterward.
       let curr ← benchPhase "solve_fixpoint" "fuse" do
         let mut curr := body
-        for κ in acyclic do
+        for κ in elimVars do
           let scoped' ← (exprScope κ curr).run kctx
           let sol     ← (exprSolScoped κ scoped').run kctx
           trace[solveFixpoint] m!"fuse {κ.name}: sol = {sol}"
@@ -108,12 +104,11 @@ def solveFixpointImpl : TacticM Unit := withMainContext do
         pure curr
 
       -- Predicate abstraction only for the genuine cut κs.
-      let paSet := cyclic
       benchPhase "solve_fixpoint" "pa" do
-        if !paSet.isEmpty then
-          trace[solveFixpoint] m!"PA on cyclic κs {paSet.map (·.name)}"
+        if !cutVars.isEmpty then
+          trace[solveFixpoint] m!"PA on cut κs {cutVars.map (·.name)}"
           let flatCs ← (exprFlat curr).run kctx
-          let paSols ← predicateAbstraction kctx paSet flatCs
+          let paSols ← predicateAbstraction kctx cutVars flatCs
           for (κ, sol) in paSols do
             trace[solveFixpoint] m!"PA sol for {κ.name} = {sol}"
             κ.assignSol sol
@@ -123,13 +118,13 @@ def solveFixpointImpl : TacticM Unit := withMainContext do
       logInfo m!"[solve_fixpoint] → leaving unfilled κs as user goals")
 
   -- 4. Expose unfilled κ-mvars as user goals so the user can `exact`
-  --    a witness when fusion or PA didn't fully solve them.
+  --    a witness when zap or PA didn't fully solve them.
   let unfilled ← kvarsInOrder.filterMapM fun κ => do
     if (← κ.mvarId.isAssigned) then return none
     else return some κ.mvarId
 
   if unfilled.isEmpty then
-    -- Refresh LCtx — fusion's mvar assignments / earlier tactics may have
+    -- Refresh LCtx — zap's mvar assignments / earlier tactics may have
     -- mutated the main goal beyond the surrounding `withMainContext` snapshot.
     benchPhase "solve_fixpoint" "close" (withMainContext closeLoop)
   else

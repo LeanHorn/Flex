@@ -10,7 +10,7 @@ open Lean Meta Elab Tactic
 
 /-! ## `solK1` tactic
 
-  Solve exactly one acyclic κ in the goal's ∃-chain, introducing the
+  Solve exactly one elimination κ in the goal's ∃-chain, introducing the
   computed witness as a `let`-bound local hypothesis. The remaining ∃-chain
   is preserved; the solved κ continues to appear in the goal by *name*
   (folded), so the user can later choose to `lazy_unfold κ`.
@@ -24,9 +24,9 @@ open Lean Meta Elab Tactic
   Strategy:
     1. `rewriteKs` to canonicalize the ∃-chain order.
     2. Peel ∃-binders into fresh syntheticOpaque κ-mvars (no Exists.intro).
-    3. Partition into (acyclic, cyclic); walk acyclic in topo order and
+    3. Partition into (elimVars, cutVars); walk elimVars in topo order and
        pick the first κ whose sol1 witness is *closed* (no references to
-       other scratch κ-mvars). A κ classified as acyclic but with a
+       other scratch κ-mvars). A predicate in `elimVars` with a
        hypothesis-position self-appearance produces a witness referencing
        itself — that κ needs `solve_fixpoint`, not `solK1`.
     4. Compute the witness lambda via `exprElim1` + `solToWitnessExpr`.
@@ -57,27 +57,27 @@ private def solK1Impl (κName? : Option (TSyntax `ident)) : TacticM Unit :=
           { name, params, paramTypes, mvarId := mvar.mvarId! }
         bodyWithMvars := bodyWithMvars.replaceFVar fvar mvar
 
-      -- 3. Partition into acyclic (topo order, sinks first) and cyclic.
+      -- 3. Partition into elimVars (dependency order) and cutVars.
       let kctxMap := kvars.foldl
         (fun acc k => acc.insert k.mvarId k) (∅ : Std.HashMap MVarId KVar)
       let kctx : KContext := { kvars := kctxMap }
-      let (acyclic, cyclic) ← (exprPartitionKVars bodyWithMvars).run kctx
+      let (elimVars, cutVars) ← (exprPartitionKVars bodyWithMvars).run kctx
 
-      if acyclic.isEmpty then
-        logInfo m!"solK1: no acyclic κ to solve \
-                   (cyclic: {cyclic.map (·.name)})"
+      if elimVars.isEmpty then
+        logInfo m!"solK1: no elimination κ to solve \
+                   (cut: {cutVars.map (·.name)})"
         return
 
-      -- 4. Determine candidate list (user override or full acyclic order).
+      -- 4. Determine candidate list (user override or full elimVars order).
       let candidates : List KVar ← match κName? with
-        | none    => pure acyclic
+        | none    => pure elimVars
         | some nm =>
           let n := nm.getId
-          match acyclic.find? (·.name == n) with
+          match elimVars.find? (·.name == n) with
           | some κ => pure [κ]
           | none =>
-            throwError "solK1: κ '{n}' is not in the acyclic list \
-              (acyclic: {acyclic.map (·.name)}, cyclic: {cyclic.map (·.name)})"
+            throwError "solK1: κ '{n}' is not an elimination variable \
+              (elimination: {elimVars.map (·.name)}, cut: {cutVars.map (·.name)})"
 
       -- 5. Nav candidates; pick the first whose witness is closed
       --    (no references back to scratch κ-mvars).
@@ -100,9 +100,9 @@ private def solK1Impl (κName? : Option (TSyntax `ident)) : TacticM Unit :=
           throwError "solK1: named κ's witness references other κ-mvars \
             (self- or forward-reference); use `solve_fixpoint` instead"
         else
-          logInfo m!"solK1: no acyclic κ with a closed witness \
-              (acyclic: {acyclic.map (·.name)}, \
-               cyclic: {cyclic.map (·.name)})"
+          logInfo m!"solK1: no elimination κ with a closed witness \
+              (elimination: {elimVars.map (·.name)}, \
+               cut: {cutVars.map (·.name)})"
       | some (chosen, witnessLam) =>
         -- 6. Locate chosen κ's binder index.
         let some chosenIdx :=
@@ -163,7 +163,7 @@ elab_rules : tactic
   | `(tactic| solK1 $name:ident) => solK1Impl (some name)
 
 
--- Single acyclic κ. `solK1` binds κ and leaves the residual proof
+-- Single elimination κ. `solK1` binds κ and leaves the residual proof
 -- obligation with κ folded.
 def solK1_ex1 : Prop :=
   ∃ κ : Int → Prop, ∀ x : Int, x = 0 → κ x
@@ -174,7 +174,7 @@ example : solK1_ex1 := by
   lazy_unfold κ
   grind
 
---  Two independent acyclic κs. Repeated `solK1` peels them one at
+--  Two independent elimination κs. Repeated `solK1` peels them one at
 --  a time; both end up as let-decls referenced by name.
 def solK1_ex2 : Prop :=
   ∃ κ1 : Int → Prop, ∃ κ2 : Int → Prop,

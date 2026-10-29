@@ -4,6 +4,7 @@ import Flex.Core
 import Flex.PA.Qualifier
 import Flex.PA.Instantiation
 import Flex.PA.Weaken
+import Flex.PA.Scrape
 
 open Lean Meta Elab Term Tactic
 
@@ -22,14 +23,25 @@ private structure InitialCandidates where
   truncated : Bool := false
   instancesTruncated : Bool := false
 
+/-- Ignore tautologies and compare equalities independently of their orientation. -/
+private def candidateKey? (body : Expr) : Option Expr :=
+  let body := body.consumeMData
+  if body.isConstOf ``True then none
+  else if body.isAppOfArity ``Eq 3 then
+    let lhs := body.getArg! 1
+    let rhs := body.getArg! 2
+    if lhs == rhs then none
+    else some (if rhs.lt lhs then mkApp3 body.getAppFn (body.getArg! 0) rhs lhs else body)
+  else some body
+
 /-- Instantiate tagged qualifiers, then the supplied extras, deduplicating predicates.
     Per-κ limits bound unique candidates and visited slot assignments. -/
-def buildInitialAssignment (cyclicKs : List KVar) (extraQualifiers : Array Expr := #[])
+def buildInitialAssignment (cutVars : List KVar) (extraQualifiers : Array Expr := #[])
     (maxCandidates : Option Nat := none)
-    (maxInstances : Option Nat := none)
+    (maxInstances : Option Nat := none) (anchored : Array PAAnchoredQualifier := #[])
     : MetaM (List (KVar × List (Expr × List Nat))) := do
   let qs := (← getQualifiers) ++ extraQualifiers
-  cyclicKs.mapM fun κ => do
+  cutVars.mapM fun κ => do
     let params := (κ.params.map fun n => Expr.fvar (FVarId.mk n)).toArray
     let mut state : InitialCandidates := {}
     for q in qs do
@@ -39,17 +51,40 @@ def buildInitialAssignment (cyclicKs : List KVar) (extraQualifiers : Array Expr 
         let state := { state with instances := state.instances + 1 }
         let args := (slots.map fun i => params[i]!).toArray
         let body ← Expr.instQualifier q args
-        if state.seen.contains body then return (state, true)
+        let some key := candidateKey? body | return (state, true)
+        if state.seen.contains key then return (state, true)
         if maxCandidates.any (state.entries.size >= ·) then
           return ({ state with truncated := true }, false)
         return ({ state with
           entries := state.entries.push (q, slots)
-          seen := state.seen.insert body }, true)
+          seen := state.seen.insert key }, true)
       if state.truncated || state.instancesTruncated then break
     if state.truncated then
       logWarning m!"fix: candidate limit ({state.entries.size}) reached for {κ.name}; additional candidates omitted"
     if state.instancesTruncated then
       logWarning m!"fix: instance limit ({state.instances}) reached for {κ.name}; further slot assignments omitted"
+    -- Source-directed candidates have a separate bounded budget and never displace templates.
+    for candidate in anchored do
+      unless candidate.kvar == κ.mvarId do continue
+      unless candidate.slots.all (· < params.size) do
+        throwError "fix: source candidate refers to an invalid predicate slot"
+      withNewMCtxDepth do
+        if candidate.qualifier.hasMVar || candidate.qualifier.hasLooseBVars then
+          throwError "fix: source candidate contains unresolved variables"
+        check candidate.qualifier
+        forallTelescopeReducing (← inferType candidate.qualifier) fun arguments result => do
+          unless result.isProp && arguments.size == candidate.slots.length do
+            throwError "fix: source candidate has an invalid signature"
+          for argument in arguments, slot in candidate.slots do
+            unless ← isDefEq (← inferType argument) κ.paramTypes[slot]! do
+              throwError "fix: source candidate argument does not match its predicate slot"
+      let body ← Expr.instQualifier candidate.qualifier
+        (candidate.slots.toArray.map (params[·]!))
+      let some key := candidateKey? body | continue
+      unless state.seen.contains key do
+        state := { state with
+          entries := state.entries.push (candidate.qualifier, candidate.slots)
+          seen := state.seen.insert key }
     return (κ, state.entries.toList)
 
 private structure PAClause where
@@ -121,16 +156,12 @@ partial def solveFixpoint
   observe (.converged count)
   return out
 
-/-- One-shot PA: from cyclic κ list + flat constraint + κ-context, run the full
-    Houdini pipeline and return the final solution Expr per κ.
-
-    Typical caller:  after fusion has eliminated acyclic κ's, hand the still-
-    cyclic κ's and the residual flat clauses to this function. -/
+/-- Synthesize predicates for the retained cut variables after Zap elimination. -/
 def predicateAbstraction
     (kctx     : KContext)
-    (cyclicKs : List KVar)
+    (cutVars : List KVar)
     (flatCs   : List Expr)
     : TermElabM (List (KVar × Expr)) := do
-  let initial ← buildInitialAssignment cyclicKs
+  let initial ← buildInitialAssignment cutVars
   let fixed   ← solveFixpoint kctx flatCs initial
   finalizeSolutions fixed

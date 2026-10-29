@@ -139,7 +139,7 @@ def SparseImpl__0__New := ∃ k0 : (a0 : Int) -> (a1 : Int) -> (a2 : Int) -> (a3
 
 def pf : SparseImpl__0__New := by
   unfold SparseImpl__0__New
-  fusion
+  zap
   refine ⟨fun a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 => a0 = a2 ∧ a1 = a2 ∧ a4 = a6,
           fun a0 a1 a2 a3 a4 a5 a6 a7 => a0 = a3 ∧ a1 = a3 ∧ a2 = a4 ∧ a5 = a6 ∧ 0 ≤ a4 ∧ a4 ≤ a6,
           fun b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 b16 => b0 < b7,

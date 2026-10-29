@@ -16,7 +16,7 @@ import Flex
   Before the fold fix the `dom.isSort` gate refused the `Prop`-typed binders
   `a'₀, a'₂`, which *stopped* the scope descent and cascaded `a'₁, a'₃`
   (foldable `Int`s) into the solution as existentials — yielding the bloated
-  `∃a'₀ ∃a'₁ ∃a'₂ ∃a'₃ …`.  `fusion` (Zap) now folds the universal `Prop`
+  `∃a'₀ ∃a'₁ ∃a'₂ ∃a'₃ …`.  `zap` now folds the universal `Prop`
   slots, so the leak is gone.  See `Fusion/StripPres.lean` (2a).
 -/
 
@@ -31,5 +31,5 @@ def BasicsLet2 : Prop :=
               (∀ (a'₄ : Int), k0 a'₄ n₀ a'₀ a'₁ a'₂ a'₃ → n₀ < a'₄)
 
 theorem BasicsLet2_proof : BasicsLet2 := by
-  fusion
+  zap
   all_goals grind

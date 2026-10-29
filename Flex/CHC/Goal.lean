@@ -1,9 +1,13 @@
 import Flex.CHC.Certificate
 import Flex.CHC.Normalize
+import Flex.CHC.Projection
+import Flex.CHC.Facts
 
 namespace Flex.CHC
 
 open Lean Meta Elab Term
+
+initialize registerTraceClass `flex.chc
 
 /-- Stages of a single backend attempt, without tactic selection or fallback. -/
 inductive Stage where
@@ -67,7 +71,7 @@ structure PreparedGoal where
 /-- Validate and peel predicates, compact guards, then normalize for export.
 With `headsOnly`, retain the cleaned clause structure for certification. Failures restore entry state. -/
 def prepareGoal (goal : MVarId) (maxClauses : Nat := 1024)
-    (headsOnly : Bool := false) : TermElabM PreparedGoal := do
+    (headsOnly : Bool := false) (facts : Facts.Config := {}) : TermElabM PreparedGoal := do
   let saved ← Term.saveState
   let committed ← IO.mkRef false
   try
@@ -77,9 +81,10 @@ def prepareGoal (goal : MVarId) (maxClauses : Nat := 1024)
       let target ← instantiateMVars (← goal.getType)
       unless ← isProp target do
         throwError "CHC preparation: goal must be a proposition"
-      Prepare.checkPredicatePrefix target
+      Prepare.checkPredicatePrefix target (allowProjection := true)
       let (_, kvars, bodyGoal) ← peelExistentialsAndIntro goal
       let bodyGoal ← compactGoal bodyGoal kvars
+      let bodyGoal ← Facts.enrichGoal bodyGoal kvars facts
       let exportGoal ← if headsOnly then
           bodyGoal.withContext do
             let copy ← Meta.mkFreshExprMVar (some (← bodyGoal.getType))
@@ -103,7 +108,7 @@ With `headsOnly`, certify κ-heads and leave one VC with its original structure.
 Callers configure oracle budgets and install residual goals. -/
 def solveGoal (goal : MVarId) (config : Config := {})
     (oracle : ProofOracle := defaultProofOracle) (maxClauses : Nat := 1024)
-    (headsOnly : Bool := false)
+    (headsOnly : Bool := false) (facts : Facts.Config := {})
     : TermElabM GoalResult := do
   let saved ← Term.saveState
   let committed ← IO.mkRef false
@@ -113,9 +118,25 @@ def solveGoal (goal : MVarId) (config : Config := {})
   let size ← IO.mkRef (0, 0)
   try
     goal.withContext do
-      let prepared ← measure phase timings .prepare <| prepareGoal goal maxClauses headsOnly
+      let prepared ← measure phase timings .prepare <| prepareGoal goal maxClauses headsOnly facts
       let problem ← measure phase timings .exporting do
-        exportConstraints prepared.kvars (← prepared.exportGoal.getType)
+        let body ← prepared.exportGoal.getType
+        try
+          exportConstraints prepared.kvars body
+        catch error =>
+          if error.isInterrupt then throw error
+          trace[flex.chc] "direct export unavailable: {error.toMessageData}"
+          let projected ← Projection.project prepared.kvars body { maxClauses }
+          let problem ← exportConstraints projected.kvars projected.body
+          let relations ← problem.relations.mapM fun relation => do
+            let some mapping := projected.mappings.find?
+                (·.projected.mvarId == relation.kvar.mvarId)
+              | throwError "CHC projection: missing predicate mapping"
+            return { relation with
+              kvar := mapping.original
+              leanType := ← mapping.original.mvarId.getType
+              arguments := some mapping.arguments }
+          return { problem with relations }
       size.set (problem.relations.size, problem.clauseCount)
       let solver ← measure phase timings .solver do
         let result ← run problem config

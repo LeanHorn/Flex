@@ -78,8 +78,8 @@ def run_file(path: Path) -> dict:
 
     # per-category tally across all invocations in this file
     tally: dict[str, int] = {"none": 0, "acyclic_only": 0, "cyclic_only": 0, "both": 0}
-    for acyclic, cyclic in invocations:
-        tally[classify(acyclic, cyclic)] += 1
+    for elim_vars, cut_vars in invocations:
+        tally[classify(elim_vars, cut_vars)] += 1
 
     return {
         "path":        path,

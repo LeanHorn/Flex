@@ -27,7 +27,9 @@ def PAOracle.toSynth (oracle : PAOracle) : PASynthOracle := fun targets =>
     No `aesop`: it can hit `maxRecDepth` (uncatchable) and over-weakens solutions. -/
 syntax "pa_oracle" : tactic
 macro_rules
-  | `(tactic| pa_oracle) => `(tactic| first | omega | grind | (constructor <;> grind))
+  | `(tactic| pa_oracle) => `(tactic| first | omega | grind | (constructor <;> grind) |
+    ((simp (config := { maxSteps := 10000, failIfUnchanged := true })
+      [List.eq_replicate_iff] at *) <;> intros <;> grind))
 
 initialize Lean.registerTraceClass `flex.oracle
 

@@ -40,8 +40,7 @@ private def checkRelations (problem : ExportedProblem) : MetaM Unit := do
     forallTelescopeReducing relation.leanType fun parameters result => do
       unless result.isProp do
         throwError "CHC witnesses: predicate '{relation.symbol}' must return Prop"
-      unless parameters.size == relation.argumentSorts.size &&
-          parameters.size == relation.kvar.paramTypes.length &&
+      unless parameters.size == relation.kvar.paramTypes.length &&
           parameters.size == relation.kvar.params.length do
         throwError "CHC witnesses: inconsistent arity metadata for '{relation.symbol}'"
       for parameter in parameters, i in [:parameters.size] do
@@ -50,7 +49,18 @@ private def checkRelations (problem : ExportedProblem) : MetaM Unit := do
         requireClosed relation.kvar.paramTypes[i]! s!"parameter metadata of '{relation.symbol}'"
         unless ← isDefEq type relation.kvar.paramTypes[i]! do
           throwError "CHC witnesses: inconsistent parameter metadata for '{relation.symbol}'"
-        unless (← Fragment.valueSort type) == relation.argumentSorts[i]! do
+      let arguments ← match relation.arguments with
+        | none => pure parameters
+        | some projections => projections.mapM fun projection => do
+          requireClosed projection s!"argument projection of '{relation.symbol}'"
+          checkWithKernel projection
+          let application := mkAppN projection parameters
+          check application
+          return application.headBeta
+      unless arguments.size == relation.argumentSorts.size do
+        throwError "CHC witnesses: inconsistent projected arity for '{relation.symbol}'"
+      for argument in arguments, sort in relation.argumentSorts do
+        unless (← Fragment.valueSort (← inferType argument)) == sort do
           throwError "CHC witnesses: inconsistent SMT sort metadata for '{relation.symbol}'"
 
 /-- The shared importer represents every SMT Bool as Lean Prop. -/
@@ -91,7 +101,10 @@ private def adapt (relation : Relation) (definition : Smt2Lean.ReconstructedDefi
   unless ← isDefEq definition.type (importedType relation) do
     throwError "CHC witnesses: model signature does not match '{relation.symbol}'"
   let value ← forallTelescopeReducing relation.leanType fun parameters _ => do
-    let arguments ← parameters.mapM fun parameter => do
+    let arguments : Array Expr := match relation.arguments with
+      | none => parameters
+      | some projections => projections.map (fun projection => projection.beta parameters)
+    let arguments ← arguments.mapM fun parameter => do
       if (← whnf (← inferType parameter)).isConstOf ``Bool then
         mkEq parameter (mkConst ``Bool.true)
       else

@@ -356,7 +356,7 @@ theorem ex1_A_bench : ex1 := by
 bench "ex1_B" in
 theorem ex1_B_bench : ex1 := by
   unfold ex1
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex2_A" in
@@ -367,7 +367,7 @@ theorem ex2_A_bench : ex2 := by
 bench "ex2_B" in
 theorem ex2_B_bench : ex2 := by
   unfold ex2
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex3_A" in
@@ -378,7 +378,7 @@ theorem ex3_A_bench : ex3 := by
 bench "ex3_B" in
 theorem ex3_B_bench : ex3 := by
   unfold ex3
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex4_A" in
@@ -389,7 +389,7 @@ theorem ex4_A_bench : ex4 := by
 bench "ex4_B" in
 theorem ex4_B_bench : ex4 := by
   unfold ex4
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex5_A" in
@@ -400,7 +400,7 @@ theorem ex5_A_bench : ex5 := by
 bench "ex5_B" in
 theorem ex5_B_bench : ex5 := by
   unfold ex5
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex6_A" in
@@ -411,7 +411,7 @@ theorem ex6_A_bench : ex6 := by
 bench "ex6_B" in
 theorem ex6_B_bench : ex6 := by
   unfold ex6
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex7_A" in
@@ -422,7 +422,7 @@ theorem ex7_A_bench : ex7 := by
 bench "ex7_B" in
 theorem ex7_B_bench : ex7 := by
   unfold ex7
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex8_A" in
@@ -433,7 +433,7 @@ theorem ex8_A_bench : ex8 := by
 bench "ex8_B" in
 theorem ex8_B_bench : ex8 := by
   unfold ex8
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex9_A" in
@@ -444,7 +444,7 @@ theorem ex9_A_bench : ex9 := by
 bench "ex9_B" in
 theorem ex9_B_bench : ex9 := by
   unfold ex9
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex10_A" in
@@ -455,7 +455,7 @@ theorem ex10_A_bench : ex10 := by
 bench "ex10_B" in
 theorem ex10_B_bench : ex10 := by
   unfold ex10
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex11_A" in
@@ -466,7 +466,7 @@ theorem ex11_A_bench : ex11 := by
 bench "ex11_B" in
 theorem ex11_B_bench : ex11 := by
   unfold ex11
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex12_A" in
@@ -477,7 +477,7 @@ theorem ex12_A_bench : ex12 := by
 bench "ex12_B" in
 theorem ex12_B_bench : ex12 := by
   unfold ex12
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex13_A" in
@@ -488,7 +488,7 @@ theorem ex13_A_bench : ex13 := by
 bench "ex13_B" in
 theorem ex13_B_bench : ex13 := by
   unfold ex13
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex14_A" in
@@ -499,7 +499,7 @@ theorem ex14_A_bench : ex14 := by
 bench "ex14_B" in
 theorem ex14_B_bench : ex14 := by
   unfold ex14
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex_nat_A" in
@@ -510,7 +510,7 @@ theorem ex_nat_A_bench : ex_nat := by
 bench "ex_nat_B" in
 theorem ex_nat_B_bench : ex_nat := by
   unfold ex_nat
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex_bool_A" in
@@ -521,7 +521,7 @@ theorem ex_bool_A_bench : ex_bool := by
 bench "ex_bool_B" in
 theorem ex_bool_B_bench : ex_bool := by
   unfold ex_bool
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex_pair_A" in
@@ -532,7 +532,7 @@ theorem ex_pair_A_bench : ex_pair := by
 bench "ex_pair_B" in
 theorem ex_pair_B_bench : ex_pair := by
   unfold ex_pair
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex_prod_A" in
@@ -543,7 +543,7 @@ theorem ex_prod_A_bench : ex_prod := by
 bench "ex_prod_B" in
 theorem ex_prod_B_bench : ex_prod := by
   unfold ex_prod
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex_userfn_A" in
@@ -554,7 +554,7 @@ theorem ex_userfn_A_bench : ex_userfn := by
 bench "ex_userfn_B" in
 theorem ex_userfn_B_bench : ex_userfn := by
   unfold ex_userfn
-  fusion
+  zap
   all_goals solve_fixpoint
 
 bench "ex_stress_A" in
@@ -565,5 +565,5 @@ theorem ex_stress_A_bench : ex_stress := by
 bench "ex_stress_B" in
 theorem ex_stress_B_bench : ex_stress := by
   unfold ex_stress
-  fusion
+  zap
   all_goals solve_fixpoint

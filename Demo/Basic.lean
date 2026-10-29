@@ -11,7 +11,7 @@ def ex1 : Prop :=
 
 theorem ex1Proof' : ex1 := by
   unfold ex1
-  fusion
+  zap
   grind
 
 theorem ex1Proof : ex1 := by
@@ -33,7 +33,7 @@ def ex2 : Prop :=
           )
 
 theorem ex2Proof' : ex2 := by
-  fusion
+  zap
   grind
 
 theorem ex2Proof : ex2 := by
@@ -48,7 +48,7 @@ def ex3 : Prop :=
   ∧ (∀ ν : Int, κc ν → 0 ≤ ν)
 
 theorem ex3Proof' : ex3 := by
-  fusion
+  zap
   grind
 
 theorem ex3Proof : ex3 := by
@@ -68,12 +68,12 @@ def ex4 : Prop :=
         ∀ ν : Int, ν = z + 1 → 0 ≤ ν)
 
 theorem ex4Proof' : ex4 := by
-  -- solve_fixpoint-- solve_fusion
-  fusion
+  -- solve_fixpoint-- zap
+  zap
   all_goals grind
 
 theorem ex4Proof : ex4 := by
-  solve_fixpoint-- solve_fusion
+  solve_fixpoint-- zap
 
 -- ex5: Three-step chain: dec → inc → inc
 -- ex5 x = inc (inc (dec x))  =  x+1 ≥ 0
@@ -89,12 +89,12 @@ def ex5 : Prop :=
         ∀ ν : Int, ν = z + 1 → 0 ≤ ν)
 
 theorem ex5Proof' : ex5 := by
-  unfold ex5 -- solve_fusion
-  fusion
+  unfold ex5 -- zap
+  zap
   fixpoint
 
 theorem ex5Proof : ex5 := by
-  solve_fixpoint-- solve_fusion
+  solve_fixpoint-- zap
 
 
 -- ex6: Two independent paths, each checked separately
@@ -112,11 +112,11 @@ def ex6 : Prop :=
 
 theorem ex6Proof' : ex6 := by
   unfold ex6
-  fusion
+  zap
   fixpoint
 
 theorem ex6Proof : ex6 := by
-  solve_fixpoint-- solve_fusion
+  solve_fixpoint-- zap
 
 -- ex7: Diamond — two sources flow into one κ, then one consumer
 -- ex7 x = let ys = [inc x, dec x] in inc (last ys)  ≥ 0
@@ -132,7 +132,7 @@ def ex7 : Prop :=
 
 theorem ex7Proof' : ex7 := by
   unfold ex7
-  fusion
+  zap
   all_goals grind
 
 
@@ -154,7 +154,7 @@ theorem ex8Proof : ex8 := by
 
 theorem ex8Proof' : ex8 := by
   unfold ex8
-  fusion
+  zap
   all_goals grind
 
 -- ex9: Four-step chain: inc → dec → inc → dec
@@ -177,7 +177,7 @@ theorem ex9Proof : ex9 := by
 
 theorem ex9Proof' : ex9 := by
   unfold ex9
-  fusion
+  zap
   all_goals grind
 
 -- ex10: Three-way merge into one κ, stronger consumer (needs inc inc)
@@ -199,7 +199,7 @@ theorem ex10Proof : ex10 := by
 
 theorem ex10Proof' : ex10 := by
   unfold ex10
-  fusion
+  zap
   all_goals grind
 
 -- ex11: Three-κ chain with multi-producer merge at κ2
@@ -223,7 +223,7 @@ theorem ex11Proof : ex11 := by
 
 theorem ex11Proof' : ex11 := by
   unfold ex11
-  fusion
+  zap
   all_goals grind
 
 
@@ -254,7 +254,7 @@ def ex12 : Prop :=
 
 theorem ex12Proof' : ex12 := by
   unfold ex12
-  fusion
+  zap
   all_goals grind
 
 theorem ex12Proof : ex12 := by
@@ -284,7 +284,7 @@ def ex13 : Prop :=
 
 theorem ex13Proof' : ex13 := by
   unfold ex13
-  fusion
+  zap
   all_goals grind
 
 theorem ex13Proof : ex13 := by
@@ -324,7 +324,7 @@ def ex14 : Prop :=
 
 theorem ex14Proof' : ex14 := by
   unfold ex14
-  fusion
+  zap
   all_goals grind
 
 theorem ex14Proof : ex14 := by
@@ -343,7 +343,7 @@ theorem ex_natProof : ex_nat := by
 
 theorem ex_natProof' : ex_nat := by
   unfold ex_nat
-  fusion
+  zap
   all_goals grind
 
 
@@ -357,7 +357,7 @@ def ex_bool : Prop :=
 
 theorem ex_boolProof' : ex_bool := by
   unfold ex_bool
-  fusion
+  zap
   all_goals grind
 
 theorem ex_boolProof : ex_bool := by
@@ -383,7 +383,7 @@ theorem ex_pairProof : ex_pair := by
 
 theorem ex_pairProof' : ex_pair := by
   unfold ex_pair
-  fusion
+  zap
   all_goals grind
 
 
@@ -398,7 +398,7 @@ def ex_prod : Prop :=
 
 theorem ex_prodProof' : ex_prod := by
   unfold ex_prod
-  fusion
+  zap
   all_goals grind
 
 theorem ex_prodProof : ex_prod := by
@@ -417,7 +417,7 @@ def ex_userfn : Prop :=
 
 theorem ex_userfnProof' : ex_userfn := by
   unfold ex_userfn
-  fusion
+  zap
   simp_all
 
 theorem ex_userfnProof : ex_userfn := by
@@ -489,7 +489,7 @@ def ex_stress : Prop :=
 
 theorem ex_stressProof' : ex_stress := by
   unfold ex_stress
-  fusion
+  zap
   all_goals grind
 
 theorem ex_stressProof : ex_stress := by

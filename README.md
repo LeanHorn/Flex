@@ -57,7 +57,9 @@ Scraping is off by default. Add `(defs := [fib])` to select definitions explicit
 Use `set_option flex.reportQualifiers true` to inspect scraped candidates in the Infoview.
 Disable guarded templates with `(scrapeConfig := { maxGuardedQualifiers := 0 })`.
 By default, `fix` batches integer/Boolean SMT checks in short-lived Z3 processes,
-rechecks affected clauses after weakening, and certifies the result with Lean proofs.
+rechecks affected clauses after weakening, and uses kernel-checked SMT proofs and
+Lean automation for certification and residual goals. `flex_discharge` runs this
+proof automation separately, leaving unsolved goals for manual proof.
 
 Optional SMT backends can be selected separately for synthesis and proofs:
 
@@ -82,3 +84,24 @@ Install `z3` and `eld` on `PATH`, or set `flex.spacer.executable` and
 
 `Flex.CHC.solveGoal` provides the underlying library API, including complete
 certification, residual obligations, and rollback on failure.
+
+## `flex`
+
+`import Flex` provides `flex`: preprocessing, optional nesting, Zap, then Fix
+(with deep scraping) and Spacer/Eldarica. It uses checked SMT and Lean automation
+for proofs, retaining validated invariants and a structured residual VC when
+manual work remains. Failed phases preserve earlier progress.
+
+```lean4
+flex
+flex (backends := [fix]) (scrape := basic)
+flex (backends := []) (config := { nesting := true }) -- Zap only
+```
+
+Use `proof := ...` for certification and `closer := ...` for residual proofs.
+The configuration controls phases and budgets (60 seconds for PA and each CHC
+solver; a cooperative 180-second total deadline). `report := true` enables progress
+messages; `set_option trace.flex true` exposes failed attempts. Unvalidated solver
+candidates require the explicit `keepCandidates := true` exploratory option;
+refuted candidates are discarded and every unproved obligation remains a goal.
+See [Demo/Flex.lean](Demo/Flex.lean) for complete and partial proofs.

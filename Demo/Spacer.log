@@ -1,0 +1,17 @@
+spacer: instantiated invariants
+  inv := fun (a : Int) => ¬a ≤ -1
+eldarica: instantiated invariants
+  inv := fun (a a_1 : Int) => a_1 ≥ a ∧ a ≥ 0
+spacer: instantiated invariants
+  inv := fun (a : Bool) (a_1 : Int) => (¬a = true ∨ ¬a_1 ≤ -1) ∧ (¬a_1 ≥ 1 ∨ a = true)
+eldarica: instantiated invariants
+  entry := fun (a : Int) => a ≥ 0
+  exit := fun (a : Int) => a ≥ 1
+spacer: instantiated invariants
+  inv := fun (a : Int) => ¬a ≤ -1
+eldarica: instantiated invariants
+  inv := fun (a : Int) => a ≤ 21 ∧ a ≥ 0
+spacer: instantiated invariants
+  inv := fun (a a_1 : Int) => ¬a_1 ≤ -1 ∧ ¬a + a_1 ≥ 11 ∧ ¬a + a_1 ≤ 9
+spacer: instantiated invariants
+  inv := fun (a : Int → Int) (a_1 : Int) (a_2 : Int → Int) => nonnegativeAt a a_1 ∧ a = a_2

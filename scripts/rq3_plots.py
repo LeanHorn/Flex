@@ -3,7 +3,7 @@
 
 Outputs (in eval/):
   fig_rq3_phases.pdf   — per-phase heartbeat locus, A vs B, normalised to A=1.0
-                         (the hero figure: shows fusion replaces grind's search)
+                         (the hero figure: shows zap replaces grind's search)
   fig_rq3_speedup.pdf  — speedup scoreboard, sorted, coloured by bucket
   rq3_table.tex        — booktabs results table + foundational (term/kernel) table
 
@@ -24,7 +24,7 @@ REPO = Path(__file__).resolve().parent.parent
 DATA = REPO / "eval" / "rq3_results.json"
 
 # Okabe–Ito colour-blind-safe palette.
-C_FUSION = "#0072B2"   # blue   — fusion / σ̂ acyclic-κ elimination
+C_ZAP = "#0072B2"   # blue   — zap / σ̂ acyclic-κ elimination
 C_PA     = "#999999"   # grey   — predicate abstraction (Houdini) on the cut
 C_GRIND  = "#D55E00"   # orange — grind closer (proof search)
 C_OTHER  = "#E2E2E2"   # light  — un-instrumented overhead
@@ -46,11 +46,18 @@ def load() -> list[dict]:
         A, B = c.get("A", {}), c.get("B", {})
         if A.get("status") != "ok" or B.get("status") != "ok":
             continue
-        ph = lambda d, k: d.get("phases", {}).get(k, 0)
+        def ph(d, key):
+            phases = d.get("phases", {})
+            if key in phases:
+                return phases[key]
+            # Read phase labels recorded by earlier evaluations.
+            if key.startswith("zap:"):
+                return phases.get("fusion:" + key[4:], 0)
+            return 0
         a_fus, a_pa, a_cl = (ph(A, "solve_fixpoint:fuse"),
                              ph(A, "solve_fixpoint:pa"),
                              ph(A, "solve_fixpoint:close"))
-        b_fus = sum(ph(B, f"fusion:{p}") for p in ("sol", "build", "clean"))
+        b_fus = sum(ph(B, f"zap:{p}") for p in ("sol", "build", "clean"))
         b_pa, b_cl = ph(B, "solve_fixpoint:pa"), ph(B, "solve_fixpoint:close")
         at, bt = A["hb"], B["hb"]
         rows.append(dict(
@@ -93,9 +100,9 @@ def fig_phases(rows):
         cy = n - 1 - i            # top-to-bottom
         ya, yb = cy + 0.20, cy - 0.20
         s = r["at"]               # normalise both bars by A's total
-        for y, segs in ((ya, [(r["a_fus"], C_FUSION), (r["a_pa"], C_PA),
+        for y, segs in ((ya, [(r["a_fus"], C_ZAP), (r["a_pa"], C_PA),
                               (r["a_cl"], C_GRIND), (r["a_other"], C_OTHER)]),
-                        (yb, [(r["b_fus"], C_FUSION), (r["b_pa"], C_PA),
+                        (yb, [(r["b_fus"], C_ZAP), (r["b_pa"], C_PA),
                               (r["b_cl"], C_GRIND), (r["b_other"], C_OTHER)])):
             left = 0.0
             for val, col in segs:
@@ -139,7 +146,7 @@ def fig_phases(rows):
     for sp in ("top", "right"):
         ax.spines[sp].set_visible(False)
     ax.legend(handles=[
-        Patch(fc=C_FUSION, label="acyclic-κ elimination"),
+        Patch(fc=C_ZAP, label="acyclic-κ elimination"),
         Patch(fc=C_PA, label="predicate abstraction (cut)"),
         Patch(fc=C_GRIND, label="grind (proof search)"),
         Patch(fc=C_OTHER, label="other")],
@@ -159,7 +166,7 @@ def fig_speedup(rows):
     n = len(rows)
     fig, ax = plt.subplots(figsize=(3.35, 0.26 * n + 0.6))
     ys = range(n)
-    cols = [C_FUSION if r["bucket"] == "acyclic_only" else C_PA for r in rows]
+    cols = [C_ZAP if r["bucket"] == "acyclic_only" else C_PA for r in rows]
     ax.barh(list(ys), [r["spd"] for r in rows], color=cols, height=0.66,
             edgecolor="white", linewidth=0.3)
     for y, r in zip(ys, rows):
@@ -177,7 +184,7 @@ def fig_speedup(rows):
     ax.set_ylim(-0.6, n - 0.4)
     for sp in ("top", "right"):
         ax.spines[sp].set_visible(False)
-    ax.legend(handles=[Patch(fc=C_FUSION, label="acyclic-only"),
+    ax.legend(handles=[Patch(fc=C_ZAP, label="acyclic-only"),
                        Patch(fc=C_PA, label="acyclic + cut")],
               loc="lower right", frameon=False, fontsize=6.6, handlelength=1.0)
     fig.tight_layout()

@@ -2,7 +2,7 @@ import Flex
 
 /-!
   Reproducer: Flux test03 — `solve_fixpoint` gets stuck trying to solve the
-  κ-vars, never getting past fusion / PA.
+  κ-vars, never getting past zap / PA.
 
   10 κ-vars (k0..k9), all `Int → Prop`. Dependency graph is acyclic but
   multi-level: k1 → k4, k5; k2 → k5; k3 → k7, k8, k9; k4 → k8, k9; k5 → k9.
@@ -13,8 +13,8 @@ import Flex
   i.e. anything in `k9` must be positive — but k9's seed-feeding chain
   comes from `a'₁₁ = 0`, so this is unsatisfiable in liquid-fixpoint terms.
 
-  Since no qualifiers are needed (all acyclic), this should be pure fusion.
-  Hang appears to be in fusion's per-κ sol/elim work or in residual
+  Since no qualifiers are needed (all acyclic), this should be pure zap.
+  Hang appears to be in zap's per-κ sol/elim work or in residual
   whnf/instantiateMVars expansion driven by cascading sol substitution.
 -/
 

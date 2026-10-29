@@ -6,20 +6,20 @@ One paragraph and one minimal example per user-facing tactic. Tactics live in [F
 
 ## 1. Constraint solvers
 
-### `fusion`
-Source: [Tactics/Fusion.lean:10](../Flex/Tactic/Tactics/Fusion.lean#L10). Peels every `∃ κᵢ`, classifies the κ's as *acyclic* / *cyclic*, eliminates the acyclic ones via `sol1 + elim*` and emits a bridge term `λ h. Exists.elim … (nav …)`. Residual obligations from the elimination are exposed alongside a new main goal of the form `∃ <cyclic κ's>, c′`. Acyclic-only inputs collapse to pure leaf obligations.
+### `zap`
+Source: [Tactics/Zap.lean](../Flex/Tactic/Tactics/Zap.lean). Peels every `∃ κᵢ`, classifies the κ's as *acyclic* / *cyclic*, eliminates the acyclic ones via `sol1 + elim*` and emits a bridge term `λ h. Exists.elim … (nav …)`. Residual obligations from the elimination are exposed alongside a new main goal of the form `∃ <cyclic κ's>, c′`. Acyclic-only inputs collapse to pure leaf obligations.
 
 ```lean
 example : ∃ κ : Int → Int → Prop,
     ∀ x : Int, 0 ≤ x →
       (∀ ν : Int, ν = x - 1 → κ ν x)
     ∧ (∀ y : Int, κ y x → ∀ ν : Int, ν = y + 1 → 0 ≤ ν) := by
-  fusion
+  zap
   all_goals first | rfl | grind
 ```
 
 ### `solve_fixpoint`
-Source: [Tactics/SolveFixpoint.lean:189](../Flex/Tactic/Tactics/SolveFixpoint.lean#L189). Superset of `fusion`: assigns acyclic κ-mvars via `sol1 + elim*`, then runs **predicate abstraction** on the cyclic κ's, drawing qualifiers from `@[qualif]`-tagged declarations. Any κ left unassigned is exposed as a user goal; the residual proof obligation is dispatched with an internal `intro/and_intros/native_decide/grind/aesop/omega/bv_decide/constructor+grind` close-loop.
+Source: [Tactics/SolveFixpoint.lean:189](../Flex/Tactic/Tactics/SolveFixpoint.lean#L189). Superset of `zap`: assigns acyclic κ-mvars via `sol1 + elim*`, then runs **predicate abstraction** on the cyclic κ's, drawing qualifiers from `@[qualif]`-tagged declarations. Any κ left unassigned is exposed as a user goal; the residual proof obligation is dispatched with an internal `intro/and_intros/native_decide/grind/aesop/omega/bv_decide/constructor+grind` close-loop.
 
 ```lean
 @[qualif] def q_nonneg : Qualif := fun ν => ν ≥ 0
@@ -54,7 +54,7 @@ Source: [Tactics/RewriteKs.lean:129](../Flex/Tactic/Tactics/RewriteKs.lean#L129)
 example : ∃ κ₁ κ₂ : Int → Prop,            -- κ₂ is a sink
     (∀ x, κ₁ x → κ₂ (x+1)) ∧ (∀ y, κ₂ y → y ≥ 0) := by
   rewriteKs            -- goal now: ∃ κ₂ κ₁, …  (sink first)
-  fusion
+  zap
 ```
 
 ### `perm_exists`
@@ -220,8 +220,8 @@ example : List.eraseDups [1, 2, 1, 3] = [2, 1, 3] := by
 ```lean
 example : <some VC with ∃ κ, … > := by
   rewriteKs          -- 1. canonical κ-order
-  solve_fixpoint     -- 2. fusion + PA; may leave residual κ-goals
+  solve_fixpoint     -- 2. zap + PA; may leave residual κ-goals
   -- residuals (if any): zap / split_hyps / leafClosers
 ```
 
-When only acyclic κ's are present, prefer `fusion`. When you want a single κ as a named `let`, use `solK1`.
+When only acyclic κ's are present, prefer `zap`. When you want a single κ as a named `let`, use `solK1`.

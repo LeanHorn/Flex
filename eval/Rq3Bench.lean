@@ -5,7 +5,7 @@ import Flex
   theorems wrapped in `benchx`:
 
     benchx "NAME_A" in theorem NAME_A : VC := by unfold VC; solve_fixpoint
-    benchx "NAME_B" in theorem NAME_B : VC := by unfold VC; fusion; all_goals solve_fixpoint
+    benchx "NAME_B" in theorem NAME_B : VC := by unfold VC; zap; all_goals solve_fixpoint
 
   `benchx` measures the A-vs-B comparison for RQ3:
     • hb     — heartbeats consumed (deterministic; IO.getNumHeartbeats/1000)

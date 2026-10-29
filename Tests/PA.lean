@@ -1,6 +1,33 @@
 import Flex.Tactic.Tactics.Fix
-import Flex.Tactic.Tactics.Fusion
+import Flex.Tactic.Tactics.Zap
 import Flex.Fusion.Flatten
+
+namespace PADischargeTests
+
+example (x : Int) (p : Prop) (hp : p) : x < x + 1 ∧ p := by
+  flex_discharge
+
+set_option flex.automation.proofHeartbeats 0 in
+example (p : Prop) (hp : p) : True ∧ (True → p) := by
+  flex_discharge
+  guard_target = p
+  exact hp
+
+private def counter : Prop := ∃ k : Int → Prop,
+  k 0 ∧ (∀ n, k n → k (n + 1)) ∧ (∀ n, k n → 0 ≤ n)
+
+set_option flex.automation.proofHeartbeats 0 in
+example : counter := by
+  unfold counter
+  fail_if_success fix (synth := omega)
+  fix (synth := omega) (proof := omega)
+
+set_option flex.automation.proofHeartbeats 0 in
+example : counter := by
+  unfold counter
+  fix (oracle := omega)
+
+end PADischargeTests
 
 namespace PABatchTests
 
@@ -92,7 +119,66 @@ run_elab do
     unless result.all (fun | .unknown _ => true | _ => false) do
       throwError "unsupported or proof-dependent quantifier was accepted"
 
+run_elab do
+  let decode (output : String) (count : Nat) (stderr := "") :=
+    Flex.PA.decodeSmtResponses { completion := .timedOut, stdout := output, stderr } count
+  let .ok answers := decode "unsat\nsat\nunknown\nun" 5
+    | throwError "rejected complete SMT response prefix"
+  unless answers == #[.valid, .invalid, .unknown "solver returned unknown",
+      .unknown "SMT batch timed out", .unknown "SMT batch timed out"] do
+    throwError "timeout response indices changed"
+  let .ok answers := decode "unsat" 1 | throwError "rejected incomplete response"
+  unless answers == #[.unknown "SMT batch timed out"] do
+    throwError "accepted a response without its newline"
+  unless (decode "unsat\n" 1).toOption == some #[.valid] do
+    throwError "lost a completed batch at timeout"
+  for (output, count) in #[("unsat\n(error \"bad\")\n", 2), ("unsat\n(error", 2),
+      ("unsat\nmalformed", 2), ("unsat\nsat\n", 1), ("unsat\nun", 1)] do
+    if (decode output count).isOk then throwError "accepted malformed or extra SMT output"
+  if (decode "unsat\n" 1 "error").isOk then throwError "ignored solver diagnostics"
+  if (Flex.PA.decodeSmtResponses { completion := .exited 0, stdout := "unsat\n" } 2).isOk then
+    throwError "accepted missing responses from a completed solver"
+  if (Flex.PA.decodeSmtResponses { completion := .exited 1, stdout := "unsat\n" } 1).isOk then
+    throwError "accepted responses from a failed solver"
+
 end PABatchTests
+
+namespace PASimplifiedSmtTests
+
+open Lean Meta Elab Term
+
+private structure Buffer where
+  values : Int → Int
+  bound : Int
+
+run_elab do
+  let terms ← #[← `(∀ b : Buffer, 0 ≤ b.bound → 0 ≤ b.bound + 1),
+    ← `(∀ b : Buffer, 0 ≤ b.bound → b.bound < 0),
+    ← `(∀ b : Buffer, (∀ i : Int, 0 ≤ i → b.values i = i) → b.values 1 = 1),
+    ← `(∀ b : Buffer, (∀ i : Int, 0 ≤ i → b.values i = i) → b.values 1 = 2)].mapM
+      fun term => elabTerm term none
+  synthesizeSyntheticMVarsNoPostponing
+  let results ← Flex.PA.simplifiedSmtOracle 2000 (← terms.mapM instantiateMVars)
+  unless results.map (fun | .valid => true | _ => false) == #[true, false, true, false] do
+    throwError "simplified SMT lost record fields or shared assertions between queries: {repr results}"
+  let terms ← #[← `(∀ x : Int, x ≤ x), ← `(∀ α : Type, Nonempty α),
+    ← `(∀ x : Int, x ≤ x + 1)].mapM fun term => elabTerm term none
+  synthesizeSyntheticMVarsNoPostponing
+  let results ← Flex.PA.simplifiedSmtOracle 2000 (← terms.mapM instantiateMVars)
+  unless results.map (fun | .valid => true | _ => false) == #[true, false, true] do
+    throwError "an unsupported candidate contaminated its batch: {repr results}"
+  let term ← elabTerm (← `(∀ (α : Type) (x : Int),
+    (Nonempty α ∧ x ≤ 5) → x ≤ 6)) none
+  synthesizeSyntheticMVarsNoPostponing
+  unless (← Flex.PA.simplifiedSmtOracle 2000 #[← instantiateMVars term]) == #[.valid] do
+    throwError "an unsupported assumption hid a supported conjunct"
+  let caller ← mkFreshExprMVar (some (mkConst ``Int))
+  let results ← Flex.PA.simplifiedSmtOracle 2000 #[← mkEq caller (mkIntLit 0)]
+  unless results.all (fun | .unknown _ => true | _ => false) do
+    throwError "simplified SMT accepted an unresolved metavariable"
+  if ← caller.mvarId!.isAssigned then throwError "simplified SMT assigned a caller metavariable"
+
+end PASimplifiedSmtTests
 
 namespace PAScrapeTests
 
@@ -183,6 +269,37 @@ run_elab do
     (k x y → y = 7 → 0 ≤ x → False)))
   unless !(guarded (← scrapePAQualifiersWithReport quantified { mode := .standard })).isEmpty do
     throwError "quantified arithmetic seed disabled guarded scraping"
+
+-- Zap's existential guards retain clause-local candidates without mixing disjuncts.
+run_elab do
+  let scrape := fun term => do
+    scrapePAQualifiersWithReport (← elaborate term)
+      { mode := .standard, maxGuardedQualifiers := 128, maxGuardPairs := 1024 }
+  let flat ← scrape (← `(∀ k : Int → Int → Prop, ∀ x y : Int,
+    k x y → 0 ≤ x → y ≤ 3 → False))
+  let nested ← scrape (← `(∀ k : Int → Int → Prop,
+    (∃ x y : Int, k x y ∧ 0 ≤ x ∧ y ≤ 3) → False))
+  unless !(guarded flat).isEmpty && guarded flat == guarded nested do
+    throwError "existential guards lost flat-clause candidates"
+  let branched ← scrape (← `(∀ k : Int → Int → Prop,
+    (∃ x y : Int, k x y ∧ ((0 ≤ x ∧ y ≤ 3) ∨ (x ≤ 7 ∧ 11 ≤ y))) → False))
+  for term in #[← `(fun x y : Int => x < 0 ∨ y ≤ 3),
+      ← `(fun x y : Int => 7 < x ∨ 11 ≤ y)] do
+    let expected ← elaborate term
+    unless ← (guarded branched).anyM (fun q => isDefEq expected q) do
+      throwError "missing branch qualifier"
+  let cross ← elaborate (← `(fun x y : Int => x < 0 ∨ 11 ≤ y))
+  if ← (guarded branched).anyM (fun q => isDefEq cross q) then
+    throwError "combined distinct guard branches"
+  for q in branched.qualifiers do
+    if q.hasFVar || q.hasMVar || q.hasLooseBVars then throwError "witness binder escaped"
+    check q
+  let renamed ← scrape (← `(∀ k : Int → Int → Prop,
+    (∃ a b : Int, k a b ∧ ((0 ≤ a ∧ b ≤ 3) ∨ (a ≤ 7 ∧ 11 ≤ b))) → False))
+  unless guarded branched == guarded renamed do throwError "witness names changed candidates"
+  let negative ← scrape (← `(∀ k : Int → Int → Prop,
+    (¬∃ x y : Int, k x y ∧ 0 ≤ x ∧ y ≤ 3) → False))
+  unless (guarded negative).isEmpty do throwError "opened a negated existential guard"
 
 end PAScrapeTests
 
@@ -394,3 +511,481 @@ run_elab do
     evalTactic (← `(tactic| assumption))
   unless remaining.isEmpty do throwError "lost an independent residual"
   checkWithKernel (← instantiateMVars goal)
+
+-- Error predicates are identified by a proved constraint, not by their spelling.
+open Lean Meta Elab Term in
+run_elab do
+  let original ← elabTerm (← `(∃ error : Prop, ∃ k : Int → Prop,
+    k 0 ∧ (∀ x, k x → x < 0 → error) ∧ (∀ _ : Prop, error → False))) none
+  let expected ← elabTerm (← `(∃ k : Int → Prop,
+    k 0 ∧ (∀ x, k x → x < 0 → False) ∧ (∀ _ : Prop, False → False))) none
+  synthesizeSyntheticMVarsNoPostponing
+  let original ← instantiateMVars original
+  let expected ← instantiateMVars expected
+  let (normalized, proof) ← Flex.Preprocess.inlineFalsePredicates original
+  unless ← isDefEq normalized expected do throwError "error predicate was not inlined"
+  checkWithKernel proof
+  unless ← isDefEq (← inferType proof) (← mkAppM ``Iff #[original, normalized]) do
+    throwError "normalization did not prove equivalence"
+  -- A guarded prohibition and a prohibition over an empty domain do not force False.
+  for term in #[← `(∃ CHC_COMP_FALSE : Prop, CHC_COMP_FALSE),
+      ← `(∃ p : Prop, p ∧ (False → p → False)),
+      ← `(∃ p : Prop, p ∧ (∀ _ : Empty, p → False))] do
+    let input ← elabTerm term none
+    synthesizeSyntheticMVarsNoPostponing
+    let input ← instantiateMVars input
+    let (output, proof) ← Flex.Preprocess.inlineFalsePredicates input
+    unless output == input do throwError "inlined a proposition not forced false"
+    checkWithKernel proof
+
+open Lean Meta Elab Term in
+run_elab do
+  for term in #[← `(∃ k : Int → Prop, ∃ error : Prop, k 0 ∧ (k 1 → error) ∧ ¬error),
+      ← `(∃ first second : Prop, (first → False) ∧ (second → False))] do
+    let input ← elabTerm term none
+    synthesizeSyntheticMVarsNoPostponing
+    let input ← instantiateMVars input
+    let (output, proof) ← Flex.Preprocess.inlineFalsePredicates input
+    if output == input then throwError "missed an error predicate under another existential"
+    if proof.hasMVar || proof.hasFVar || proof.hasLooseBVars || proof.hasSorry then
+      throwError "normalization leaked proof obligations"
+    checkWithKernel proof
+  let caller ← mkFreshExprMVar (some (mkSort .zero))
+  let target ← elabTerm (← `(∃ p : Prop, p ∧ (True → False))) none
+  let target := target.replace fun e => if e.isConstOf ``True then some caller else none
+  discard <| Flex.Preprocess.inlineFalsePredicates target
+  if ← caller.mvarId!.isAssigned then throwError "normalization assigned caller metavariable"
+
+namespace PAContextTests
+
+open Lean Meta Elab Term
+
+run_elab do
+  let input ← elabTerm (← `(fun (p : Int → Prop) (f : Int → Int)
+      (m : Int → Int → Int) =>
+    (∀ t s : Int, p t ∧ f t = f s ∧ m t = m s) ∧
+    (∀ u v : Int, p u ∧ f u = f v ∧ m u = m v))) none
+  synthesizeSyntheticMVarsNoPostponing
+  let input ← instantiateMVars input
+  lambdaTelescope input fun functions body => do
+    let qs ← scrapePAQualifiers body { mode := .basic }
+    unless qs.size == 3 do throwError "contextual qualifiers were lost or duplicated"
+    let allowed := functions.map Expr.fvarId!
+    for q in qs do
+      if q.hasMVar || q.hasLooseBVars ||
+          !(collectFVars {} q).fvarIds.all allowed.contains then
+        throwError "temporary scraping binder escaped"
+      check q
+    let some (clause, _) := body.and? | throwError "expected two clauses"
+    forallTelescope clause fun xs _ => do
+      let expected ← #[mkApp functions[0]! xs[0]!,
+        ← mkEq (mkApp functions[1]! xs[0]!) (mkApp functions[1]! xs[1]!),
+        ← mkEq (mkApp functions[2]! xs[0]!) (mkApp functions[2]! xs[1]!)]
+        |>.mapM fun atom => mkLambdaFVars xs atom (usedOnly := true)
+      for q in expected do
+        unless ← qs.anyM (fun actual => do isDefEq q actual) do
+          throwError "fixed function became a qualifier argument"
+    withLocalDeclD `other (← inferType functions[0]!) fun other => do
+      let changed := body.replaceFVar functions[0]! other
+      let fresh ← scrapePAQualifiers changed { mode := .basic }
+      unless fresh.any (fun q => q.containsFVar other.fvarId!) do
+        throwError "new context function was not captured"
+      if fresh.any (fun q => q.containsFVar functions[0]!.fvarId!) then
+        throwError "qualifier capture leaked between invocations"
+
+-- The invariant must preserve fixed semantic observations across changing states.
+example (p : Int → Prop) (f : Int → Int) (m : Int → Int → Int) :
+    ∃ k : Int → Int → Prop,
+      (∀ s, p s → k s s) ∧
+      (∀ t s u, k t s → p u → f u = f t → m u = m t → k u s) ∧
+      (∀ t s, k t s → p t ∧ f t = f s ∧ m t = m s) := by
+  fix (scrape := standard)
+
+end PAContextTests
+
+namespace PAObservationTests
+
+open Lean Meta Elab Term
+
+@[simp, grind] private def member (xs : List Int) (key : Int) : Prop := key ∈ xs
+
+private def elaborate (term : TSyntax `term) : TermElabM Expr := do
+  let e ← elabTerm term none
+  synthesizeSyntheticMVarsNoPostponing
+  instantiateMVars e
+
+private def observations (result : PAScrapeResult) : Array Expr :=
+  result.qualifiers.zip result.origins |>.filterMap fun (q, origin) =>
+    if origin == "observation relation" then some q else none
+
+private def hasInstance (qs : Array Expr) (expected : Expr) : MetaM Bool :=
+  lambdaTelescope expected fun xs body => do
+    let types ← xs.toList.mapM inferType
+    for q in qs do
+      for (template, slots) in ← instantiateQualifier q types do
+        let candidate ← Expr.instQualifier template (slots.toArray.map (xs[·]!))
+        if ← isDefEq candidate body then return true
+    return false
+
+run_elab do
+  let input ← elaborate (← `(∀ k : List Int → Int → List Int → Prop,
+    ∀ current key original, k current key original → True = member original key))
+  let expected ← elaborate (← `(fun (current : List Int) (key : Int) (original : List Int) =>
+    member current key ↔ member original key))
+  for mode in #[PAScrapeMode.standard, .deep] do
+    let qs := observations (← scrapePAQualifiersWithReport input { mode })
+    unless ← hasInstance qs expected do throwError "missing shared-key observation relation"
+    for q in qs do
+      if q.hasMVar || q.hasFVar || q.hasLooseBVars then throwError "observation binder escaped"
+      check q
+  for cfg in #[{ mode := .no }, { mode := .basic },
+      { mode := .standard, maxObservationQualifiers := 0 },
+      { mode := .standard, maxObservationPairs := 0 },
+      { mode := .standard, maxParams := 2 }] do
+    unless (observations (← scrapePAQualifiersWithReport input cfg)).isEmpty do
+      throwError "observation scraping ignored its mode or limits"
+  let limited ← scrapePAQualifiersWithReport input
+    { mode := .standard, maxObservationQualifiers := 1 }
+  unless (observations limited).size == 1 do throwError "observation template limit ignored"
+  let old ← scrapePAQualifiers input
+    { mode := .standard, maxQualifiers := 1, maxObservationQualifiers := 0 }
+  let augmented ← scrapePAQualifiers input { mode := .standard, maxQualifiers := 1 }
+  unless old == augmented do throwError "observation scraping displaced an existing template"
+
+-- A relation requires both observations to fit one predicate occurrence in one clause.
+run_elab do
+  for term in #[← `(∀ k : List Int → Int → List Int → Prop,
+      (∀ current key original, k current key original → True) ∧
+      (∀ original key, True = member original key)),
+      ← `(∀ k l : List Int → Int → Prop, ∀ current key original,
+        k current key → l original key → True = member original key)] do
+    let result ← scrapePAQualifiersWithReport (← elaborate term) { mode := .standard }
+    unless (observations result).isEmpty do throwError "paired unrelated observations"
+  let input ← elaborate (← `(fun (p : List Int → Int → Prop) =>
+    ∀ k : List Int → Int → List Int → Prop, ∀ current key original,
+      k current key original → True = p original key))
+  lambdaTelescope input fun fixed body => do
+    let qs := observations (← scrapePAQualifiersWithReport body { mode := .standard })
+    let expected ← elaborate (← `(fun (p : List Int → Int → Prop)
+        (current : List Int) (key : Int) (original : List Int) =>
+      p current key ↔ p original key))
+    unless ← hasInstance qs (mkApp expected fixed[0]!).headBeta do
+      throwError "fixed semantic function was mistaken for an unknown predicate"
+    for q in qs do
+      unless (collectFVars {} q).fvarIds.all (· == fixed[0]!.fvarId!) do
+        throwError "observation retained a temporary binder"
+
+-- Discover preservation of membership while traversing a list, without tagged qualifiers.
+example : ∃ k : List Int → Int → List Int → Prop,
+    ∀ key original, k original key original ∧
+      (∀ current, k current key original →
+        (∀ head tail, current = head :: tail → head ≠ key → k tail key original) ∧
+        (∀ head tail, current = head :: tail → head = key → member original key) ∧
+        (current = [] → ¬member original key)) := by
+  fix (scrape := standard)
+
+end PAObservationTests
+
+namespace PAQuantifiedObservationTests
+
+open Lean Meta Elab Term
+
+@[simp, grind] private def keyMatch (xs : List (Int × Int)) (key value : Int) : Prop :=
+  xs.lookup key = some value
+
+private def scrape (name : Name) (binders : Nat) : TermElabM PAScrapeResult := do
+  let term ← `(∀ k : List (Int × Int) → Int → List (Int × Int) → Prop,
+    ∀ current key original, k current key original →
+      ∀ $(mkIdent name) : Int, keyMatch original key $(mkIdent name))
+  let e ← elabTerm term none
+  synthesizeSyntheticMVarsNoPostponing
+  scrapePAQualifiersWithReport (← instantiateMVars e)
+    { mode := .standard, maxObservationBinders := binders }
+
+run_elab do
+  let result ← scrape `v 1
+  let expected ← elabTerm (← `(fun (original : List (Int × Int)) (key : Int)
+      (current : List (Int × Int)) => ∀ v, keyMatch original key v ↔ keyMatch current key v)) none
+  synthesizeSyntheticMVarsNoPostponing
+  let expected ← instantiateMVars expected
+  unless ← result.qualifiers.anyM (fun q => isDefEq q expected) do
+    throwError "missing universally quantified observation"
+  unless result.qualifiers == (← scrape `renamed 1).qualifiers do
+    throwError "observation binder names changed the qualifiers"
+  for q in result.qualifiers do
+    if q.hasMVar || q.hasFVar || q.hasLooseBVars then throwError "observation binder escaped"
+    check q
+  if ← (← scrape `v 0).qualifiers.anyM (fun q => isDefEq q expected) then
+    throwError "universal observation ignored its binder limit"
+
+example : ∃ k : List (Int × Int) → Int → List (Int × Int) → Prop,
+    (∀ key original, k original key original) ∧
+    (∀ key original current head value tail, k current key original →
+      current = (head, value) :: tail → head ≠ key → k tail key original) ∧
+    (∀ key original current value tail, k current key original →
+      current = (key, value) :: tail → keyMatch original key value) := by
+  fix (scrape := standard)
+
+end PAQuantifiedObservationTests
+
+namespace PAFieldObservationTests
+
+open Lean Meta Elab Term
+
+private structure Block where
+  values : Int → Int
+  size : Int
+
+@[simp] private def ordered (a : Int → Int) (n : Int) : Prop :=
+  ∀ i j, 0 ≤ i → i < j → j < n → a i ≤ a j
+
+run_elab do
+  let input ← elabTerm (← `(∀ k : (Int → Int) → Int → Prop,
+    ∀ block : Block, k block.values block.size → ordered block.values block.size)) none
+  let expected ← elabTerm (← `(fun (a : Int → Int) (n : Int) => ordered a n)) none
+  synthesizeSyntheticMVarsNoPostponing
+  let input ← instantiateMVars input
+  let expected ← instantiateMVars expected
+  let result ← scrapePAQualifiersWithReport input { mode := .standard }
+  unless ← result.qualifiers.anyM (fun q => isDefEq q expected) do
+    throwError "record fields did not become predicate parameters"
+  for q in result.qualifiers do
+    if q.hasMVar || q.hasFVar || q.hasLooseBVars then throwError "record binder escaped"
+    check q
+  let disabled ← scrapePAQualifiers input { mode := .standard, maxObservationQualifiers := 0 }
+  if ← disabled.anyM (fun q => isDefEq q expected) then
+    throwError "field abstraction ignored its budget"
+
+example : ∃ k : Int → (Int → Int) → Int → Prop,
+    (∀ block : Block, 0 < block.size → k 1 block.values block.size) ∧
+    (∀ n (block next : Block), k n block.values block.size → n < block.size →
+      next.size = block.size → ordered next.values (n + 1) →
+      k (n + 1) next.values next.size) ∧
+    (∀ n (block : Block), k n block.values block.size → ¬n < block.size →
+      ordered block.values block.size) := by
+  fix (scrape := deep)
+
+private structure DependentBlock where
+  size : Nat
+  index : Fin (size + 1)
+
+private def accepts (size : Nat) (index : Fin (size + 1)) : Prop := index.val ≤ size
+
+run_elab do
+  let input ← elabTerm (← `(∀ k : Nat → DependentBlock → Prop,
+    ∀ block : DependentBlock, k block.size block → accepts block.size block.index)) none
+  synthesizeSyntheticMVarsNoPostponing
+  let result ← scrapePAQualifiersWithReport (← instantiateMVars input) { mode := .standard }
+  if result.origins.contains "predicate arguments" then
+    throwError "abstracted a field needed by another argument's type"
+  for q in result.qualifiers do check q
+
+end PAFieldObservationTests
+
+namespace PAStructuredTests
+
+@[simp] private def sorted (a : Int → Int) (n : Int) : Prop :=
+  ∀ i j, 0 ≤ i → i < j → j < n → a i ≤ a j
+
+@[simp] private def update (a : Int → Int) (i v : Int) : Int → Int :=
+  fun j => if j = i then v else a j
+
+-- These check generated predicates with automation, not just definitional equality.
+example : ∃ k : Int → (Int → Int) → Int → Prop,
+    ∀ n, 0 ≤ n →
+      (∀ a, k 0 a n) ∧
+      (∀ i a, k i a n →
+        (¬ i < n → sorted a n) ∧
+        (i < n → k (i + 1) (update a i i) n)) := by
+  fix (scrape := deep)
+
+example : ∃ k : List (List Int) → Int → Int → Prop,
+    (∀ n, 0 ≤ n → k [] n n) ∧
+    (∀ slots remaining n, k slots remaining n → 0 < remaining →
+      k (slots ++ [[]]) (remaining - 1) n) ∧
+    (∀ slots remaining n, k slots remaining n → ¬ 0 < remaining →
+      slots = List.replicate n.toNat []) := by
+  fix (scrape := deep)
+
+open Lean Meta Elab Term
+
+private def five (a b c d e : Int) : Prop := a + b + c + d ≤ e
+
+private def segment (a : Int → Int) (offset : Int) (b : Int → Int)
+    (start len : Int) : Prop :=
+  ∀ i : Int, 0 ≤ i → i < len → a (offset + i) = b (start + i)
+
+run_elab do
+  let source ← elabTerm (← `(fun (a b : Int → Int) (base lo hi : Int) =>
+    segment a (base + lo) b lo (hi - lo))) none
+  let expected ← elabTerm (← `(fun (a b : Int → Int) (base lo hi : Int) =>
+    ∀ j, lo ≤ j → j < hi → a (base + j) = b j)) none
+  synthesizeSyntheticMVarsNoPostponing
+  let source ← instantiateMVars source
+  let expected ← instantiateMVars expected
+  lambdaTelescope source fun xs body => do
+    let candidates ← PAScrape.Structured.absoluteIndexCandidates body
+    unless ← candidates.anyM (fun q => isDefEq q (expected.beta xs)) do
+      throwError "missing absolute-index candidate"
+    for q in candidates do
+      check q
+      unless (collectFVars {} q).fvarIds.all (fun id => xs.contains (mkFVar id)) do
+        throwError "escaped coordinate binder"
+    unless (← PAScrape.Structured.absoluteIndexCandidates body 0).isEmpty do
+      throwError "ignored reindexing limit"
+  let target ← elabTerm (← `(∀ (a b : Int → Int) (base lo hi : Int),
+    (∀ j, lo ≤ j → j < hi → a (base + j) = b j) →
+      segment a (base + lo) b lo (hi - lo))) none
+  synthesizeSyntheticMVarsNoPostponing
+  let proof ← withOptions (·.set `flex.automation.smtTimeout (0 : Nat)) <|
+    Flex.Automation.proofOracle (← instantiateMVars target)
+  unless proof.isSome do throwError "could not certify the reindexed specification"
+
+run_elab do
+  let term ← elabTerm (← `(fun r : Int → Int → Int → Int → Int → Prop =>
+    ∀ a b c d e x, r a b c d e → (0 ≤ e → x = e - 1) →
+      five a b c d (x + 1))) none
+  synthesizeSyntheticMVarsNoPostponing
+  let term ← instantiateMVars term
+  let r ← mkFreshExprMVar (some term.bindingDomain!) (kind := .syntheticOpaque)
+  let body := term.bindingBody!.instantiate1 r
+  let result ← scrapePAQualifiersWithReport body { mode := .standard }
+  let expected ← elabTerm (← `(fun a b c d e : Int => five a b c d e)) none
+  unless ← result.anchored.anyM (fun q => isDefEq expected q.qualifier) do
+    throwError "missing source instance through a guarded alias"
+  for q in result.anchored do
+    if q.qualifier.hasMVar || q.qualifier.hasFVar || q.qualifier.hasLooseBVars then
+      throwError "source instance retained a temporary binder"
+    check q.qualifier
+  unless (← scrapePAQualifiersWithReport body
+      { mode := .standard, maxAnchoredAttempts := 0 }).anchored.isEmpty do
+    throwError "source instance budget ignored"
+
+run_elab do
+  let r ← mkFreshExprMVar (some (← elabTerm (← `(Int → Prop)) none))
+  let κ : KVar := {
+    name := `k
+    mvarId := r.mvarId!
+    params := [`x]
+    paramTypes := [mkConst ``Int] }
+  let bad ← elabTerm (← `(fun b : Bool => b = true)) none
+  synthesizeSyntheticMVarsNoPostponing
+  let bad ← instantiateMVars bad
+  let rejected ← try
+    discard <| buildInitialAssignment [κ] #[] (some 0) (some 0)
+      #[{ kvar := r.mvarId!, qualifier := bad, slots := [0], origin := "invalid fixture" }]
+    pure false
+  catch _ => pure true
+  unless rejected do throwError "source instance accepted mismatched argument types"
+  if ← r.mvarId!.isAssigned then throwError "source validation assigned its predicate"
+
+run_elab do
+  let type ← mkFreshExprMVar (some (mkSort (.succ .zero)))
+  let property ← elabTerm (← `(List.replicate 2 (0 : Int))) none
+  synthesizeSyntheticMVarsNoPostponing
+  withLocalDeclD `xs (← mkAppM ``List #[type]) fun xs => do
+    let candidates ← PAScrape.Structured.listCandidates #[← instantiateMVars property] #[xs]
+    unless candidates.isEmpty do throwError "list candidates accepted an unresolved element type"
+    if ← type.mvarId!.isAssigned then throwError "list scraping assigned the caller's type"
+
+private def region (a : Int → Int) (l m r p : Int) : Prop :=
+  ∀ x, l ≤ x → x < m → a x ≤ a p ∧ m ≤ r
+
+run_elab do
+  let source ← elabTerm (← `(fun (i j : Int) (a : Int → Int) (lo hi : Int) =>
+    region (update a i (a hi)) lo i (hi + 1) i)) none
+  synthesizeSyntheticMVarsNoPostponing
+  lambdaTelescope (← instantiateMVars source) fun xs property => do
+    let candidates ← PAScrape.Structured.compoundCandidates #[property] xs
+    let expected := mkAppN (mkConst ``region) #[xs[2]!, xs[3]!, xs[0]!, xs[1]!, xs[4]!]
+    unless candidates.contains expected do throwError "missing compound-argument candidate"
+    for q in candidates do
+      check q
+      if q.hasMVar || q.hasLooseBVars then throwError "unresolved compound candidate"
+      unless (collectFVars {} q).fvarIds.all (fun id => xs.contains (mkFVar id)) do
+        throwError "compound candidate retained a temporary binder"
+    unless (← PAScrape.Structured.compoundCandidates #[property] xs 0).isEmpty &&
+        (← PAScrape.Structured.compoundCandidates #[property] xs 1).size == 1 do
+      throwError "compound candidate limit ignored"
+    unless (← PAScrape.Structured.compoundCandidates #[property, property] xs) == candidates do
+      throwError "duplicate source changed compound candidates"
+    let r ← mkFreshExprMVar (some (← mkForallFVars xs (mkSort .zero)))
+    let body ← mkForallFVars xs (← mkArrow (mkAppN r xs) property)
+    let old ← scrapePAQualifiersWithReport body
+      { mode := .deep, maxCompoundCandidatesPerKappa := 0 }
+    let new ← scrapePAQualifiersWithReport body
+      { mode := .deep, maxCompoundCandidatesPerKappa := 24 }
+    unless !old.anchored.isEmpty && new.anchored.any (·.origin == "compound arguments") do
+      throwError "missing ordinary or supplemental anchor"
+    unless old.qualifiers == new.qualifiers do throwError "compound pass changed ordinary templates"
+    for candidate in old.anchored do
+      unless new.anchored.any (fun q => q.kvar == candidate.kvar &&
+          q.slots == candidate.slots && q.qualifier == candidate.qualifier) do
+        throwError "compound pass displaced an ordinary anchor"
+
+end PAStructuredTests
+
+namespace PAFunctionBatchTests
+open Lean Meta Elab Term
+private abbrev Mapping (α β : Type) [Inhabited β] := α → β
+private def related (a : Mapping Int Int) (i : Int) : Prop := a i ≤ a (i + 1)
+run_elab do
+  let stxs ← pure #[
+    ← `(∀ (a b : Mapping Int Int) (i : Int), a = b → related a i → related b i),
+    ← `(∀ (a b : Mapping Int Int) (i : Int), a = b → related a i → False),
+    ← `(∀ (a b : Mapping Int Int) (i : Int), a = b → related a i → a i = b i)]
+  let queries ← stxs.mapM (fun stx => elabTerm stx none)
+  synthesizeSyntheticMVarsNoPostponing
+  let queries ← queries.mapM instantiateMVars
+  let results ← Flex.PA.functionSmtOracle 2000 queries
+  unless results.size == 3 && results[0]! == .valid && results[2]! == .valid do
+    throwError "function-valued batch lost a valid candidate: {repr results}"
+  if results[1]! == .valid then throwError "function batch mixed candidate assertions"
+  let x ← mkFreshExprMVar (some (mkConst ``Int))
+  let result ← Flex.PA.functionSmtOracle 2000 #[← mkEq x (mkIntLit 0)]
+  if result[0]! == .valid || (← x.mvarId!.isAssigned) then
+    throwError "function batch accepted or assigned an unresolved input"
+end PAFunctionBatchTests
+
+namespace PAListPrefixTests
+open Lean Meta Elab Term
+
+run_elab do
+  let source ← elabTerm (← `(fun (xs : List Int) (i : Int) (n : Nat) =>
+    xs = List.replicate n 37)) none
+  synthesizeSyntheticMVarsNoPostponing
+  lambdaTelescope (← instantiateMVars source) fun xs property => do
+    let candidates ← PAScrape.Structured.listPrefixCandidates #[property] xs
+    let template ← elabTerm (← `(fun (xs : List Int) (i : Int) =>
+      ∀ j : Nat, (j : Int) < i → xs[j]? = some 37)) none
+    let expected := (mkAppN template #[xs[0]!, xs[1]!]).headBeta
+    unless ← candidates.anyM (fun q => do isDefEq expected q) do
+      throwError "missing Int-indexed prefix: {candidates}"
+    let template ← elabTerm (← `(fun (xs : List Int) (n : Nat) =>
+      ∀ j : Nat, j < n → xs[j]? = some 37)) none
+    let expected := (mkAppN template #[xs[0]!, xs[2]!]).headBeta
+    unless ← candidates.anyM (fun q => do isDefEq expected q) do
+      throwError "missing Nat-indexed prefix"
+    unless (← PAScrape.Structured.listPrefixCandidates #[property] xs 0).isEmpty &&
+        (← PAScrape.Structured.listPrefixCandidates #[property] xs 1).size == 1 do
+      throwError "prefix limit ignored"
+    unless (← PAScrape.Structured.listPrefixCandidates #[property, property] xs) == candidates do
+      throwError "duplicate source changed prefixes"
+    for candidate in candidates do
+      check candidate
+      if candidate.hasMVar || candidate.hasLooseBVars then throwError "unresolved prefix candidate"
+      unless (collectFVars {} candidate).fvarIds.all (fun id => xs.contains (mkFVar id)) do
+        throwError "escaped prefix binder"
+    let bound ← mkFreshExprMVar (some (mkConst ``Int))
+    unless (← PAScrape.Structured.listPrefixCandidates #[property] #[xs[0]!, bound]).isEmpty do
+      throwError "accepted unresolved prefix bound"
+    if ← bound.mvarId!.isAssigned then throwError "assigned caller's prefix bound"
+
+
+set_option flex.automation.smtTimeout 0 in
+example (xs : List (List Int)) (i : Int) (bound : xs.length ≤ i)
+    (h : ∀ j : Nat, (j : Int) < i → xs[j]? = some [4, 9]) :
+    (xs.map List.length).sum = 2 * xs.length := by
+  flex_discharge
+
+end PAListPrefixTests

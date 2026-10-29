@@ -10,7 +10,7 @@ import Flex
 
   The Prop slot can't be filled by any of the standard Int-typed qualifiers,
   so qualifier instantiation correctly skips it. PA proceeds on the Int slots
-  and fusion eliminates `k1` (acyclic). Originated from a pre-mvar-migration
+  and zap eliminates `k1` (acyclic). Originated from a pre-mvar-migration
   issue with κ-args of mixed sorts.
 -/
 
@@ -45,7 +45,7 @@ theorem KappaPropArg_proof : KappaPropArg := by
   solve_fixpoint
 
 theorem KappaPropArg_proof' : KappaPropArg := by
-  fusion
+  zap
   fixpoint
   all_goals grind
   

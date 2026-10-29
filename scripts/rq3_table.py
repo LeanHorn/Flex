@@ -2,9 +2,9 @@
 """Generate the RQ3 LaTeX table from eval/rq3_results.json (3-config schema).
 
 Three configs all run *only* the acyclic-κ elimination then `all_goals sorry`:
-  zap   = fusion        (deterministic proof term)
-  grind = fusion_grind  (κ-head clauses by grind)   — may FAIL
-  aesop = fusion_aesop  (κ-head clauses by aesop)    — may FAIL
+  zap   = zap        (deterministic proof term)
+  grind = zap_grind  (κ-head clauses by grind)   — may FAIL
+  aesop = zap_aesop  (κ-head clauses by aesop)    — may FAIL
 
 Headline metric: `elim_hb` = Σ of the variant's `[phase]` heartbeats, i.e. the
 pure acyclic-κ elimination cost (thousands of Lean heartbeats, deterministic).
@@ -96,15 +96,15 @@ def latex_table(rows):
         r"\begin{table}[t]", r"\centering", r"\small",
         r"\caption{RQ3: cost of \emph{acyclic-$\kappa$ elimination} only "
         r"(then \lean{sorry}), in thousands of Lean heartbeats (deterministic). "
-        r"\textsc{Zap} (\lean{fusion}) builds the proof term; \lean{fusion\_grind}"
-        r"/\lean{fusion\_aesop} discharge each $\kappa$-head clause by search. "
+        r"\textsc{Zap} (\lean{zap}) builds the proof term; \lean{zap\_grind}"
+        r"/\lean{zap\_aesop} discharge each $\kappa$-head clause by search. "
         r"\textit{fail} = the search variant errored on a $\kappa$-head clause. "
         r"Parenthesised $\times$ is the slowdown vs.\ \textsc{Zap}. "
         r"(LF: Liquid-fixpoint, FX: FluxRS.)}",
         r"\label{tab:rq3}",
         r"\begin{tabular}{llrrrrr}", r"\toprule",
         r"Benchmark & Src & $\kappa_{\text{acy}}$ & $\kappa_{\text{cut}}$"
-        r" & \textsc{Zap} & \lean{fusion\_grind} & \lean{fusion\_aesop} \\",
+        r" & \textsc{Zap} & \lean{zap\_grind} & \lean{zap\_aesop} \\",
         r"\midrule",
         r"\multicolumn{7}{l}{\emph{acyclic-only}}\\",
     ]

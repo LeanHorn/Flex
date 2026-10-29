@@ -6,7 +6,7 @@ import Flex.Fusion
 import Flex.Zap
 import Flex.PA.Check
 import Flex.Tactic.Utils
-import Flex.Tactic.Tactics.Fusion
+import Flex.Tactic.Tactics.Zap
 
 open Lean Meta Elab Tactic
 
@@ -18,7 +18,7 @@ open Lean Meta Elab Tactic
   whole tactic fails.
 
   `zap_with (tac) "label"` — the optional string is the `benchPhase` label
-  (default `zap_with`). The eval aliases in `Tactics/Eval/` set it. -/
+  (default `zap_with`). The eval aliases in `Tactics/Eval.lean` set it. -/
 
 /-- Leaf handler: prove the clause by running `tac` in the ambient context. -/
 def searchLeaf (tac : TSyntax `tactic) (label : String) : LeafHandler :=
@@ -36,7 +36,7 @@ elab_rules : tactic
   | `(tactic| zap_with ($tac) $[$lbl:str]?) =>
       zapImpl (searchStrategy tac ((lbl.map (·.getString)).getD "zap_with"))
 
--- Tests (same A/B/D constraints as `zap`'s tests in Fusion.lean)
+-- Tests (same A/B/D constraints as `zap`'s tests in Zap.lean)
 example : ∃ κ : Int → Int → Prop,
     ∀ x : Int, 0 ≤ x →
       (∀ ν : Int, ν = x - 1 → κ ν x)

@@ -13,7 +13,7 @@ import Flex
 
   ANF: introduce `p00 = p0.fld00`, `p01 = p0.fld01` (and likewise for a1) so
   the κ-args are all bare scope vars — no compound expressions like
-  `Adt0.fld00 p0` that the fusion substitution can't place.
+  `Adt0.fld00 p0` that the zap substitution can't place.
 -/
 
 structure Adt0 where

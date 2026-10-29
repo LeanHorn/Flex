@@ -36,3 +36,7 @@ lean-noquals/
 
 # Frozen CHC evaluation inputs, translations, and results
 /evaluation/CHC-COMP/
+/evaluation/RQ1/results/
+
+# Local scraping specification and PDF
+/Flex/PA/Notes/

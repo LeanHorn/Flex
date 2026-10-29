@@ -32,12 +32,15 @@ def conjProofs : List (Expr × Expr) → Expr
         (mkApp2 (mkConst ``And) accE curE, mkAndIntro accE curE accP curP))
       (e0, p0)).2
 
-/-- Prove a whole head once. Leaf fallback supports oracles that cannot prove conjunctions. -/
+/-- Prove a whole head once. Leaf fallback supports oracles that cannot prove
+conjunctions. An optional hook may retain the whole head as a typed obligation;
+its caller is responsible for validating the candidate before doing so. -/
 def emitPALeaf
     (κ : KVar)
     (survivors : List (Expr × List Nat))
     (args : Array Expr)
-    (oracle : PAOracle := proveLeaf) :
+    (oracle : PAOracle := proveLeaf)
+    (unprovedHead : Option (Expr → TermElabM Expr) := none) :
     TermElabM Expr := do
   let bodies ← survivors.mapM fun (q, slots) =>
     Expr.instQualifier q ((slots.map fun i => args[i]!).toArray)
@@ -47,11 +50,14 @@ def emitPALeaf
     if (← instantiateMVars declaration.type) == target then return mkFVar declaration.fvarId
   if bodies.length > 1 then
     if let some proof ← oracle target then return proof
-  let pairs ← bodies.mapM fun body => do
+  let mut pairs := []
+  for body in bodies do
     match ← oracle body with
-    | some proof => pure (body, proof)
-    | none => throwError "fix: could not certify a predicate head for '{κ.name}':{indentExpr body}"
-  return conjProofs pairs
+    | some proof => pairs := (body, proof) :: pairs
+    | none =>
+      if let some defer := unprovedHead then return ← defer target
+      throwError "fix: could not certify a predicate head for '{κ.name}':{indentExpr body}"
+  return conjProofs pairs.reverse
 
 private def mentionsPredicates (assign : List (KVar × List (Expr × List Nat)))
     (e : Expr) : Bool :=
@@ -64,13 +70,17 @@ partial def walkPAProof
     (residualOut : IO.Ref (Array MVarId))
     (oracle : PAOracle := proveLeaf)
     (validateSafety : PAOracle := fun _ => pure none)
-    (dependsOnPredicates : Bool := false) :
+    (dependsOnPredicates : Bool := false)
+    (unprovedHead : Option (Expr → TermElabM Expr) := none)
+    (onHead : TermElabM Unit := pure ()) :
     TermElabM Expr := do
   if let some (κ, survivors, args) := paHead? assign goal then
-    return ← emitPALeaf κ survivors args oracle
+    let proof ← emitPALeaf κ survivors args oracle unprovedHead
+    onHead
+    return proof
   if goal.getAppFn.isMVar then
     throwError "fix: head metavariable{indentExpr goal.getAppFn}\nis not a \
-      cut variable handled by PA. Eliminate acyclic κ's with `fusion` first."
+      cut variable handled by PA. Eliminate acyclic κ's with `zap` first."
   if goal.isForall then
     let dependent := dependsOnPredicates || mentionsPredicates assign goal.bindingDomain!
     let dom ← instantiateMVars goal.bindingDomain!
@@ -79,10 +89,13 @@ partial def walkPAProof
     return ← withLocalDecl name bi dom fun fv => do
       let body  := goal.bindingBody!.instantiate1 fv
       let inner ← walkPAProof assign body residualOut oracle validateSafety dependent
+        unprovedHead onHead
       mkLambdaFVars #[fv] inner
   if let some (l, r) := goal.and? then
     let pL ← walkPAProof assign l residualOut oracle validateSafety dependsOnPredicates
+      unprovedHead onHead
     let pR ← walkPAProof assign r residualOut oracle validateSafety dependsOnPredicates
+      unprovedHead onHead
     return mkAndIntro l r pL pR
   let contextDepends := (← getLCtx).any fun decl =>
     mentionsPredicates assign decl.type || decl.value?.any (mentionsPredicates assign)

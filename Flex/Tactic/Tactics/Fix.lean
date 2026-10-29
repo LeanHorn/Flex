@@ -24,10 +24,12 @@ register_option flex.benchOracles : Bool := {
 private def reportScrapedQualifiers (result : PAScrapeResult) : TacticM Unit := do
   let qs := result.qualifiers
   withOptions (·.setBool `pp.funBinderTypes true) do
-    let header := m!"fix: scraped qualifiers ({qs.size})"
+    let header := m!"fix: scraped qualifiers ({qs.size} templates, {result.anchored.size} source instances)"
     let entries := qs.toList.mapIdx fun i q =>
       m!"  {i + 1}. {q} [{result.origins[i]!}]"
-    logInfo (MessageData.joinSep (header :: entries) "\n")
+    let instances := result.anchored.toList.map fun candidate =>
+      m!"  {candidate.qualifier} [{candidate.origin}; slots {candidate.slots}]"
+    logInfo (MessageData.joinSep (header :: entries ++ instances) "\n")
   trace[flex.scrape] "visited={result.visitedNodes} definitions={result.inspectedDefinitions} rejected={result.rejected}"
 
 /-- Report a phase's elapsed wall time when benchmarking is enabled. -/
@@ -53,12 +55,26 @@ private def validatePASafety (synth : PASynthOracle) (prove : PAOracle) : PAOrac
       if let some proof ← prove target then return some proof
       throwError "fix: could not validate a safety clause for the synthesized predicates; goal unchanged"
 
+/-- Validation decisions describe candidate suitability, not completed Lean proofs.
+Only completed certification traversals report; rejected candidates roll back. -/
+structure PACertificationReport where
+  /-- Predicate heads proved or independently validated in their local context. -/
+  validatedHeads : Nat := 0
+  /-- Validated heads retained as explicit Lean proof obligations. -/
+  remainingHeads : Nat := 0
+  validatedSafety : Nat := 0
+  /-- All predicate-dependent obligations were proved or validated. -/
+  allValidated : Bool := true
+  deriving Inhabited, Repr
+
 private def runFix
   (oracle : PAOracle := proveLeaf)
   (scrape : PAScrapeConfig := {})
   (proofOracle : Option PAOracle := none)
   (observe : PAObserver := fun _ => pure ())
   (synthOracle : Option PASynthOracle := none)
+  (allowUnprovedHeads : Bool := false)
+  (onCertification : PACertificationReport → TacticM Unit := fun _ => pure ())
     : TacticM Unit := withMainContext do
   let (kctx, kvarsInOrder) ← peelKVars
 
@@ -67,28 +83,32 @@ private def runFix
     let bodyGoal ← getMainGoal
     -- Scrape before `reduce` erases surface predicates and unfolds definitions.
     let rawBody ← bodyGoal.getType
-    let extraQualifiers ←
+    let scraped : PAScrapeResult ←
       if scrape.mode != .no || !scrape.defs.isEmpty then do
         let result ← scrapePAQualifiersWithReport rawBody scrape
         if flex.reportQualifiers.get (← getOptions) then
           reportScrapedQualifiers result
         unless result.limitsHit.isEmpty do
           logWarning m!"fix: scraping reached limits {result.limitsHit}; some candidates were omitted"
-        pure result.qualifiers
-      else pure #[]
+        pure result
+      else pure {}
+    let extraQualifiers := scraped.qualifiers
     let body ← reduce rawBody
 
-    let (acyclic, _) ← (exprPartitionKVars body).run kctx
-    unless acyclic.isEmpty do
-      logWarning m!"fix: {acyclic.length} acyclic κ(s) present \
-        ({acyclic.map (·.name)}) — run `fusion` first. Treating all κ as cut."
+    let (elimVars, _) ← (exprPartitionKVars body).run kctx
+    unless elimVars.isEmpty do
+      logWarning m!"fix: {elimVars.length} non-cut κ(s) present \
+        ({elimVars.map (·.name)}) — run `zap` first. Treating all κ as cut."
     let flatCs  ← (exprFlat body).run kctx
     let candidateLimit := if scrape.mode == .no && scrape.defs.isEmpty then none
       else some scrape.maxCandidatesPerKappa
     let instanceLimit := candidateLimit.map fun _ => scrape.maxInstancesPerKappa
     let standardQualifiers ← getStandardQualifiers
-    let qualifiers := extraQualifiers ++ standardQualifiers
-    let initial ← buildInitialAssignment kvarsInOrder qualifiers candidateLimit instanceLimit
+    -- Preserve existing candidates before spending the remaining budget on new relations.
+    let ordinaryCount := extraQualifiers.size - scraped.observationCount
+    let qualifiers := extraQualifiers.extract 0 ordinaryCount ++ standardQualifiers ++
+      extraQualifiers.extract ordinaryCount extraQualifiers.size
+    let initial ← buildInitialAssignment kvarsInOrder qualifiers candidateLimit instanceLimit scraped.anchored
     observe (.setup extraQualifiers.size standardQualifiers.size (← getQualifiers).size
       (initial.toArray.map fun (κ, cs) => (κ.name, cs.length)))
     let aStar ← benchFixPhase "synthesis" <|
@@ -104,13 +124,39 @@ private def runFix
       κ.assignSol sol
 
     let residualOut ← IO.mkRef (#[] : Array MVarId)
+    let certification ← IO.mkRef ({} : PACertificationReport)
     let certificateCalls ← IO.mkRef 0
     let certify : PAOracle := fun target => do
       certificateCalls.modify (· + 1)
       (proofOracle.getD oracle) target
+    let validateSafety : PAOracle := fun target => do
+      let proof ← validatePASafety (synthOracle.getD oracle.toSynth)
+        (proofOracle.getD oracle) target
+      certification.modify fun r => { r with validatedSafety := r.validatedSafety + 1 }
+      return proof
+    let unprovedHead : Option (Expr → TermElabM Expr) :=
+      if allowUnprovedHeads then
+        some fun target => do
+          let target ← instantiateMVars target
+          let results ← (synthOracle.getD oracle.toSynth) #[target]
+          unless results.size == 1 do
+            throwError "fix: head validation oracle returned the wrong number of decisions"
+          match results[0]! with
+          | .valid =>
+            let residual ← mkFreshExprMVar (some target) (kind := .syntheticOpaque)
+            residualOut.modify (·.push residual.mvarId!)
+            certification.modify fun r => { r with remainingHeads := r.remainingHeads + 1 }
+            return residual
+          | .invalid =>
+            throwError "fix: synthesized predicates do not satisfy a head clause; goal unchanged"
+          | .unknown _ =>
+            throwError "fix: could not validate an unproved predicate head; goal unchanged"
+      else none
+    let onHead : TermElabM Unit :=
+      certification.modify fun r => { r with validatedHeads := r.validatedHeads + 1 }
     let proof ← benchFixPhase "certificate" <|
-      walkPAProof aStar body residualOut certify
-        (validatePASafety (synthOracle.getD oracle.toSynth) (proofOracle.getD oracle))
+      walkPAProof aStar body residualOut certify validateSafety
+        (unprovedHead := unprovedHead) (onHead := onHead)
     bodyGoal.assign proof
     if flex.benchOracles.get (← getOptions) then
       IO.println s!"FIX_CERTIFICATE calls={← certificateCalls.get}"
@@ -118,30 +164,49 @@ private def runFix
     let residual := (← residualOut.get).toList
     setGoals residual
     logInfo m!"fix: bridge built and assigned; \
-      {residual.length} κ-free residual goal(s) left as c′."
+      {residual.length} residual proof goal(s) left as c′."
+    onCertification (← certification.get)
 
 /-- Keep predicate assignments only after head certification and safety validation.
-    Any failed attempt restores the entry goal, including prior Zap progress. -/
+With `allowUnprovedHeads`, independently valid head clauses may remain as explicit
+proof goals. Unknown or refuted heads reject the candidate. Validation decisions
+never enter the proof term. Any failure restores the entry goal. -/
 def fixImpl
   (oracle : PAOracle := proveLeaf)
   (scrape : PAScrapeConfig := {})
   (proofOracle : Option PAOracle := none)
   (observe : PAObserver := fun _ => pure ())
-  (synthOracle : Option PASynthOracle := none) : TacticM Unit := do
+  (synthOracle : Option PASynthOracle := none)
+  (allowUnprovedHeads : Bool := false)
+  (onCertification : PACertificationReport → TacticM Unit := fun _ => pure ()) : TacticM Unit := do
   let saved ← Tactic.saveState
-  tryCatchRuntimeEx (runFix oracle scrape proofOracle observe synthOracle) fun error => do
+  tryCatchRuntimeEx
+      (runFix oracle scrape proofOracle observe synthOracle allowUnprovedHeads onCertification)
+      (fun error => do
     Flex.CHC.restoreTermState saved.term
     set saved.tactic
-    throw error
+    throw error)
 
 private declare_config_elab elabScrapeLimits PAScrapeLimits
+
+/-- Parse a `scrape := …` mode; `tactic` names the caller in the error. -/
+def parseScrapeMode (tactic : String) : Option Ident → TacticM PAScrapeMode
+  | none => pure .no
+  | some mode => match mode.getId.eraseMacroScopes with
+    | `no => pure .no
+    | `basic => pure .basic
+    | `standard => pure .standard
+    | `deep => pure .deep
+    | _ => throwErrorAt mode "{tactic}: scrape must be `no`, `basic`, `standard`, or `deep`"
 
 /-- Solve existential predicates by PA, retaining only safety-validated candidates.
     Rejected or inconclusive candidates leave the entry goal unchanged.
     Validated candidates may leave unproved residual goals.
     Uses the standard qualifier bank unless `flex.standardQualifiers` is disabled.
-    Default synthesis batches SMT checks; certificate leaves require Lean proofs.
-    `scrape`: `basic` extracts heads; `standard` adds premises, guarded arithmetic, and definitions;
+    Default synthesis batches SMT decisions; certification and residual goals use
+    kernel-checked SMT proofs and Lean automation.
+    `scrape`: `basic` extracts heads; `standard` adds premises, guarded arithmetic,
+    definitions, and relations between semantic observations;
     `deep` also explores helpers and generalizes numeric templates.
     `defs`: also scrape the listed definitions. Scraping is off by default.
     `oracle`: fallback after default Lean automation, shared by both phases.
@@ -159,12 +224,7 @@ elab_rules : tactic
       $[(scrapeConfig := $limits:term)]? $[(oracle := $fallback:tacticSeq)]? $[(synth := $synth:tacticSeq)]?
       $[(proof := $proof:tacticSeq)]?) => do
     -- Parse scraping options and resolve definition names.
-    let mode ← match mode.map (·.getId) with
-      | none | some `no => pure PAScrapeMode.no
-      | some `basic => pure PAScrapeMode.basic
-      | some `standard => pure PAScrapeMode.standard
-      | some `deep => pure PAScrapeMode.deep
-      | _ => throwError "fix: scrape must be `no`, `basic`, `standard`, or `deep`"
+    let mode ← parseScrapeMode "fix" mode
     let defs ← match defs with
       | none => pure #[]
       | some names => names.getElems.mapM fun name =>
@@ -176,7 +236,7 @@ elab_rules : tactic
         let stx ← `(Lean.Parser.Term.optConfig| (config := $value))
         elabScrapeLimits stx (logExceptions := false)
 
-    -- Each phase inherits the shared oracle unless explicitly overridden.
+    -- Preserve explicit oracle overrides; the default proof phase uses checked automation.
     let defaultOracle ← match fallback with
       | none => pure proveLeaf
       | some tac => pure (withPAFallback (← `(tactic| ($tac:tacticSeq))))
@@ -184,7 +244,7 @@ elab_rules : tactic
       | none => pure defaultOracle
       | some tac => pure (withPAPriority (← `(tactic| ($tac:tacticSeq))))
     let proofOracle ← match proof with
-      | none => pure defaultOracle
+      | none => pure (if fallback.isSome then defaultOracle else Flex.Automation.proofOracle)
       | some tac => pure (withPAPriority (← `(tactic| ($tac:tacticSeq))))
     let batchOracle := if synth.isNone && fallback.isNone then
       some Flex.Automation.synthOracle else none

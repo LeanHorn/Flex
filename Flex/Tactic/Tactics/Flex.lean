@@ -279,19 +279,58 @@ private structure Candidate where
   validated : Bool
   remainingHeads : Option Nat
 
+private def runPA (ctx : Context) (scrape : PAScrapeConfig)
+    (allowUnprovedHeads : Bool) : TacticM Candidate := do
+  let report ← IO.mkRef ({} : PACertificationReport)
+  fixImpl proveLeaf scrape (some (proofOracle ctx))
+    (synthOracle := some (synthOracle ctx)) (allowUnprovedHeads := allowUnprovedHeads)
+    (onCertification := fun result => report.set result)
+  let report ← report.get
+  return {
+    backend := .fix
+    validated := report.allValidated
+    remainingHeads := some report.remainingHeads }
+
+/-- Prefer source instances when unrestricted slot permutations exceed the search budget. -/
+private partial def largeTemplateSearch (type : Expr) (limits : PAScrapeLimits) : MetaM Bool := do
+  let type ← whnf type
+  unless type.isAppOfArity ``Exists 2 do return false
+  let domain := type.getArg! 0
+  let arity ← forallTelescopeReducing domain fun parameters _ => pure parameters.size
+  let permutations := (List.range (min arity limits.maxParams)).foldl
+    (fun count index => count * (arity - index)) 1
+  if permutations > limits.maxInstancesPerKappa then return true
+  withLocalDeclD `κ domain fun κ =>
+    largeTemplateSearch (type.appArg!.beta #[κ]) limits
+
 private def runBackend (ctx : Context) (backend : Backend) : TacticM Candidate := do
   match backend with
   | .fix =>
-    let report ← IO.mkRef ({} : PACertificationReport)
     let now ← IO.monoMsNow
     let deadline := now + ctx.setup.config.paTimeout * 1000
     let paCtx := if ctx.setup.config.paTimeout == 0 then ctx else
       { ctx with deadline := some (ctx.deadline.map (min deadline) |>.getD deadline) }
-    fixImpl proveLeaf ctx.setup.scrape (some (proofOracle paCtx))
-      (synthOracle := some (synthOracle paCtx)) (allowUnprovedHeads := true)
-      (onCertification := fun result => report.set result)
-    let report ← report.get
-    return { backend, validated := report.allValidated, remainingHeads := some report.remainingHeads }
+    -- Try source instances before enumerating templates. A failed attempt rolls back;
+    -- only certified heads and validated safety clauses can commit the smaller pool.
+    if (ctx.setup.scrape.mode == .standard || ctx.setup.scrape.mode == .deep) &&
+        ctx.setup.scrape.maxCandidatesPerKappa > 0 &&
+        (← withMainContext do largeTemplateSearch (← getMainTarget) ctx.setup.scrape.toPAScrapeLimits) then
+      let seconds := if ctx.setup.config.paTimeout == 0 then 20 else
+        min 20 (max 1 (ctx.setup.config.paTimeout / 3))
+      let deadline := now + seconds * 1000
+      let sourceCtx := { paCtx with
+        setup := { ctx.setup with config := { ctx.setup.config with heartbeats := 0 } }
+        deadline := some (paCtx.deadline.map (min deadline) |>.getD deadline) }
+      let budget := if ctx.setup.config.paHeartbeats == 0 then 500000 else
+        max 1 (ctx.setup.config.paHeartbeats / 3)
+      let budget ← if (← getMaxHeartbeats) == 0 then pure budget else do
+        pure (min budget (max 1 ((← getRemainingHeartbeats) / 3000)))
+      let result ← phase sourceCtx "fix source candidates" budget <|
+        runPA sourceCtx { ctx.setup.scrape with maxCandidatesPerKappa := 0 } false
+      if let .ok candidate := result then
+        trace[flex] "fix: source candidates certified"
+        return candidate
+    runPA paCtx ctx.setup.scrape true
   | .spacer | .eldarica =>
     let name := if backend == .spacer then flex.spacer.executable else flex.eldarica.executable
     let mut timeout := ctx.setup.config.solverTimeout * 1000
@@ -357,6 +396,8 @@ private def solveKGoal (ctx : Context) (goal : MVarId) : TacticM Unit := do
       let candidate := { candidate with validated := valid }
       if (← best.get).all (fun (previous, _) => better candidate previous) then
         best.set (some (candidate, ← Tactic.saveState))
+      -- Inference is finished; the remaining work is an ordinary proof obligation.
+      if candidate.validated && candidate.remainingHeads == some 0 then break
     return false
   let completed ← tryCatchRuntimeEx search fun error => do
     if error.isInterrupt then
@@ -493,6 +534,7 @@ syntax "eldarica" : flexBackend
 
 /-- Preprocess, eliminate predicates, and discharge what can be proved.
 Deep scraping is the default. Unproved obligations remain as one structured VC.
+For large template searches, Fix tries source instances before the full qualifier pool.
 `proof` customizes certification; `closer` customizes residual proof search.
 `config` controls preparation, nesting, phases, budgets, and optional reporting. -/
 syntax "flex" (atomic("(" &"backends" ":=") "[" flexBackend,* "]" ")")?

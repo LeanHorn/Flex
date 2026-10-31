@@ -1022,6 +1022,65 @@ private def checkSourceRule (generator : SourceGenerator)
     discard <| generator properties (args.push caller) 1
     if ← caller.mvarId!.isAssigned then throwError "source rule assigned caller metavariable"
 
+private def checkSourceOrder (generator : SourceGenerator)
+    (source expected : TSyntax `term) (slots : Array Nat) : TermElabM Unit := do
+  let source ← elabTermAndSynthesize source none
+  let expected ← elabTermAndSynthesize expected none
+  lambdaTelescope source fun xs property => do
+    let args := slots.map (xs[·]!)
+    let candidates ← generator #[property] args 16
+    let mut remaining := expected.beta xs
+    let mut ordered := #[]
+    while let some (head, tail) := remaining.and? do
+      ordered := ordered.push head
+      remaining := tail
+    ordered := ordered.push remaining
+    unless candidates.size == ordered.size do throwError "source candidate count changed"
+    for i in [:ordered.size] do
+      unless ← isDefEq candidates[i]! ordered[i]! do
+        throwError "source candidate order changed at {i}: {candidates[i]!}"
+    for cap in #[0, 1, 3, ordered.size - 1, ordered.size + 1] do
+      unless (← generator #[property] args cap) == candidates.extract 0 cap do
+        throwError "source cap changed candidate order"
+    unless (← generator #[property, property] args 16) == candidates do
+      throwError "duplicate source changed candidate order"
+
+-- General function parameters keep ordering tests independent of source definitions.
+run_elab do
+  checkSourceOrder @PAScrape.Accumulate.algebraCandidates
+    (← `(fun (f : Nat → Int → Int) (a : Nat) (b : Int) (x : Nat) (y acc : Int) => acc = f a b))
+    (← `(fun (f : Nat → Int → Int) (a : Nat) (b : Int) (x : Nat) (y acc : Int) =>
+      acc * f x y = f a b ∧ acc + f x y = f a b ∧
+      f x y * acc = f a b ∧ f x y + acc = f a b ∧
+      acc * f x b = f a b ∧ f x b * acc = f a b ∧
+      acc * f a y = f a b ∧ f a y * acc = f a b)) #[3,4,5]
+  checkSourceOrder @PAScrape.Accumulate.fragmentCandidates
+    (← `(fun (f : List Nat → List Int) (input rest : List Nat) (fragment acc : List Int) =>
+      acc = f input))
+    (← `(fun (f : List Nat → List Int) (input rest : List Nat) (fragment acc : List Int) =>
+      acc ++ (fragment ++ f rest) = f input ∧
+      acc ++ (f rest ++ fragment) = f input ∧
+      fragment ++ (f rest ++ acc) = f input ∧
+      f rest ++ (fragment ++ acc) = f input)) #[2,3,4]
+  checkSourceOrder @PAScrape.Accumulate.guardedCandidates
+    (← `(fun (f : List Nat → List Int) (input rest : List Nat) (acc : List Int)
+        (active : Option Nat) => acc = f input))
+    (← `(fun (f : List Nat → List Int) (input rest : List Nat) (acc : List Int)
+        (active : Option Nat) =>
+      (active.isSome = true → acc ++ f rest = f input) ∧
+      (active.isSome = false → acc = f input) ∧
+      (active.isSome = false → acc ++ f rest = f input) ∧
+      (active.isSome = true → acc = f input) ∧
+      (active.isSome = true → f rest ++ acc = f input) ∧
+      (active.isSome = false → f rest ++ acc = f input))) #[2,3,4]
+  checkSourceOrder @PAScrape.Accumulate.worklistCandidates
+    (← `(fun (f : Nat → Bool) (input : Nat) (todo : List Nat) (acc : Bool) => acc = f input))
+    (← `(fun (f : Nat → Bool) (input : Nat) (todo : List Nat) (acc : Bool) =>
+      (acc && todo.any f) = f input ∧ (acc || todo.any f) = f input ∧
+      (todo.any f && acc) = f input ∧ (todo.any f || acc) = f input ∧
+      (acc && todo.all f) = f input ∧ (acc || todo.all f) = f input ∧
+      (todo.all f && acc) = f input ∧ (todo.all f || acc) = f input)) #[2,3]
+
 run_elab do
   checkSourceRule @PAScrape.Accumulate.algebraCandidates
     (← `(fun (input rest : List Int) (p : Int → Bool) (result : Bool) => result = input.all p))

@@ -12,12 +12,76 @@ private def listType (type : Expr) : MetaM Bool := do
   let type ← whnf type
   return isResolved type && !type.hasFVar && type.isAppOfArity ``List 1
 
-private def compose? (left right : Expr) : MetaM (Option Expr) := do
-  let type ← whnf (← inferType left)
-  if type.isConstOf ``Nat then return some (mkApp2 (mkConst ``Nat.add) left right)
-  if type.isConstOf ``Int then return some (mkApp2 (mkConst ``Int.add) left right)
-  if ← listType type then return some (← mkAppM ``List.append #[left, right])
-  return none
+private inductive CompletionMode where
+  | basic
+  | algebra (multipleInputs : Bool)
+  | worklist
+
+/-- Each mode chooses operations; the observed function itself is arbitrary. -/
+private def operations (mode : CompletionMode) (type : Expr) : MetaM (Array Name) := do
+  let type ← whnf type
+  if type.isConstOf ``Bool then
+    return match mode with
+      | .basic => #[]
+      | _ => #[``Bool.and, ``Bool.or]
+  if type.isConstOf ``Nat || type.isConstOf ``Int then
+    let add := if type.isConstOf ``Nat then ``Nat.add else ``Int.add
+    let mul := if type.isConstOf ``Nat then ``Nat.mul else ``Int.mul
+    return match mode with
+      | .algebra true => #[mul, add]
+      | .algebra false => #[mul]
+      | _ => #[add]
+  if ← listType type then
+    return match mode with
+      | .algebra false => #[]
+      | _ => #[``List.append]
+  return #[]
+
+/-- Right-associated composition preserves the order of noncommutative pieces. -/
+private def compose (operation : Name) (first : Expr) : List Expr → MetaM Expr
+  | [] => pure first
+  | next :: rest => do
+    let right ← compose operation next rest
+    if operation == ``List.append then return ← mkAppM operation #[first, right]
+    return mkApp2 (mkConst operation) first right
+
+private def completions (mode : CompletionMode) (first : Expr) (rest : List Expr)
+    : MetaM (Array Expr) := do
+  (← operations mode (← inferType first)).mapM fun op => compose op first rest
+
+private def orders (accumulator remaining : Expr) (fragment : Option Expr := none)
+    : Array (Expr × List Expr) :=
+  match fragment with
+  | none => #[(accumulator, [remaining]), (remaining, [accumulator])]
+  | some fragment => #[(accumulator, [fragment, remaining]),
+      (accumulator, [remaining, fragment]), (fragment, [remaining, accumulator]),
+      (remaining, [fragment, accumulator])]
+
+private structure Observation where
+  accumulator : Expr
+  target : Expr
+  type : Expr
+
+private def observation? (arguments : Array Expr) (accumulator target : Expr)
+    : MetaM (Option Observation) := do
+  unless containsArgument accumulator arguments && !dependsOnArguments target arguments do
+    return none
+  let type ← inferType accumulator
+  if !isResolved type || type.hasFVar then return none
+  return some ⟨accumulator, target, type⟩
+
+private def observations (properties arguments : Array Expr) : MetaM (Array Observation) := do
+  let mut out := #[]
+  for property in properties.extract 0 32 do
+    unless isResolved property do continue
+    let some (_, lhs, rhs) := property.eq? | continue
+    for (accumulator, target) in #[(lhs, rhs), (rhs, lhs)] do
+      if let some observation ← observation? arguments accumulator target then
+        out := out.push observation
+  return out
+
+private def appendChecked (out : Array Expr) (candidate : Expr) : MetaM (Array Expr) := do
+  appendCandidate out (← instantiateMVars candidate)
 
 /-- Complete a source observation `acc = F(input)` with `F(remaining)`.
 Both composition orders are candidates; PA must establish inductiveness and safety. -/
@@ -31,10 +95,7 @@ def candidates (properties arguments : Array Expr) (maxCandidates : Nat := 24)
     unless isResolved property do continue
     let some (_, lhs, rhs) := property.eq? | continue
     for (accumulator, target) in #[(lhs, rhs), (rhs, lhs)] do
-      unless containsArgument accumulator arguments do continue
-      if dependsOnArguments target arguments then continue
-      let outputType ← inferType accumulator
-      if !isResolved outputType || outputType.hasFVar then continue
+      let some observation ← observation? arguments accumulator target | continue
       for id in (support target) do
         let input := mkFVar id
         let inputType ← inferType input
@@ -48,45 +109,21 @@ def candidates (properties arguments : Array Expr) (maxCandidates : Nat := 24)
           unless ← isDefEq inputType remainingType do continue
           let rest := target.replaceFVar input remaining
           if !isResolved rest then continue
-          unless ← isDefEq outputType (← inferType rest) do continue
-          for (left, right) in #[(accumulator, rest), (rest, accumulator)] do
-            let some completed ← compose? left right | continue
-            let candidate ← instantiateMVars (← mkEq completed target)
-            unless isResolved candidate do continue
-            try check candidate
-            catch e =>
-              if e.isInterrupt || e.isMaxHeartbeat || e.isMaxRecDepth then throw e
-              continue
-            unless out.contains candidate do out := out.push candidate
-            if out.size >= maxCandidates then return out
+          unless ← isDefEq observation.type (← inferType rest) do continue
+          for (first, tail) in orders accumulator rest do
+            for completed in ← completions .basic first tail do
+              out ← appendChecked out (← mkEq completed target)
+              if out.size >= maxCandidates then return out
   return out
 
-private structure Observation where
-  accumulator : Expr
-  target : Expr
-
-private def observations (properties arguments : Array Expr) : MetaM (Array Observation) := do
-  let mut out := #[]
-  for property in properties.extract 0 32 do
-    unless isResolved property do continue
-    let some (_, lhs, rhs) := property.eq? | continue
-    for (accumulator, target) in #[(lhs, rhs), (rhs, lhs)] do
-      if containsArgument accumulator arguments && !dependsOnArguments target arguments then
-        let type ← inferType accumulator
-        if isResolved type && !type.hasFVar then out := out.push ⟨accumulator, target⟩
-  return out
-
-private def appendChecked (out : Array Expr) (candidate : Expr) : MetaM (Array Expr) := do
-  appendCandidate out (← instantiateMVars candidate)
-
-private structure Replacement where
+private structure RemainingWork where
   value : Expr
-  slots : Array Expr
-  changed : Nat
+  slots : Array Expr := #[]
+  changed : Nat := 1
 
 /-- Simultaneously vary at most two source inputs; keep function and type arguments fixed. -/
 private def replacements (observation : Observation) (arguments : Array Expr)
-    (scalars : Bool) (cap : Nat) : MetaM (Array Replacement) := do
+    (scalars : Bool) (cap : Nat) : MetaM (Array RemainingWork) := do
   if cap == 0 then return #[]
   let mut choices : Array (Expr × Array Expr) := #[]
   for id in (support observation.target) do
@@ -121,20 +158,6 @@ private def replacements (observation : Observation) (arguments : Array Expr)
       if out.size >= cap then return out
   return out
 
-private def algebraCompositions (left right : Expr) (multipleInputs : Bool)
-    : MetaM (Array Expr) := do
-  let type ← whnf (← inferType left)
-  if type.isConstOf ``Bool then
-    return #[mkApp2 (mkConst ``Bool.and) left right, mkApp2 (mkConst ``Bool.or) left right]
-  if type.isConstOf ``Nat || type.isConstOf ``Int then
-    let mul := if type.isConstOf ``Nat then ``Nat.mul else ``Int.mul
-    let add := if type.isConstOf ``Nat then ``Nat.add else ``Int.add
-    let product := mkApp2 (mkConst mul) left right
-    return if multipleInputs then #[product, mkApp2 (mkConst add) left right] else #[product]
-  if multipleInputs && (← listType type) then
-    return #[← mkAppM ``List.append #[left, right]]
-  return #[]
-
 /-- Complete Boolean/numeric observations and synchronize multiple source inputs. -/
 def algebraCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 16)
     : MetaM (Array Expr) := withNewMCtxDepth do
@@ -143,10 +166,9 @@ def algebraCandidates (properties arguments : Array Expr) (maxCandidates : Nat :
   let mut out := #[]
   let mut fuel := 32 * maxCandidates
   for observation in ← observations properties arguments do
-    for replacement in ← replacements observation arguments true maxCandidates do
-      for (left, right) in #[(observation.accumulator, replacement.value),
-          (replacement.value, observation.accumulator)] do
-        for completed in ← algebraCompositions left right (replacement.changed > 1) do
+    for work in ← replacements observation arguments true maxCandidates do
+      for (first, tail) in orders observation.accumulator work.value do
+        for completed in ← completions (.algebra (work.changed > 1)) first tail do
           if fuel == 0 then return out
           fuel := fuel - 1
           out ← appendChecked out (← mkEq completed observation.target)
@@ -198,22 +220,18 @@ def fragmentCandidates (properties arguments : Array Expr) (maxCandidates : Nat 
   let mut out := #[]
   let mut fuel := 32 * maxCandidates
   for observation in ← observations properties arguments do
-    let type ← inferType observation.accumulator
+    let type := observation.type
     unless ← listType type do continue
-    for replacement in ← replacements observation arguments false maxCandidates do
+    for work in ← replacements observation arguments false maxCandidates do
       for fragment in arguments.extract 0 16 do
-        if replacement.slots.contains fragment ||
+        if work.slots.contains fragment ||
             (observation.accumulator.find? (· == fragment)).isSome then continue
         let fragmentType ← inferType fragment
         unless isResolved fragmentType && !fragmentType.hasFVar && (← isDefEq type fragmentType) do continue
-        let acc := observation.accumulator
-        let rest := replacement.value
-        for parts in #[#[acc, fragment, rest], #[acc, rest, fragment],
-            #[fragment, rest, acc], #[rest, fragment, acc]] do
+        for (first, tail) in orders observation.accumulator work.value (some fragment) do
           if fuel == 0 then return out
           fuel := fuel - 1
-          let suffix ← mkAppM ``List.append #[parts[1]!, parts[2]!]
-          let value ← mkAppM ``List.append #[parts[0]!, suffix]
+          let value ← compose ``List.append first tail
           out ← appendChecked out (← mkEq value observation.target)
           if out.size >= maxCandidates then return out
   return out
@@ -228,6 +246,13 @@ private def aggregates (function worklist : Expr) (resultType : Expr) : MetaM (A
   if ← listType resultType then return #[← mkAppM ``List.flatten #[mapped]]
   return #[]
 
+private def worklistResults (observation : Observation) (input inputType worklist : Expr)
+    (resultType : Expr) : MetaM (Array RemainingWork) := do
+  let function ← withLocalDeclD `pending inputType fun value =>
+    mkLambdaFVars #[value] (observation.target.replaceFVar input value)
+  return (← aggregates function worklist resultType).map fun value =>
+    { value, slots := #[worklist] }
+
 /-- Lift a source observation over pending values of its input type. -/
 def worklistCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 16)
     : MetaM (Array Expr) := withNewMCtxDepth do
@@ -236,7 +261,7 @@ def worklistCandidates (properties arguments : Array Expr) (maxCandidates : Nat 
   let mut out := #[]
   let mut fuel := 32 * maxCandidates
   for observation in ← observations properties arguments do
-    let outputType ← whnf (← inferType observation.accumulator)
+    let outputType ← whnf observation.type
     for id in (support observation.target).extract 0 8 do
       let input := mkFVar id
       let inputType ← inferType input
@@ -248,15 +273,9 @@ def worklistCandidates (properties arguments : Array Expr) (maxCandidates : Nat 
         unless todoType.isAppOfArity ``List 1 && isResolved todoType && !todoType.hasFVar do continue
         if (observation.accumulator.find? (· == todo)).isSome then continue
         unless ← isDefEq inputType todoType.appArg! do continue
-        let function ← withLocalDeclD `pending inputType fun value =>
-          mkLambdaFVars #[value] (observation.target.replaceFVar input value)
-        for remaining in ← aggregates function todo outputType do
-          for (left, right) in #[(observation.accumulator, remaining),
-              (remaining, observation.accumulator)] do
-            let values ← if outputType.isConstOf ``Bool then
-                algebraCompositions left right false
-              else pure ((← compose? left right).toArray)
-            for value in values do
+        for work in ← worklistResults observation input inputType todo outputType do
+          for (first, tail) in orders observation.accumulator work.value do
+            for value in ← completions .worklist first tail do
               if fuel == 0 then return out
               fuel := fuel - 1
               out ← appendChecked out (← mkEq value observation.target)

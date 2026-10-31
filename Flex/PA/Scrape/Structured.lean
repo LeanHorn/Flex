@@ -1,160 +1,8 @@
-import Lean
+import Flex.PA.Scrape.Indices
+
+/-! Predicate-slot substitutions, scalar measures, and homogeneous-list observations. -/
 
 open Lean Meta
-
-namespace PAScrape.Structured
-
-private def intArray (e : Expr) : MetaM Bool := do
-  if e.hasMVar || e.hasLooseBVars then return false
-  let type ← whnf (← inferType e)
-  return type.isForall && type.bindingDomain!.isConstOf ``Int &&
-    type.bindingBody!.isConstOf ``Int
-
-private def intBound (e : Expr) : MetaM Bool := do
-  if e.hasMVar || e.hasLooseBVars || !e.hasFVar then return false
-  return (← whnf (← inferType e)).isConstOf ``Int
-
-private def indexShift? (e index : Expr) : Option Expr := do
-  let args := e.getAppArgs
-  let name := e.getAppFn.constName?.getD .anonymous
-  let (left, right) ←
-    if name == ``HAdd.hAdd && args.size == 6 && args[0]!.isConstOf ``Int &&
-        args[1]!.isConstOf ``Int && args[2]!.isConstOf ``Int then
-      some (args[4]!, args[5]!)
-    else if name == ``Int.add && args.size == 2 then some (args[0]!, args[1]!)
-    else none
-  if left == index && !right.containsFVar index.fvarId! then return right
-  if right == index && !left.containsFVar index.fvarId! then return left
-  none
-
-private def readShifts (body index : Expr) : MetaM (Array Expr) := do
-  let mut pending := #[body]
-  let mut shifts := #[]
-  let mut fuel := 256
-  while !pending.isEmpty && fuel > 0 && shifts.size < 2 do
-    fuel := fuel - 1
-    let e := pending.back!
-    pending := pending.pop
-    if let .app f argument := e then
-      if f.isFVar && (← intArray f) then
-        if let some shift := indexShift? argument index then
-          if !shift.hasLooseBVars && !shift.hasMVar && !shifts.contains shift then
-            shifts := shifts.push shift
-      pending := pending.push f |>.push argument
-    else if let .forallE _ domain body _ := e then
-      pending := pending.push domain |>.push body
-    else if let .lam _ domain body _ := e then
-      pending := pending.push domain |>.push body
-    else if let .letE _ _ value body _ := e then
-      pending := pending.push value |>.push body
-    else if let .mdata _ body := e then
-      pending := pending.push body
-  return shifts
-
-private theorem shiftedIndex (offset index : Int) : offset + (index - offset) = index := by omega
-
-private theorem shiftedBase (base offset index : Int) :
-    (base + offset) + (index - offset) = base + index := by omega
-
-private def normalizeIndices (expression : Expr) : MetaM Expr := do
-  let mut lemmas : SimpTheorems := {}
-  for name in #[``Int.sub_nonneg, ``Int.sub_lt_sub_right_iff,
-      ``Int.sub_le_sub_right_iff, ``Int.add_sub_cancel, ``Int.sub_add_cancel,
-      ``shiftedIndex, ``shiftedBase, ``Int.add_assoc,
-      ``Int.sub_sub, ``Int.sub_zero, ``Int.add_zero, ``Int.zero_add] do
-    lemmas ← lemmas.addConst name
-  let context ← Simp.mkContext { maxSteps := 2000, failIfUnchanged := false } #[lemmas]
-  return (← Meta.simp expression context).1.expr
-
-/-- Reindex quantified reads by their source offsets. PA checks the resulting candidates. -/
-def absoluteIndexCandidates (property : Expr) (maxCandidates : Nat := 2)
-    : MetaM (Array Expr) := do
-  if maxCandidates == 0 || property.hasMVar || property.hasLooseBVars then return #[]
-  let property ← whnf (← normalizeIndices property)
-  let .forallE name domain body bi := property | return #[]
-  unless (← whnf domain).isConstOf ``Int do return #[]
-  withLocalDecl name bi domain fun index => do
-    let body := body.instantiate1 index
-    let shifts ← readShifts body index
-    let mut candidates := #[]
-    for shift in shifts do
-      let replacement ← mkAppM ``HSub.hSub #[index, shift]
-      let body ← normalizeIndices (body.replaceFVar index replacement)
-      let candidate ← mkForallFVars #[index] body
-      if candidates.contains candidate then continue
-      check candidate
-      candidates := candidates.push candidate
-      if candidates.size >= maxCandidates then break
-    return candidates
-
-/-- Find ordered array reads under integer quantifiers, with bounded unfolding. -/
-private partial def reads (array : Expr) (raw : Expr) (depth : Nat)
-    (indices : FVarIdSet := {})
-    : StateT Nat MetaM Bool := do
-  if depth == 0 || (← get) == 0 then return false
-  modify (· - 1)
-  let e := raw.consumeMData.headBeta
-  let indexed := fun value : Expr => value.isApp && value.appFn! == array &&
-    (collectFVars {} value.appArg!).fvarIds.any indices.contains
-  let args := e.getAppArgs
-  let name := e.getAppFn.constName?.getD .anonymous
-  if ((name == ``Int.le || name == ``Int.lt) && args.size == 2) ||
-      ((name == ``LE.le || name == ``LT.lt) && args.size == 4 && args[0]!.isConstOf ``Int) then
-    if indexed args[args.size - 2]! || indexed args[args.size - 1]! then return true
-  match e with
-  | .forallE name domain body bi =>
-    withLocalDecl name bi domain fun x => do
-      let indices := if (← whnf domain).isConstOf ``Int then indices.insert x.fvarId! else indices
-      reads array (body.instantiate1 x) (depth - 1) indices
-  | .lam name domain body bi =>
-    withLocalDecl name bi domain fun x => reads array (body.instantiate1 x) (depth - 1) indices
-  | .letE _ _ value body _ => reads array (body.instantiate1 value) (depth - 1) indices
-  | .app .. =>
-    for arg in e.getAppArgs do
-      if ← reads array arg (depth - 1) indices then return true
-    if ← isProp e then
-      let exposed ← whnf e
-      if exposed != e then return ← reads array exposed (depth - 1) indices
-    return false
-  | _ => return false
-
-/-- Propose prefix comparisons for arrays ordered in the source. PA checks them. -/
-def prefixCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 24)
-    : MetaM (Array Expr) := do
-  if maxCandidates == 0 then return #[]
-  let mut out := #[]
-  for array in arguments do
-    unless ← intArray array do continue
-    let mut used := false
-    let mut fuel := 256
-    for property in properties do
-      let (found, remaining) ← (reads array property 12).run fuel
-      fuel := remaining
-      if found then used := true; break
-    unless used do continue
-    for bound in arguments do
-      unless ← intBound bound do continue
-      let candidates ← withLocalDeclD `index (mkConst ``Int) fun index => do
-        let value := mkApp array index
-        let lower ← mkAppM ``LE.le #[mkIntLit 0, index]
-        let upper ← mkAppM ``LT.lt #[index, bound]
-        let mut candidates := #[]
-        for target in #[bound, index, mkIntLit 0] do
-          for relation in #[``LT.lt, ``LE.le] do
-            let comparison ← mkAppM relation #[value, target]
-            let body ← mkArrow lower (← mkArrow upper comparison)
-            candidates := candidates.push (← mkForallFVars #[index] body)
-        let equality ← mkArrow lower (← mkArrow upper (← mkEq value index))
-        candidates := candidates.push (← mkForallFVars #[index] equality)
-        return candidates
-      for candidate in candidates do
-        if out.contains candidate then continue
-        check candidate
-        out := out.push candidate
-        if out.size >= maxCandidates then return out
-  return out
-
-end PAScrape.Structured
 
 namespace PAScrape.Structured
 
@@ -170,6 +18,149 @@ private def checked (candidate : Expr) : MetaM Bool := do
 private def numeric (type : Expr) : MetaM Bool := do
   let type ← whnf type
   return type.isConstOf ``Int || type.isConstOf ``Nat
+
+private partial def endpointVariants (e : Expr) (arguments : Array Expr)
+    (cap : Nat) : StateT Nat MetaM (Array Expr) := do
+  if cap == 0 || (← get) == 0 then return #[]
+  modify (· - 1)
+  if e.isFVar && !arguments.contains e then
+    let type ← whnf (← inferType e)
+    if type.isConstOf ``Int || type.isConstOf ``Nat then
+      let mut out := #[]
+      for arg in arguments do
+        if arg == e || arg.hasMVar || arg.hasLooseBVars then continue
+        if (← whnf (← inferType arg)) == type then out := out.push arg
+        if out.size >= cap then break
+      return out
+  match e with
+  | .app f a =>
+    let right ← endpointVariants a arguments cap
+    let left ← endpointVariants f arguments (cap - right.size)
+    return right.map (mkApp f) ++ left.map (mkApp · a)
+  | .mdata data body =>
+    return (← endpointVariants body arguments cap).map (.mdata data)
+  | .proj name index body =>
+    return (← endpointVariants body arguments cap).map (.proj name index)
+  -- Bound variables and dependent binder types are never rewritten.
+  | _ => return #[]
+
+/-- Replace one numeric endpoint occurrence by a predicate slot; PA validates it. -/
+def endpointCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 24)
+    : MetaM (Array Expr) := withNewMCtxDepth do
+  if maxCandidates == 0 then return #[]
+  let mut families := #[]
+  for property in properties.extract 0 32 do
+    if property.hasMVar || property.hasLooseBVars || !(← isProp property) then continue
+    let fresh := arguments.filter fun arg => (property.find? (· == arg)).isNone
+    let slots := fresh ++ arguments.filter (!fresh.contains ·)
+    let (variants, _) ← (endpointVariants property slots maxCandidates).run 256
+    let mut candidates := #[]
+    for candidate in variants do
+      if candidate != property && !candidates.contains candidate && (← checked candidate) then
+        candidates := candidates.push candidate
+    unless candidates.isEmpty do families := families.push candidates
+  let mut result := #[]
+  for i in [:maxCandidates] do
+    for family in families do
+      if let some candidate := family[i]? then
+        unless result.contains candidate do result := result.push candidate
+        if result.size >= maxCandidates then return result
+  return result
+
+/-- A terminal equality supplies a bounded affine endpoint substitution. -/
+def affineCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 16)
+    : MetaM (Array Expr) := withNewMCtxDepth do
+  if maxCandidates == 0 then return #[]
+  let mut out := #[]
+  let mut fuel := 32 * maxCandidates
+  for equation in properties.extract 0 32 do
+    if equation.hasMVar || equation.hasLooseBVars then continue
+    let some (_, lhs, rhs) := equation.eq? | continue
+    for (slot, endpoint) in #[(lhs, rhs), (rhs, lhs)] do
+      unless arguments.contains slot do continue
+      let type ← whnf (← inferType slot)
+      unless ← numeric type do continue
+      let name := endpoint.getAppFn.constName?.getD .anonymous
+      let isAdd := #[``HAdd.hAdd, ``Nat.add, ``Int.add].contains name
+      let isSub := #[``HSub.hSub, ``Nat.sub, ``Int.sub].contains name
+      unless isAdd || isSub do continue
+      let args := endpoint.getAppArgs
+      if args.size < 2 then continue
+      let input := args[args.size - 2]!
+      let offset := args[args.size - 1]!
+      unless input.isFVar && !arguments.contains input do continue
+      let natValue ← getNatValue? offset
+      let intValue ← getIntValue? offset
+      let small := if type.isConstOf ``Nat then natValue.any (fun n => decide (n ≤ 16))
+        else intValue.any (fun n => decide (n.natAbs ≤ 16))
+      unless small do continue
+      let replacement ← mkAppM (if isAdd then ``HSub.hSub else ``HAdd.hAdd) #[slot, offset]
+      for property in properties.extract 0 32 do
+        if fuel == 0 then return out
+        fuel := fuel - 1
+        if property == equation || property.hasMVar || property.hasLooseBVars then continue
+        unless property.containsFVar input.fvarId! do continue
+        let candidate := property.replaceFVar input replacement
+        if !out.contains candidate && (← checked candidate) then out := out.push candidate
+        if out.size >= maxCandidates then return out
+      for (left, right) in #[(slot, endpoint), (endpoint, slot)] do
+        let candidate ← mkAppM ``LE.le #[left, right]
+        if !out.contains candidate && (← checked candidate) then out := out.push candidate
+        if out.size >= maxCandidates then return out
+  return out
+
+/-- Compare a source observation at fixed inputs and at up to two predicate slots. -/
+def measureCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 16)
+    : MetaM (Array Expr) := withNewMCtxDepth do
+  if maxCandidates == 0 then return #[]
+  let mut out := #[]
+  let mut fuel := 64 * maxCandidates
+  for property in properties.extract 0 32 do
+    if property.hasMVar || property.hasLooseBVars then continue
+    let some (_, lhs, rhs) := property.eq? | continue
+    for target in #[lhs, rhs] do
+      unless target.isApp do continue
+      let support := (collectFVars {} target).fvarIds
+      if arguments.any (fun arg => (collectFVars {} arg).fvarIds.any support.contains) then continue
+      let type ← whnf (← inferType target)
+      if type.hasMVar || type.hasFVar || (← isProp target) || (← whnf type).isForall then continue
+      -- Collection-valued observations use completion rather than whole-value preservation.
+      unless type.isConstOf ``Nat || type.isConstOf ``Int || type.isConstOf ``Bool do continue
+      let mut inputs := #[]
+      let mut choices : Array (Array Expr) := #[]
+      for id in support.extract 0 8 do
+        let input := mkFVar id
+        let inputType ← inferType input
+        if inputType.hasMVar || inputType.hasFVar || (← isProp input) ||
+            (← whnf inputType).isForall || (← whnf inputType).isSort then continue
+        let mut compatible := #[]
+        for argument in arguments.extract 0 16 do
+          if fuel == 0 then return out
+          fuel := fuel - 1
+          if argument.hasMVar || argument.hasLooseBVars then continue
+          let argumentType ← inferType argument
+          if argumentType.hasMVar then continue
+          if ← isDefEq inputType argumentType then compatible := compatible.push argument
+        unless compatible.isEmpty do
+          inputs := inputs.push input
+          choices := choices.push (compatible.extract 0 4)
+        if inputs.size == 2 then break
+      if inputs.isEmpty then continue
+      let mut variants := #[target]
+      for input in inputs, alternatives in choices do
+        let mut next := #[]
+        for variant in variants do
+          for alternative in alternatives do
+            if fuel == 0 then return out
+            fuel := fuel - 1
+            next := next.push (variant.replaceFVar input alternative)
+        variants := next
+      for variant in variants do
+        if variant == target then continue
+        let candidate ← mkEq variant target
+        if !out.contains candidate && (← checked candidate) then out := out.push candidate
+        if out.size >= maxCandidates then return out
+  return out
 
 /-- Change argument positions independently, keeping compound bounds intact. -/
 def slotCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 24)

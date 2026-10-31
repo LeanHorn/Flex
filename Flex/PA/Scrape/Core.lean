@@ -1,0 +1,132 @@
+import Flex.PA.Scrape.Config
+
+/-! Shared scope checks, candidate abstraction, deduplication, and budgets. -/
+
+open Lean Meta
+
+namespace PAScrape.Internal
+
+inductive Source where
+  | goal | definition | generated | guarded | observation
+  deriving BEq
+
+structure Candidate where
+  expr : Expr
+  origin : String
+
+structure Definition where
+  fn : Expr
+  typeArgs : Array Expr := #[]
+  depth : Nat := 0
+  requested : Bool := false
+  deriving BEq, Inhabited
+
+structure ScrapeState where
+  fixed : FVarIdSet := {}
+  goal : Array Candidate := #[]
+  definitions : Array Candidate := #[]
+  generated : Array Candidate := #[]
+  guarded : Array Candidate := #[]
+  observations : Array Candidate := #[]
+  seen : Std.HashSet Expr := {}
+  pending : Array Definition := #[]
+  visited : Array (Expr × Array Expr) := #[]
+  nodes : Nat := 0
+  rejected : Nat := 0
+  inspected : Nat := 0
+  limitsHit : Array String := #[]
+  guardPairs : Nat := 0
+  observationPairs : Nat := 0
+  anchored : Array PAAnchoredQualifier := #[]
+  anchoredAttempts : Nat := 0
+  anchoredSeen : Std.HashSet (Expr × Expr) := {}
+
+abbrev ScrapeM := StateRefT ScrapeState MetaM
+
+def limit (name : String) : ScrapeM Unit :=
+  modify fun s => if s.limitsHit.contains name then s else
+    { s with limitsHit := s.limitsHit.push name }
+
+def visit (cfg : PAScrapeConfig) (depth : Nat) : ScrapeM Bool := do
+  if depth > cfg.maxDepth then limit "depth"; return false
+  if (← get).nodes >= cfg.maxNodes then limit "nodes"; return false
+  modify fun s => { s with nodes := s.nodes + 1 }
+  return true
+
+def reject : ScrapeM Unit :=
+  modify fun s => { s with rejected := s.rejected + 1 }
+
+/-- Capture the caller's context and abstract clause-local data parameters. -/
+def addPredicate (cfg : PAScrapeConfig) (origin : String) (source : Source)
+    (p : Expr) : ScrapeM Unit := do
+  let p ← instantiateMVars p
+  if p.hasMVar || p.hasLooseBVars || !(← isProp p) then reject; return
+  if p.isConstOf ``True || p.isConstOf ``False ||
+      (p.isForall && source != .observation) then return
+  let fixed := (← get).fixed
+  let ids := (collectFVars {} p).fvarIds.filter (!fixed.contains ·)
+  if ids.isEmpty then return
+  if ids.size > cfg.maxParams then reject; return
+  let mut types := #[]
+  for id in ids do
+    let ty ← instantiateMVars (← inferType (mkFVar id))
+    if ty.hasFVar || ty.hasMVar || ty.hasLooseBVars ||
+        (← isProp ty) || (← whnf ty).isSort then reject; return
+    types := types.push ty
+  let mut q := p.abstract (ids.map mkFVar)
+  for i in (List.range ids.size).reverse do
+    q := .lam (Name.mkSimple s!"q{i}") types[i]! q .default
+  if q.hasMVar || q.hasLooseBVars ||
+      (collectFVars {} q).fvarIds.any (!fixed.contains ·) then reject; return
+  if (← get).seen.contains q then return
+  let s ← get
+  let target := match source with
+    | .goal => s.goal
+    | .definition => s.definitions
+    | .generated => s.generated
+    | .guarded => s.guarded
+    | .observation => s.observations
+  let (cap, label) := match source with
+    | .guarded => (cfg.maxGuardedQualifiers, "guarded templates")
+    | .observation => (cfg.maxObservationQualifiers, "observation templates")
+    | _ => (cfg.maxQualifiers, "templates")
+  if target.size >= cap then limit label; return
+  let target := target.push ⟨q, origin⟩
+  let s := { s with seen := s.seen.insert q }
+  set <| match source with
+    | .goal => { s with goal := target }
+    | .definition => { s with definitions := target }
+    | .generated => { s with generated := target }
+    | .guarded => { s with guarded := target }
+    | .observation => { s with observations := target }
+  trace[flex.scrape] "{origin}: {q}"
+
+partial def predicates (cfg : PAScrapeConfig) (origin : String) (source : Source)
+    (p : Expr) (depth : Nat := 0) : ScrapeM Unit := do
+  unless ← visit cfg depth do return
+  let p := p.consumeMData.headBeta
+  if let .letE _ _ v b _ := p then
+    predicates cfg origin source (b.instantiate1 v) (depth + 1)
+  else if let some (l, r) := p.and? then
+    predicates cfg origin source l (depth + 1)
+    predicates cfg origin source r (depth + 1)
+  else
+    addPredicate cfg origin source p
+
+def automatic (cfg : PAScrapeConfig) : Bool :=
+  cfg.mode == .standard || cfg.mode == .deep
+
+def numericLiteral (ty e : Expr) : MetaM Bool := do
+  if ty.isConstOf ``Nat then return (← getNatValue? e).isSome
+  return (← getIntValue? e).isSome
+
+def support (e : Expr) : Array FVarId :=
+  (collectFVars {} e).fvarIds
+
+def subset (xs ys : Array FVarId) : Bool :=
+  xs.all ys.contains
+
+def predicateApplication (e : Expr) : MetaM Bool := do
+  return e.isApp && (e.getAppFn.isFVar || e.getAppFn.isMVar) && (← isProp e)
+
+end PAScrape.Internal

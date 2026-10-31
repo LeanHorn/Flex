@@ -923,6 +923,149 @@ run_elab do
           q.slots == candidate.slots && q.qualifier == candidate.qualifier) do
         throwError "compound pass displaced an ordinary anchor"
 
+-- Endpoint substitutions change one occurrence; bounds may capture caller locals.
+run_elab do
+  let source ← elabTermAndSynthesize (← `(fun (n i p : Int) => p = n * n)) none
+  lambdaTelescope source fun xs property => do
+    let args := #[xs[1]!, xs[2]!]
+    let candidates ← PAScrape.Structured.endpointCandidates #[property] args
+    for operands in #[#[xs[0]!, xs[1]!], #[xs[1]!, xs[0]!]] do
+      let expected ← mkEq xs[2]! (← mkAppM ``HMul.hMul operands)
+      unless ← candidates.anyM (fun q => do isDefEq expected q) do
+        throwError "missing single-occurrence endpoint"
+    let both ← mkEq xs[2]! (← mkAppM ``HMul.hMul #[xs[1]!, xs[1]!])
+    if ← candidates.anyM (fun q => do isDefEq both q) then
+      throwError "endpoint changed both occurrences"
+    unless (← PAScrape.Structured.endpointCandidates #[property] args 0).isEmpty &&
+        (← PAScrape.Structured.endpointCandidates #[property] args 1).size == 1 do
+      throwError "endpoint cap ignored"
+    let caller ← mkFreshExprMVar (some (mkConst ``Int))
+    discard <| PAScrape.Structured.endpointCandidates #[property] (args.push caller)
+    if ← caller.mvarId!.isAssigned then throwError "endpoint assigned caller metavariable"
+  withLocalDeclD `n (mkConst ``Nat) fun n =>
+    withLocalDeclD `i (mkConst ``Nat) fun i => do
+      let q ← mkLambdaFVars #[i] (← mkAppM ``LT.lt #[i, n])
+      let expected ← mkLambdaFVars #[i] (← mkAppM ``LE.le #[i, n])
+      unless ← (← PAScrape.deepScrapeVariants q).anyM (fun q => do isDefEq expected q) do
+        throwError "captured endpoint prevented bound weakening"
+
+-- Conservation candidates combine remaining work with the accumulator.
+run_elab do
+  for (source, expected) in #[
+      (← `(fun (input remaining output : List Int) => output = input.reverse),
+       ← `(fun (input remaining output : List Int) => remaining.reverse ++ output = input.reverse)),
+      (← `(fun (input remaining : List Int) (total : Int) => total = input.sum),
+       ← `(fun (input remaining : List Int) (total : Int) => total + remaining.sum = input.sum))] do
+    let source ← elabTermAndSynthesize source none
+    let expected ← elabTermAndSynthesize expected none
+    lambdaTelescope source fun xs property => do
+      let args := xs.extract 1 xs.size
+      let candidates ← PAScrape.Accumulate.candidates #[property] args
+      let expected := (mkAppN expected xs).headBeta
+      unless ← candidates.anyM (fun q => do isDefEq expected q) do
+        throwError "missing accumulator relationship"
+      unless (← PAScrape.Accumulate.candidates #[property] args 0).isEmpty &&
+          (← PAScrape.Accumulate.candidates #[property] args 1).size == 1 do
+        throwError "accumulator cap ignored"
+      for candidate in candidates do
+        check candidate
+        if candidate.hasMVar || candidate.hasLooseBVars then throwError "unclosed accumulator"
+        unless (collectFVars {} candidate).fvarIds.all (fun id => xs.contains (mkFVar id)) do
+          throwError "accumulator binder escaped"
+      let caller ← mkFreshExprMVar (some (← inferType xs[1]!))
+      unless (← PAScrape.Accumulate.candidates #[property] #[caller, xs[2]!]).isEmpty do
+        throwError "accumulator accepted unresolved remaining work"
+      if ← caller.mvarId!.isAssigned then throwError "accumulator assigned caller metavariable"
+
+private abbrev SourceGenerator := Array Expr → Array Expr → Nat → MetaM (Array Expr)
+
+private def checkSourceRule (generator : SourceGenerator)
+    (source expected : TSyntax `term) (slots : Array Nat) (wideSlots : Bool := false)
+    : TermElabM Unit := do
+  let source ← elabTermAndSynthesize source none
+  let expected ← elabTermAndSynthesize expected none
+  lambdaTelescope source fun xs body => do
+    let properties := if let some (left, right) := body.and? then #[left, right] else #[body]
+    let args := slots.map (xs[·]!)
+    let candidates ← generator properties args 16
+    unless ← candidates.anyM (fun q => isDefEq q (expected.beta xs)) do
+      throwError "missing source candidate {expected.beta xs}"
+    unless (← generator properties args 0).isEmpty &&
+        (← generator properties args 1).size ≤ 1 do throwError "source cap ignored"
+    if wideSlots then
+      let ignored := mkFVar ⟨`outside_context⟩
+      let wide := args ++ Array.replicate (16 - args.size) args[0]! ++ Array.replicate 10000 ignored
+      unless (← generator properties wide 1).size ≤ 1 do throwError "wide source cap ignored"
+    for candidate in candidates do
+      check candidate
+      if candidate.hasMVar || candidate.hasLooseBVars ||
+          !(collectFVars {} candidate).fvarIds.all (fun id => xs.contains (mkFVar id)) then
+        throwError "source candidate escaped its scope"
+    let caller ← mkFreshExprMVar (some (← inferType args[0]!))
+    discard <| generator properties (args.push caller) 1
+    if ← caller.mvarId!.isAssigned then throwError "source rule assigned caller metavariable"
+
+run_elab do
+  checkSourceRule @PAScrape.Accumulate.algebraCandidates
+    (← `(fun (input rest : List Int) (p : Int → Bool) (result : Bool) => result = input.all p))
+    (← `(fun (input rest : List Int) (p : Int → Bool) (result : Bool) =>
+      (result && rest.all p) = input.all p)) #[1,3]
+  checkSourceRule @PAScrape.Accumulate.algebraCandidates
+    (← `(fun (left right xs ys out : List Int) (f : Int → Int → Int) => out = List.zipWith f left right))
+    (← `(fun (left right xs ys out : List Int) (f : Int → Int → Int) =>
+      out ++ List.zipWith f xs ys = List.zipWith f left right)) #[2,3,4]
+  checkSourceRule @PAScrape.Structured.affineCandidates
+    (← `(fun (n i acc : Nat) => i = n + 1 ∧ acc = ((List.range n).map (· + 1)).prod))
+    (← `(fun (n i acc : Nat) => acc = ((List.range (i - 1)).map (· + 1)).prod)) #[1,2]
+  checkSourceRule @PAScrape.Structured.measureCandidates
+    (← `(fun (f : Nat → Nat → Nat) (a b x y : Nat) => x = f a b))
+    (← `(fun (f : Nat → Nat → Nat) (a b x y : Nat) => f x y = f a b)) #[3,4]
+  checkSourceRule @PAScrape.Accumulate.guardedCandidates
+    (← `(fun (input rest out : List Int) (p : Int → Bool) (active : Bool) => out = input.takeWhile p))
+    (← `(fun (input rest out : List Int) (p : Int → Bool) (active : Bool) =>
+      active = true → out ++ rest.takeWhile p = input.takeWhile p)) #[1,2,4]
+  checkSourceRule @PAScrape.Accumulate.guardedCandidates
+    (← `(fun (input rest out : List Int) (p : Int → Bool) (active : Bool) => out = input.takeWhile p))
+    (← `(fun (input rest out : List Int) (p : Int → Bool) (active : Bool) =>
+      active = false → out = input.takeWhile p)) #[1,2,4]
+  checkSourceRule @PAScrape.Accumulate.fragmentCandidates
+    (← `(fun (input rest : List (List Int)) (current out : List Int) => out = input.flatten))
+    (← `(fun (input rest : List (List Int)) (current out : List Int) =>
+      out ++ (current ++ rest.flatten) = input.flatten)) #[1,2,3]
+  checkSourceRule @PAScrape.Regions.regionCandidates
+    (← `(fun (original a : Array Int) (lo hi i : Nat) (v : Int) =>
+      ∀ j, a[j]? = if lo ≤ j ∧ j < hi then some v else original[j]?))
+    (← `(fun (original a : Array Int) (lo hi i : Nat) (v : Int) =>
+      ∀ j, a[j]? = if lo ≤ j ∧ j < i then some v else original[j]?)) #[1,4] true
+  checkSourceRule @PAScrape.Regions.regionCandidates
+    (← `(fun (input : Array Int) (i : Nat) => ∀ j (h : j < input.size), input[j] ≥ 0))
+    (← `(fun (input : Array Int) (i : Nat) =>
+      ∀ j, j < i → ∀ h : j < input.size, input[j] ≥ 0)) #[1]
+  checkSourceRule @PAScrape.Regions.prefixCandidates
+    (← `(fun (original : Array Int) (i : Nat) (total : Int) => total = original.toList.sum))
+    (← `(fun (original : Array Int) (i : Nat) (total : Int) =>
+      total = (original.toList.take i).sum)) #[1,2]
+  checkSourceRule @PAScrape.Regions.relationalCandidates
+    (← `(fun (a : Array Int) (i : Nat) => a.toList.Pairwise (· ≤ ·)))
+    (← `(fun (a : Array Int) (i : Nat) => (a.toList.take i).Pairwise (· ≤ ·))) #[0,1]
+  checkSourceRule @PAScrape.Regions.relationalCandidates
+    (← `(fun (left right out : List Int) (i j : Nat) => out.Perm (left ++ right)))
+    (← `(fun (left right out : List Int) (i j : Nat) =>
+      out.Perm (left.take i ++ right.take j))) #[2,3,4]
+  checkSourceRule @PAScrape.Accumulate.worklistCandidates
+    (← `(fun (f : Nat → Nat) (input : Nat) (todo : List Nat) (acc : Nat) => acc = f input))
+    (← `(fun (f : Nat → Nat) (input : Nat) (todo : List Nat) (acc : Nat) =>
+      acc + (todo.map f).sum = f input)) #[2,3]
+
+run_elab do
+  let target ← elabTermAndSynthesize (← `(∀ (f : Nat → Int) (i : Nat) (total : Int),
+    total = ((List.range i).map f).sum →
+    total + f i = ((List.range (i + 1)).map f).sum)) none
+  let some tactic ← Flex.Automation.Equations.tactic? target
+    | throwError "missing relevant fold equations"
+  unless (← Flex.Automation.proveWith tactic target).isSome do
+    throwError "could not certify the generic fold step"
+
 end PAStructuredTests
 
 namespace PAFunctionBatchTests

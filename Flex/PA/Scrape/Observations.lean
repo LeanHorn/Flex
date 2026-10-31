@@ -289,8 +289,10 @@ private def observationPredicates (cfg : PAScrapeConfig) (mode : ObservationMode
         unless args.contains x do break
         if found.relations.any (fun r => (support r).contains id) then break
         let ty ← instantiateMVars (← inferType x)
-        if ty.hasFVar || ty.hasMVar || ty.hasLooseBVars || (← isProp ty) ||
-            (← whnf ty).isSort || (← whnf ty).isForall then break
+        if ty.hasFVar || !isResolved ty then break
+        if ← isProp ty then break
+        let normalized ← whnf ty
+        if normalized.isSort || normalized.isForall then break
         binderTypes := binderTypes.push ty
       unless binderTypes.size == extra.size do continue
       let mut type ← inferType observation.getAppFn

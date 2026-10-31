@@ -168,17 +168,15 @@ private def clauseGuardAtoms (cfg : PAScrapeConfig) (props : Array Expr) : Scrap
 private def guardedPredicates (cfg : PAScrapeConfig) (props : Array Expr) : ScrapeM Unit := do
   let found ← clauseGuardAtoms cfg props
   let atoms ← found.atoms.mapM fun atom => do
-    return GuardPair.mk atom (← negateAtom atom)
-  for atom in atoms do
+    return (GuardPair.mk atom (← negateAtom atom), support atom)
+  for (atom, _) in atoms do
     addPredicate cfg "guard atom" .generated atom.positive
     addPredicate cfg "guard atom" .generated atom.negative
-  for guard in atoms do
-    for property in atoms do
+  for (guard, gvars) in atoms do
+    for (property, pvars) in atoms do
       if (← get).guarded.size >= cfg.maxGuardedQualifiers then limit "guarded templates"; return
       if (← get).guardPairs >= cfg.maxGuardPairs then limit "guard pairs"; return
       modify fun s => { s with guardPairs := s.guardPairs + 1 }
-      let gvars := support guard.positive
-      let pvars := support property.positive
       -- Avoid pairing facts about precisely the same arguments.
       if subset gvars pvars && subset pvars gvars then continue
       unless found.relations.any (fun vars => subset gvars vars && subset pvars vars) do continue

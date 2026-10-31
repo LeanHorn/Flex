@@ -119,8 +119,8 @@ def candidates (properties arguments : Array Expr) (maxCandidates : Nat := 24)
 
 private structure RemainingWork where
   value : Expr
-  slots : Array Expr := #[]
-  changed : Nat := 1
+  slots : Array Expr
+  changedInputs : Nat
 
 /-- Simultaneously vary at most two source inputs; keep function and type arguments fixed. -/
 private def replacements (observation : Observation) (arguments : Array Expr)
@@ -169,7 +169,7 @@ def algebraCandidates (properties arguments : Array Expr) (maxCandidates : Nat :
   for observation in ← observations properties arguments do
     for work in ← replacements observation arguments true maxCandidates do
       for (first, tail) in orders observation.accumulator work.value do
-        for completed in ← completions (.algebra (work.changed > 1)) first tail do
+        for completed in ← completions (.algebra (work.changedInputs > 1)) first tail do
           if fuel == 0 then return out
           fuel := fuel - 1
           out ← appendChecked out (← mkEq completed observation.target)
@@ -207,7 +207,8 @@ def fragmentCandidates (properties arguments : Array Expr) (maxCandidates : Nat 
         if work.slots.contains fragment ||
             (observation.accumulator.find? (· == fragment)).isSome then continue
         let fragmentType ← inferType fragment
-        unless isResolved fragmentType && !fragmentType.hasFVar && (← isDefEq type fragmentType) do continue
+        unless isResolved fragmentType && !fragmentType.hasFVar do continue
+        unless ← isDefEq type fragmentType do continue
         for (first, tail) in orders observation.accumulator work.value (some fragment) do
           if fuel == 0 then return out
           fuel := fuel - 1
@@ -227,11 +228,10 @@ private def aggregates (function worklist : Expr) (resultType : Expr) : MetaM (A
   return #[]
 
 private def worklistResults (observation : Observation) (input inputType worklist : Expr)
-    (resultType : Expr) : MetaM (Array RemainingWork) := do
+    (resultType : Expr) : MetaM (Array Expr) := do
   let function ← withLocalDeclD `pending inputType fun value =>
     mkLambdaFVars #[value] (observation.target.replaceFVar input value)
-  return (← aggregates function worklist resultType).map fun value =>
-    { value, slots := #[worklist] }
+  aggregates function worklist resultType
 
 /-- Lift a source observation over pending values of its input type. -/
 def worklistCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 16)
@@ -245,7 +245,8 @@ def worklistCandidates (properties arguments : Array Expr) (maxCandidates : Nat 
     for id in (support observation.target).extract 0 8 do
       let input := mkFVar id
       let inputType ← inferType input
-      if !isResolved inputType || inputType.hasFVar || (← isProp input) || (← whnf inputType).isSort then continue
+      if !isResolved inputType || inputType.hasFVar then continue
+      if (← isProp input) || (← whnf inputType).isSort then continue
       for todo in arguments.extract 0 16 do
         if fuel == 0 then return out
         fuel := fuel - 1
@@ -253,8 +254,8 @@ def worklistCandidates (properties arguments : Array Expr) (maxCandidates : Nat 
         unless todoType.isAppOfArity ``List 1 && isResolved todoType && !todoType.hasFVar do continue
         if (observation.accumulator.find? (· == todo)).isSome then continue
         unless ← isDefEq inputType todoType.appArg! do continue
-        for work in ← worklistResults observation input inputType todo outputType do
-          for (first, tail) in orders observation.accumulator work.value do
+        for remaining in ← worklistResults observation input inputType todo outputType do
+          for (first, tail) in orders observation.accumulator remaining do
             for value in ← completions .worklist first tail do
               if fuel == 0 then return out
               fuel := fuel - 1

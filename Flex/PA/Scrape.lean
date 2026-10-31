@@ -1,8 +1,42 @@
 import Flex.PA.Scrape.Guards
 import Flex.PA.Scrape.Observations
 
-/-! Scraping pipeline and public API. Candidate selection order and budgets are shared
-across goal, definition, guard, and source-observation passes. -/
+/-! Scraping pipeline and public API.
+
+Read `Config` / `Core` first, then `Definitions`, `Guards`, and `Observations`.
+The latter anchors generated properties to their original predicate arguments.
+The schemas below propose candidates; PA validates their instances.
+
+| Schema | Source → selected candidate | Module |
+| --- | --- | --- |
+| Clause atoms | `k n → 0 ≤ n` → `fun n => 0 ≤ n` | Definitions |
+| Definition calls | `fib (n - 1)` → `fun v n => v = fib (n - 1)` | Definitions |
+| Branch tests | `if n ≤ 1 then ... else ...` → `n ≤ 1`, `¬n ≤ 1` | Definitions |
+| Numeric generalization | `v < 3` → `v ≤ 3`, `fun v b => v < b` | Guards |
+| Arithmetic guards | `k x y`, `0 ≤ x`, `y ≤ 3` → `x < 0 ∨ y ≤ 3` | Guards |
+| Source observations | `k a n → sorted a n` → `sorted a n` at the same slots | Observations |
+| Slot substitution | `sorted a n`, slot `i` → `sorted a i` | Structured |
+| Endpoint occurrence | `v = n * n`, slot `i` → `v = n * i` | Structured |
+| Affine transport | `i = n + 1`, `v = f n` → `v = f (i - 1)` | Structured |
+| Scalar measures | `v = f input`, slot `rest` → `f rest = f input` | Structured |
+| Completion | `acc = xs.sum` → `acc + rest.sum = xs.sum` | Accumulate |
+| Algebraic completion | `acc = xs.all p` → `(acc && rest.all p) = xs.all p` | Accumulate |
+| Pending fragments | `acc = xs.flatten` → `acc ++ (part ++ rest.flatten) = xs.flatten` | Accumulate |
+| Worklists | `acc = f input` → `acc + (todo.map f).sum = f input` | Accumulate |
+| Control guards | `q`, Bool slot `active` → `active = true → q` | Guards |
+| Quantified endpoints | `∀ j, j < n → p j`, slot `i` → `∀ j, j < i → p j` | Regions |
+| Processed prefixes | `v = f xs`, slot `i` → `v = f (xs.take i)` | Regions |
+| Preserved regions | source arrays `a`, `old`, slot `i` → `∀ j, i ≤ j → a[j]? = old[j]?` | Regions |
+| List relations | `xs.Pairwise r`, slot `i` → `(xs.take i).Pairwise r` | Regions |
+| Homogeneous lists | `xs = List.replicate n v` → `∀ x ∈ xs, x = v` | Structured |
+| Absolute indexing | `∀ j, 0 ≤ j → a (offset + j) ≤ v` → `∀ j, offset ≤ j → a j ≤ v` | Indices |
+| Ordered prefixes | ordered reads of `a` → `∀ j, 0 ≤ j → j < i → a j ≤ i` | Indices |
+
+Each family keeps its own eligibility, order, and budget. Single-occurrence endpoint
+replacement, simultaneous input replacement, and scoped binder traversal stay distinct.
+The default control-guard pass wraps completion candidates; the wrapper also accepts
+other families without enabling those combinations in the default search.
+-/
 
 open Lean Meta
 

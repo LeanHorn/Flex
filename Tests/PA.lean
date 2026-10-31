@@ -938,6 +938,14 @@ run_elab do
         mkApp (mkConst ``Nat.succ) (mkConst ``True)] do
       if ← isCandidate bad then throwError "accepted an unresolved or ill-typed candidate"
     if ← caller.mvarId!.isAssigned then throwError "candidate check assigned caller metavariable"
+  let callerType ← mkFreshExprMVar (some (mkSort (.succ .zero)))
+  withLocalDeclD `pending callerType fun pending => do
+    -- Build directly so candidate validation is the first possible unification.
+    let property := mkApp3 (mkConst ``Eq [.succ .zero]) (mkConst ``Int) pending (mkIntLit 0)
+    if ← isCandidate property then throwError "accepted a candidate with an unresolved local type"
+    if ← callerType.mvarId!.isAssigned then throwError "candidate check assigned caller's local type"
+  if ← predicateApplication (mkFVar ⟨`outside_context⟩) then
+    throwError "accepted a non-application predicate"
 
 -- Endpoint substitutions change one occurrence; bounds may capture caller locals.
 run_elab do

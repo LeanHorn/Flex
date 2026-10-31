@@ -50,8 +50,10 @@ def enqueue (cfg : PAScrapeConfig) (d : Definition) : ScrapeM Unit := do
 private def graphPredicate (cfg : PAScrapeConfig) (origin : String) (source : Source)
     (e : Expr) : ScrapeM Unit := do
   let ty ← instantiateMVars (← inferType e)
-  if ty.hasFVar || ty.hasMVar || (← isProp e) ||
-      (← whnf ty).isForall || (← whnf ty).isSort then return
+  if ty.hasFVar || ty.hasMVar then return
+  if ← isProp e then return
+  let normalized ← whnf ty
+  if normalized.isForall || normalized.isSort then return
   withLocalDeclD `value ty fun v => do
     addPredicate cfg origin source (← mkEq v e)
 
@@ -67,7 +69,8 @@ private partial def terms (cfg : PAScrapeConfig) (origin : String) (source : Sou
   | .letE _ _ v b _ => terms cfg origin source (b.instantiate1 v) (depth + 1) defDepth
   | .app .. =>
     if let .const name _ := e.getAppFn then
-      let selected := cfg.defs.contains name || (automatic cfg && (← discoverable name))
+      let selected ← if cfg.defs.contains name then pure true
+        else if automatic cfg then discoverable name else pure false
       if selected then
         graphPredicate cfg (origin ++ ": call") source e
         if automatic cfg then enqueue cfg (← definitionAt e defDepth)

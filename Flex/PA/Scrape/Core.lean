@@ -22,7 +22,7 @@ def dependsOnArguments (e : Expr) (arguments : Array Expr) : Bool :=
   arguments.any fun argument => (support argument).any ids.contains
 
 /-- Check a candidate's type and scope, not its truth. Resource failures propagate. -/
-def isCandidate (e : Expr) : MetaM Bool := do
+def isCandidate (e : Expr) : MetaM Bool := withNewMCtxDepth do
   if !isResolved e then return false
   try
     check e
@@ -33,7 +33,8 @@ def isCandidate (e : Expr) : MetaM Bool := do
 
 /-- Keep valid candidates in discovery order. Callers handle instantiation and budgets. -/
 def appendCandidate (out : Array Expr) (e : Expr) : MetaM (Array Expr) := do
-  if out.contains e || !(← isCandidate e) then return out
+  if out.contains e then return out
+  unless ← isCandidate e do return out
   return out.push e
 
 /-- Quantify indexed properties over optional lower/upper bounds.
@@ -108,7 +109,8 @@ def reject : ScrapeM Unit :=
 def addPredicate (cfg : PAScrapeConfig) (origin : String) (source : Source)
     (p : Expr) : ScrapeM Unit := do
   let p ← instantiateMVars p
-  if p.hasMVar || p.hasLooseBVars || !(← isProp p) then reject; return
+  if !isResolved p then reject; return
+  unless ← isProp p do reject; return
   if p.isConstOf ``True || p.isConstOf ``False ||
       (p.isForall && source != .observation) then return
   let fixed := (← get).fixed
@@ -118,8 +120,8 @@ def addPredicate (cfg : PAScrapeConfig) (origin : String) (source : Source)
   let mut types := #[]
   for id in ids do
     let ty ← instantiateMVars (← inferType (mkFVar id))
-    if ty.hasFVar || ty.hasMVar || ty.hasLooseBVars ||
-        (← isProp ty) || (← whnf ty).isSort then reject; return
+    if ty.hasFVar || !isResolved ty then reject; return
+    if (← isProp ty) || (← whnf ty).isSort then reject; return
     types := types.push ty
   let mut q := p.abstract (ids.map mkFVar)
   for i in (List.range ids.size).reverse do
@@ -172,6 +174,7 @@ def subset (xs ys : Array FVarId) : Bool :=
   xs.all ys.contains
 
 def predicateApplication (e : Expr) : MetaM Bool := do
-  return e.isApp && (e.getAppFn.isFVar || e.getAppFn.isMVar) && (← isProp e)
+  unless e.isApp && (e.getAppFn.isFVar || e.getAppFn.isMVar) do return false
+  isProp e
 
 end PAScrape.Internal

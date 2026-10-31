@@ -6,7 +6,7 @@ open Lean Meta
 
 namespace PAScrape.Structured
 
-open PAScrape.Internal (support dependsOnArguments isCandidate indexedPredicates)
+open PAScrape.Internal (support dependsOnArguments isResolved isCandidate appendCandidate indexedPredicates)
 
 private def numeric (type : Expr) : MetaM Bool := do
   let type ← whnf type
@@ -43,14 +43,14 @@ def endpointCandidates (properties arguments : Array Expr) (maxCandidates : Nat 
   if maxCandidates == 0 then return #[]
   let mut families := #[]
   for property in properties.extract 0 32 do
-    if property.hasMVar || property.hasLooseBVars || !(← isProp property) then continue
+    unless isResolved property do continue
+    unless ← isProp property do continue
     let fresh := arguments.filter fun arg => (property.find? (· == arg)).isNone
     let slots := fresh ++ arguments.filter (!fresh.contains ·)
     let (variants, _) ← (endpointVariants property slots maxCandidates).run 256
     let mut candidates := #[]
     for candidate in variants do
-      if candidate != property && !candidates.contains candidate && (← isCandidate candidate) then
-        candidates := candidates.push candidate
+      if candidate != property then candidates ← appendCandidate candidates candidate
     unless candidates.isEmpty do families := families.push candidates
   let mut result := #[]
   for i in [:maxCandidates] do
@@ -94,11 +94,11 @@ def affineCandidates (properties arguments : Array Expr) (maxCandidates : Nat :=
         if property == equation || property.hasMVar || property.hasLooseBVars then continue
         unless property.containsFVar input.fvarId! do continue
         let candidate := property.replaceFVar input replacement
-        if !out.contains candidate && (← isCandidate candidate) then out := out.push candidate
+        out ← appendCandidate out candidate
         if out.size >= maxCandidates then return out
       for (left, right) in #[(slot, endpoint), (endpoint, slot)] do
         let candidate ← mkAppM ``LE.le #[left, right]
-        if !out.contains candidate && (← isCandidate candidate) then out := out.push candidate
+        out ← appendCandidate out candidate
         if out.size >= maxCandidates then return out
   return out
 
@@ -116,7 +116,6 @@ def measureCandidates (properties arguments : Array Expr) (maxCandidates : Nat :
       if dependsOnArguments target arguments then continue
       let inputsSupport := support target
       let type ← whnf (← inferType target)
-      if type.hasMVar || type.hasFVar || (← isProp target) || (← whnf type).isForall then continue
       -- Collection-valued observations use completion rather than whole-value preservation.
       unless type.isConstOf ``Nat || type.isConstOf ``Int || type.isConstOf ``Bool do continue
       let mut inputs := #[]
@@ -124,8 +123,10 @@ def measureCandidates (properties arguments : Array Expr) (maxCandidates : Nat :
       for id in inputsSupport.extract 0 8 do
         let input := mkFVar id
         let inputType ← inferType input
-        if inputType.hasMVar || inputType.hasFVar || (← isProp input) ||
-            (← whnf inputType).isForall || (← whnf inputType).isSort then continue
+        if inputType.hasMVar || inputType.hasFVar then continue
+        if ← isProp input then continue
+        let normalized ← whnf inputType
+        if normalized.isForall || normalized.isSort then continue
         let mut compatible := #[]
         for argument in arguments.extract 0 16 do
           if fuel == 0 then return out
@@ -151,7 +152,7 @@ def measureCandidates (properties arguments : Array Expr) (maxCandidates : Nat :
       for variant in variants do
         if variant == target then continue
         let candidate ← mkEq variant target
-        if !out.contains candidate && (← isCandidate candidate) then out := out.push candidate
+        out ← appendCandidate out candidate
         if out.size >= maxCandidates then return out
   return out
 
@@ -167,7 +168,8 @@ def slotCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 2
   if maxCandidates == 0 then return #[]
   let mut result := #[]
   for property in properties do
-    if property.hasMVar || !(← isProp property) then continue
+    if property.hasMVar then continue
+    unless ← isProp property do continue
     let fn := property.getAppFn
     let .const name _ := fn | continue
     let .defnInfo _ ← getConstInfo name | continue
@@ -178,7 +180,8 @@ def slotCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 2
       let arg := args[i]!
       unless arguments.contains arg do continue
       let type ← inferType arg
-      if type.hasMVar || (← isProp type) || (← whnf type).isSort || (← numeric type) then continue
+      if type.hasMVar then continue
+      if (← isProp type) || (← whnf type).isSort || (← numeric type) then continue
       for replacement in arguments do
         if replacement == arg then continue
         unless ← hasSlotType replacement type do continue
@@ -193,7 +196,8 @@ def slotCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 2
         let arg := args[i]!
         unless arguments.contains arg do continue
         let type ← inferType arg
-        if type.hasMVar || !(← numeric type) then continue
+        if type.hasMVar then continue
+        unless ← numeric type do continue
         for replacement in arguments do
           if replacement == arg then continue
           unless ← hasSlotType replacement type do continue
@@ -205,12 +209,14 @@ def slotCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 2
 
 private def matchingSlots (value : Expr) (arguments : Array Expr) : MetaM (Array Expr) := do
   let type ← inferType value
-  if type.hasMVar || (← isProp type) || (← whnf type).isSort then return #[]
+  if type.hasMVar then return #[]
+  if (← isProp type) || (← whnf type).isSort then return #[]
   arguments.filterM (hasSlotType · type)
 
 private def compoundVariants (property : Expr) (arguments : Array Expr) (limit : Nat)
     : MetaM (Array Expr) := do
-  if property.hasMVar || property.hasLooseBVars || !(← isProp property) then return #[]
+  unless isResolved property do return #[]
+  unless ← isProp property do return #[]
   let fn := property.getAppFn
   let .const name _ := fn | return #[]
   let .defnInfo _ ← getConstInfo name | return #[]
@@ -230,7 +236,7 @@ private def compoundVariants (property : Expr) (arguments : Array Expr) (limit :
         if fuel == 0 then return bases.extract 0 limit
         fuel := fuel - 1
         let base := mkAppN fn (args.set! i slot)
-        if !bases.contains base && (← isCandidate base) then bases := bases.push base
+        bases ← appendCandidate bases base
         if bases.size >= 4 then break
   if bases.isEmpty then
     if positions.isEmpty then return #[]
@@ -251,16 +257,17 @@ private def compoundVariants (property : Expr) (arguments : Array Expr) (limit :
         fuel := fuel - 1
         let changed := baseArgs.set! i slot
         let candidate := mkAppN fn changed
-        if !result.contains candidate && (← isCandidate candidate) then result := result.push candidate
+        result ← appendCandidate result candidate
         if result.size >= limit then return result.extract 0 limit
         for j in [:args.size] do
-          if j == i || !(← numeric (← inferType args[j]!)) then continue
+          if j == i then continue
+          unless ← numeric (← inferType args[j]!) do continue
           for companion in companions do
             if companion == changed[j]! then continue
             if fuel == 0 then return result.extract 0 limit
             fuel := fuel - 1
             let candidate := mkAppN fn (changed.set! j companion)
-            if !result.contains candidate && (← isCandidate candidate) then result := result.push candidate
+            result ← appendCandidate result candidate
             if result.size >= limit then return result.extract 0 limit
   return result.extract 0 limit
 
@@ -308,9 +315,10 @@ private partial def repeatedElements (properties : Array Expr) : MetaM (Array (E
       pending := pending.push (body.instantiate1 value, depth)
       continue
     for arg in e.getAppArgs do pending := pending.push (arg, depth)
-    if depth < 3 && e.isApp && (← listType? (← inferType e)).isSome then
-      if let some unfolded ← unfoldDefinition? e then
-        pending := pending.push (unfolded, depth + 1)
+    if depth < 3 && e.isApp then
+      if (← listType? (← inferType e)).isSome then
+        if let some unfolded ← unfoldDefinition? e then
+          pending := pending.push (unfolded, depth + 1)
   return result
 
 /-- Derive element and length candidates from a homogeneous-list specification. -/
@@ -358,14 +366,16 @@ def listPrefixCandidates (properties arguments : Array Expr) (maxCandidates : Na
   let bounds ← arguments.filterM fun arg => do
     if arg.hasMVar || arg.hasLooseBVars then return false
     let type ← inferType arg
-    return !type.hasMVar && (← numeric type)
+    if type.hasMVar then return false
+    numeric type
   let mut lists := #[]
   for list in arguments do
     if list.hasMVar || list.hasLooseBVars then continue
     let some elementType ← listType? (← inferType list) | continue
     if elementType.hasMVar then continue
     unless ← repeated.anyM (fun (type, _) => do
-        return !type.hasMVar && (← isDefEq type elementType)) do continue
+        if type.hasMVar then return false
+        isDefEq type elementType) do continue
     unless lists.any (fun (other, _) => other == list) do
       lists := lists.push (list, elementType)
   let mut result := #[]

@@ -1022,6 +1022,51 @@ private def checkSourceRule (generator : SourceGenerator)
     discard <| generator properties (args.push caller) 1
     if ← caller.mvarId!.isAssigned then throwError "source rule assigned caller metavariable"
 
+-- The same bounded guard composition applies to scalar measures and quantified regions.
+private def checkGuardReuse (generator : SourceGenerator)
+    (source expected : TSyntax `term) (slots : Array Nat) : TermElabM Unit := do
+  let source ← elabTermAndSynthesize source none
+  let expected ← elabTermAndSynthesize expected none
+  lambdaTelescope source fun xs property => do
+    let args := slots.map (xs[·]!)
+    let pending ← generator #[property] args 16
+    let guards ← PAScrape.Internal.controlGuards args
+    let compose := PAScrape.Internal.guardStateCandidates guards property pending
+    let (candidates, _) ← compose #[] 64 64
+    unless ← candidates.anyM (fun q => isDefEq q (expected.beta xs)) do
+      throwError "missing guarded source candidate"
+    for candidate in candidates do
+      check candidate
+      let closed ← mkLambdaFVars xs candidate
+      if closed.hasFVar || closed.hasMVar || closed.hasLooseBVars then
+        throwError "guarded source candidate escaped its scope"
+    let (capped, capFuel) ← compose #[] 64 1
+    let (attempted, attemptFuel) ← compose #[] 1 64
+    unless capped == candidates.extract 0 1 && capFuel == 63 &&
+        attempted == candidates.extract 0 2 && attempted.size == 2 && attemptFuel == 0 do
+      throwError "guard composition confused accepted formulas with attempts"
+    let (duplicates, duplicateFuel) ← compose candidates 1 64
+    unless duplicates == candidates && duplicateFuel == 0 do
+      throwError "duplicate guards changed candidates or avoided the attempt budget"
+    let caller ← mkFreshExprMVar (some (mkSort .zero))
+    let noisyGuards ← PAScrape.Internal.controlGuards (args.push caller)
+    let (noisy, _) ← PAScrape.Internal.guardStateCandidates noisyGuards property
+      (pending ++ pending.push caller) #[] 128 64
+    unless noisy == candidates do throwError "duplicate or unresolved pending candidate leaked"
+    if ← caller.mvarId!.isAssigned then throwError "guard composition assigned a caller metavariable"
+
+run_elab do
+  checkGuardReuse @PAScrape.Structured.measureCandidates
+    (← `(fun (f : Nat → Nat) (input current total : Nat) (active : Bool) =>
+      total = f input))
+    (← `(fun (f : Nat → Nat) (input current total : Nat) (active : Bool) =>
+      active = true → f current = f input)) #[2,3,4]
+  checkGuardReuse @PAScrape.Regions.regionCandidates
+    (← `(fun (a : Int → Int) (bound current : Int) (active : Option Nat) =>
+      ∀ i : Int, 0 ≤ i → i < bound → a i ≤ 7))
+    (← `(fun (a : Int → Int) (bound current : Int) (active : Option Nat) =>
+      active.isSome = true → ∀ i : Int, 0 ≤ i → i < current → a i ≤ 7)) #[2,3]
+
 private def checkSourceOrder (generator : SourceGenerator)
     (source expected : TSyntax `term) (slots : Array Nat) : TermElabM Unit := do
   let source ← elabTermAndSynthesize source none

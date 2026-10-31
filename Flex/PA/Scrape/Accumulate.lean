@@ -1,4 +1,4 @@
-import Flex.PA.Scrape.Core
+import Flex.PA.Scrape.Guards
 
 /-! Accumulator completion, guarded fragments, and worklist measures. -/
 
@@ -6,7 +6,8 @@ open Lean Meta
 
 namespace PAScrape.Accumulate
 
-open PAScrape.Internal (isResolved support containsArgument dependsOnArguments appendCandidate)
+open PAScrape.Internal (isResolved support containsArgument dependsOnArguments appendCandidate
+  controlGuards guardStateCandidates)
 
 private def listType (type : Expr) : MetaM Bool := do
   let type ← whnf type
@@ -175,20 +176,6 @@ def algebraCandidates (properties arguments : Array Expr) (maxCandidates : Nat :
           if out.size >= maxCandidates then return out
   return out
 
-private def controlGuards (arguments : Array Expr) : MetaM (Array (Expr × Expr)) := do
-  let mut out := #[]
-  for arg in arguments.extract 0 16 do
-    unless isResolved arg && arg.isFVar do continue
-    let type ← whnf (← inferType arg)
-    let test ← if type.isConstOf ``Bool then pure (some arg)
-      else if type.isAppOfArity ``Option 1 then
-        pure (some (← mkAppM ``Option.isSome #[arg]))
-      else pure none
-    if let some test := test then
-      out := out.push (← mkEq test (mkConst ``Bool.true), ← mkEq test (mkConst ``Bool.false))
-    if out.size == 4 then break
-  return out
-
 /-- A control state can distinguish pending completion from a completed result. -/
 def guardedCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 16)
     : MetaM (Array Expr) := withNewMCtxDepth do
@@ -201,15 +188,8 @@ def guardedCandidates (properties arguments : Array Expr) (maxCandidates : Nat :
   for observation in ← observations properties arguments do
     let original ← mkEq observation.accumulator observation.target
     let pending ← candidates #[original] arguments maxCandidates
-    for (yes, no) in guards do
-      for completed in pending do
-        for (active, stopped) in #[(yes, no), (no, yes)] do
-          if fuel == 0 then return out
-          fuel := fuel - 1
-          out ← appendChecked out (← mkArrow active completed)
-          if out.size >= maxCandidates then return out
-          out ← appendChecked out (← mkArrow stopped original)
-          if out.size >= maxCandidates then return out
+    (out, fuel) ← guardStateCandidates guards original pending out fuel maxCandidates
+    if out.size >= maxCandidates || fuel == 0 then return out
   return out
 
 /-- Compose an observed accumulator, a pending fragment, and the remaining source work. -/

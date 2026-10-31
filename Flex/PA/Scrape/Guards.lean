@@ -1,10 +1,61 @@
 import Flex.PA.Scrape.Core
 
-/-! Arithmetic guard combinations and numeric template generalization. -/
+/-! Scoped guard discovery, bounded candidate wrapping, and numeric generalization. -/
 
 open Lean Meta
 
 namespace PAScrape.Internal
+
+inductive GuardEncoding where
+  | implication | disjunction
+
+/-- Complementary source tests; the negative form preserves the source encoding. -/
+structure GuardPair where
+  positive : Expr
+  negative : Expr
+
+def GuardPair.swap (guard : GuardPair) : GuardPair :=
+  ⟨guard.negative, guard.positive⟩
+
+def GuardPair.wrap (guard : GuardPair) (encoding : GuardEncoding) (property : Expr)
+    : MetaM Expr :=
+  match encoding with
+  | .implication => mkArrow guard.positive property
+  | .disjunction => pure (mkApp2 (mkConst ``Or) guard.negative property)
+
+/-- Bool and Option control tests from one predicate occurrence. -/
+def controlGuards (arguments : Array Expr) : MetaM (Array GuardPair) := do
+  let mut out := #[]
+  for arg in arguments.extract 0 16 do
+    unless isResolved arg && arg.isFVar do continue
+    let type ← whnf (← inferType arg)
+    let test ← if type.isConstOf ``Bool then pure (some arg)
+      else if type.isAppOfArity ``Option 1 then
+        pure (some (← mkAppM ``Option.isSome #[arg]))
+      else pure none
+    if let some test := test then
+      out := out.push ⟨← mkEq test (mkConst ``Bool.true), ← mkEq test (mkConst ``Bool.false)⟩
+    if out.size == 4 then break
+  return out
+
+/-- Guard pending candidates and their completed source property in either control state.
+One orientation costs one attempt; each accepted formula counts towards the output cap. -/
+def guardStateCandidates (guards : Array GuardPair) (original : Expr) (pending : Array Expr)
+    (out : Array Expr) (fuel maxCandidates : Nat) : MetaM (Array Expr × Nat) :=
+  withNewMCtxDepth do
+    let mut out := out
+    let mut fuel := fuel
+    if out.size >= maxCandidates || fuel == 0 then return (out, fuel)
+    for guard in guards do
+      for completed in pending do
+        for active in #[guard, guard.swap] do
+          if fuel == 0 then return (out, fuel)
+          fuel := fuel - 1
+          out ← appendCandidate out (← instantiateMVars (← active.wrap .implication completed))
+          if out.size >= maxCandidates then return (out, fuel)
+          out ← appendCandidate out (← instantiateMVars (← active.swap.wrap .implication original))
+          if out.size >= maxCandidates then return (out, fuel)
+    return (out, fuel)
 
 /-- Guard combinations stay in arithmetic; ordinary scraping still retains
     applications of user definitions. Products require a literal coefficient. -/
@@ -100,9 +151,7 @@ private def boundaryAtoms (p : Expr) : MetaM (Array Expr) := do
   unless (← numericLiteral ty lhs) || (← numericLiteral ty rhs) do return #[p]
   return #[p, ← mkAppM ``LE.le #[lhs, rhs], ← mkAppM ``LE.le #[rhs, lhs]]
 
-/-- Propose `guard → property` over one predicate's arguments in one clause.
-    Both polarities are candidates; none of these combinations is assumed valid. -/
-private def guardedPredicates (cfg : PAScrapeConfig) (props : Array Expr) : ScrapeM Unit := do
+private def clauseGuardAtoms (cfg : PAScrapeConfig) (props : Array Expr) : ScrapeM GuardAtoms := do
   let mut found : GuardAtoms := {}
   for p in props do found ← guardAtoms cfg p found 0
   let mut atoms := #[]
@@ -113,22 +162,29 @@ private def guardedPredicates (cfg : PAScrapeConfig) (props : Array Expr) : Scra
       if atoms.contains variant then continue
       if atoms.size >= cfg.maxGuardAtoms then limit "guard atoms"; break
       atoms := atoms.push variant
+  return { found with atoms }
+
+/-- Combine both polarities within one clause and one predicate occurrence. -/
+private def guardedPredicates (cfg : PAScrapeConfig) (props : Array Expr) : ScrapeM Unit := do
+  let found ← clauseGuardAtoms cfg props
+  let atoms ← found.atoms.mapM fun atom => do
+    return GuardPair.mk atom (← negateAtom atom)
   for atom in atoms do
-    addPredicate cfg "guard atom" .generated atom
-    addPredicate cfg "guard atom" .generated (← negateAtom atom)
+    addPredicate cfg "guard atom" .generated atom.positive
+    addPredicate cfg "guard atom" .generated atom.negative
   for guard in atoms do
     for property in atoms do
       if (← get).guarded.size >= cfg.maxGuardedQualifiers then limit "guarded templates"; return
       if (← get).guardPairs >= cfg.maxGuardPairs then limit "guard pairs"; return
       modify fun s => { s with guardPairs := s.guardPairs + 1 }
-      let gvars := support guard
-      let pvars := support property
+      let gvars := support guard.positive
+      let pvars := support property.positive
       -- Avoid pairing facts about precisely the same arguments.
       if subset gvars pvars && subset pvars gvars then continue
       unless found.relations.any (fun vars => subset gvars vars && subset pvars vars) do continue
-      for g in #[guard, ← negateAtom guard] do
-        for p in #[property, ← negateAtom property] do
-          addPredicate cfg "guarded clause" .guarded (mkApp2 (mkConst ``Or) (← negateAtom g) p)
+      for g in #[guard, guard.swap] do
+        for p in #[property.positive, property.negative] do
+          addPredicate cfg "guarded clause" .guarded (← g.wrap .disjunction p)
 
 /-- Explore guard branches separately; close witness parameters before leaving their scope. -/
 private partial def guardedPremises (cfg : PAScrapeConfig) (head : Expr)

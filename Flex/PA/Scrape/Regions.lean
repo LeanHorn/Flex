@@ -6,7 +6,7 @@ open Lean Meta
 
 namespace PAScrape.Regions
 
-open PAScrape.Internal (isResolved support dependsOnArguments appendCandidate)
+open PAScrape.Internal (isResolved support dependsOnArguments appendCandidate indexedPredicates)
 
 private def add (out : Array Expr) (e : Expr) (cap : Nat) : MetaM (Array Expr) := do
   if out.size >= cap then return out
@@ -107,10 +107,45 @@ private partial def listInputs (e : Expr) (arguments : Array Expr)
       unless out.contains input do out := out.push input
   return out
 
+private inductive ListPart where
+  | prefix | suffix
+
+private def listPart (part : ListPart) (list index : Expr) : MetaM Expr :=
+  mkAppM (match part with | .prefix => ``List.take | .suffix => ``List.drop) #[index, list]
+
 private def slices (list : Expr) (indices : Array Expr) (cap : Nat) : MetaM (Array Expr) := do
   let mut out := #[]
   for index in indices.extract 0 (min 4 cap) do
-    out := out.push (← mkAppM ``List.take #[index, list])
+    out := out.push (← listPart .prefix list index)
+  return out
+
+private inductive SourceRelation where
+  | equality | permutation
+  deriving BEq
+
+/-- Equality varies source inputs independently; permutation also retains cumulative prefixes. -/
+private def restrictSource (relation : SourceRelation) (current original : Expr)
+    (arguments indices : Array Expr) (out : Array Expr) (cap : Nat)
+    : StateT Nat MetaM (Array Expr) := do
+  unless dependsOnArguments current arguments && !dependsOnArguments original arguments do
+    return out
+  let (inputs, _) ← (listInputs original arguments).run 128
+  let mut out := out
+  let mut variants := #[original]
+  for input in inputs.extract 0 (if relation == .equality then 4 else 2) do
+    let mut next := #[]
+    for base in variants do
+      if out.size >= cap || (← get) == 0 then return out
+      for part in ← slices input indices (cap - out.size) do
+        if out.size >= cap || (← get) == 0 then return out
+        modify (· - 1)
+        let changed := replace base input part
+        next := next.push changed
+        let candidate ← match relation with
+          | .equality => mkEq current changed
+          | .permutation => mkAppM ``List.Perm #[current, changed]
+        out ← add out candidate cap
+    variants := if relation == .equality then #[original] else next.extract 0 16
   return out
 
 /-- Observe a source function on a processed prefix; keep unread array regions unchanged. -/
@@ -124,12 +159,9 @@ def prefixCandidates (properties arguments : Array Expr) (maxCandidates : Nat :=
     unless isResolved property do continue
     if let some (_, lhs, rhs) := property.eq? then
       for (observed, target) in #[(lhs, rhs), (rhs, lhs)] do
-        unless dependsOnArguments observed arguments && !dependsOnArguments target arguments do continue
-        let (inputs, _) ← (listInputs target arguments).run 128
-        for input in inputs.extract 0 4 do
-          for part in ← slices input indices (maxCandidates - out.size) do
-            out ← add out (← mkEq observed (replace target input part)) maxCandidates
-            if out.size >= maxCandidates then return out
+        -- Four inputs, each with at most four prefixes.
+        (out, _) ← (restrictSource .equality observed target arguments indices out maxCandidates).run 16
+        if out.size >= maxCandidates then return out
     if out.size >= maxCandidates then return out
   -- Frames are proposed only between arrays already occurring in the source.
   let mut inputs := #[]
@@ -154,12 +186,11 @@ def prefixCandidates (properties arguments : Array Expr) (maxCandidates : Nat :=
       attempts := attempts - 1
       unless ← isDefEq type (← inferType input) do continue
       for bound in indices.extract 0 4 do
-        let candidate ← withLocalDeclD `index (mkConst ``Nat) fun index => do
-          let guard ← mkAppM ``LE.le #[bound, index]
+        let candidates ← indexedPredicates (mkConst ``Nat) (some bound) none fun index => do
           let current ← mkAppM ``GetElem?.getElem? #[array, index]
           let original ← mkAppM ``GetElem?.getElem? #[input, index]
-          mkForallFVars #[index] (← mkArrow guard (← mkEq current original))
-        out ← add out candidate maxCandidates
+          return #[← mkEq current original]
+        for candidate in candidates do out ← add out candidate maxCandidates
         if out.size >= maxCandidates then return out
   return out
 
@@ -190,28 +221,16 @@ def relationalCandidates (properties arguments : Array Expr) (maxCandidates : Na
       let list := args[2]!
       if relation.isAppOfArity ``List.Pairwise 3 && dependsOnArguments list arguments then
         for index in indices.extract 0 4 do
-          for op in #[``List.take, ``List.drop] do
+          for part in #[ListPart.prefix, .suffix] do
             if out.size >= maxCandidates || attempts == 0 then return out
             attempts := attempts - 1
-            let part ← mkAppM op #[index, list]
+            let part ← listPart part list index
             out ← add out (mkAppN relation.getAppFn (args.set! 2 part)) maxCandidates
       if relation.isAppOfArity ``List.Perm 3 then
         for (current, original) in #[(args[1]!, args[2]!), (args[2]!, args[1]!)] do
-          unless dependsOnArguments current arguments && !dependsOnArguments original arguments do continue
-          let (inputs, _) ← (listInputs original arguments).run 128
-          let mut variants := #[original]
-          -- At most two source inputs are varied together, with a shared work budget.
-          for input in inputs.extract 0 2 do
-            let mut next := #[]
-            for base in variants do
-              if out.size >= maxCandidates || attempts == 0 then return out
-              for part in ← slices input indices (maxCandidates - out.size) do
-                if out.size >= maxCandidates || attempts == 0 then return out
-                attempts := attempts - 1
-                let changed := replace base input part
-                next := next.push changed
-                out ← add out (← mkAppM ``List.Perm #[current, changed]) maxCandidates
-            variants := next.extract 0 16
+          (out, attempts) ←
+            (restrictSource .permutation current original arguments indices out maxCandidates).run attempts
+          if out.size >= maxCandidates || attempts == 0 then return out
       if out.size >= maxCandidates then return out
   return out
 

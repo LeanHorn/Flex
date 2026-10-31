@@ -1,10 +1,12 @@
-import Lean
+import Flex.PA.Scrape.Core
 
 /-! Absolute-index normalization and ordered-array prefixes. -/
 
 open Lean Meta
 
 namespace PAScrape.Structured
+
+open PAScrape.Internal (indexedPredicates)
 
 private def intArray (e : Expr) : MetaM Bool := do
   if e.hasMVar || e.hasLooseBVars then return false
@@ -136,18 +138,14 @@ def prefixCandidates (properties arguments : Array Expr) (maxCandidates : Nat :=
     unless used do continue
     for bound in arguments do
       unless ← intBound bound do continue
-      let candidates ← withLocalDeclD `index (mkConst ``Int) fun index => do
+      let candidates ← indexedPredicates (mkConst ``Int) (some (mkIntLit 0)) (some bound) fun index => do
         let value := mkApp array index
-        let lower ← mkAppM ``LE.le #[mkIntLit 0, index]
-        let upper ← mkAppM ``LT.lt #[index, bound]
         let mut candidates := #[]
         for target in #[bound, index, mkIntLit 0] do
           for relation in #[``LT.lt, ``LE.le] do
             let comparison ← mkAppM relation #[value, target]
-            let body ← mkArrow lower (← mkArrow upper comparison)
-            candidates := candidates.push (← mkForallFVars #[index] body)
-        let equality ← mkArrow lower (← mkArrow upper (← mkEq value index))
-        candidates := candidates.push (← mkForallFVars #[index] equality)
+            candidates := candidates.push comparison
+        candidates := candidates.push (← mkEq value index)
         return candidates
       for candidate in candidates do
         if out.contains candidate then continue

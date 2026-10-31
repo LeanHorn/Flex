@@ -1,5 +1,4 @@
 import Flex.PA.Scrape.Indices
-import Flex.PA.Scrape.Core
 
 /-! Predicate-slot substitutions, scalar measures, and homogeneous-list observations. -/
 
@@ -7,7 +6,7 @@ open Lean Meta
 
 namespace PAScrape.Structured
 
-open PAScrape.Internal (support dependsOnArguments isCandidate)
+open PAScrape.Internal (support dependsOnArguments isCandidate indexedPredicates)
 
 private def numeric (type : Expr) : MetaM Bool := do
   let type ← whnf type
@@ -156,6 +155,12 @@ def measureCandidates (properties arguments : Array Expr) (maxCandidates : Nat :
         if out.size >= maxCandidates then return out
   return out
 
+private def hasSlotType (slot type : Expr) : MetaM Bool := do
+  if slot.hasMVar then return false
+  let slotType ← inferType slot
+  if slotType.hasMVar then return false
+  return ← isDefEq type slotType
+
 /-- Change argument positions independently, keeping compound bounds intact. -/
 def slotCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 24)
     : MetaM (Array Expr) := do
@@ -175,10 +180,8 @@ def slotCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 2
       let type ← inferType arg
       if type.hasMVar || (← isProp type) || (← whnf type).isSort || (← numeric type) then continue
       for replacement in arguments do
-        if replacement == arg || replacement.hasMVar then continue
-        let replacementType ← inferType replacement
-        if replacementType.hasMVar then continue
-        unless ← isDefEq type replacementType do continue
+        if replacement == arg then continue
+        unless ← hasSlotType replacement type do continue
         let candidate := mkAppN fn (args.set! i replacement)
         if ← isCandidate candidate then
           unless bases.contains candidate do bases := bases.push candidate
@@ -192,10 +195,8 @@ def slotCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 2
         let type ← inferType arg
         if type.hasMVar || !(← numeric type) then continue
         for replacement in arguments do
-          if replacement == arg || replacement.hasMVar then continue
-          let replacementType ← inferType replacement
-          if replacementType.hasMVar then continue
-          unless ← isDefEq type replacementType do continue
+          if replacement == arg then continue
+          unless ← hasSlotType replacement type do continue
           let candidate := mkAppN fn (args.set! i replacement)
           if ← isCandidate candidate then
             unless result.contains candidate do result := result.push candidate
@@ -205,11 +206,7 @@ def slotCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 2
 private def matchingSlots (value : Expr) (arguments : Array Expr) : MetaM (Array Expr) := do
   let type ← inferType value
   if type.hasMVar || (← isProp type) || (← whnf type).isSort then return #[]
-  arguments.filterM fun arg => do
-    if arg.hasMVar then return false
-    let argType ← inferType arg
-    if argType.hasMVar then return false
-    return ← isDefEq type argType
+  arguments.filterM (hasSlotType · type)
 
 private def compoundVariants (property : Expr) (arguments : Array Expr) (limit : Nat)
     : MetaM (Array Expr) := do
@@ -389,16 +386,13 @@ def listPrefixCandidates (properties arguments : Array Expr) (maxCandidates : Na
       if type.hasMVar || item.hasMVar then continue
       unless ← isDefEq type elementType do continue
       for bound in bounds do
-        let candidate ← withLocalDeclD `index (mkConst ``Nat) fun index => do
-          let upper ← if (← whnf (← inferType bound)).isConstOf ``Int then
-              mkAppM ``LT.lt #[← mkAppM ``Int.ofNat #[index], bound]
-            else mkAppM ``LT.lt #[index, bound]
+        let candidates ← indexedPredicates (mkConst ``Nat) none (some bound) fun index => do
           let value ← mkAppM ``GetElem?.getElem? #[list, index]
-          let equality ← mkEq value (← mkAppM ``Option.some #[item])
-          mkForallFVars #[index] (← mkArrow upper equality)
-        if ← isCandidate candidate then
-          unless result.contains candidate do result := result.push candidate
-          if result.size >= maxCandidates then return result
+          return #[← mkEq value (← mkAppM ``Option.some #[item])]
+        for candidate in candidates do
+          if ← isCandidate candidate then
+            unless result.contains candidate do result := result.push candidate
+            if result.size >= maxCandidates then return result
   return result
 
 end PAScrape.Structured

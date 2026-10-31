@@ -1081,6 +1081,59 @@ run_elab do
       (acc && todo.all f) = f input ∧ (acc || todo.all f) = f input ∧
       (todo.all f && acc) = f input ∧ (todo.all f || acc) = f input)) #[2,3]
 
+-- Equality varies each input independently; permutation also combines their prefixes.
+run_elab do
+  checkSourceOrder @PAScrape.Regions.prefixCandidates
+    (← `(fun (f : List Int → List Int → List Int) (left right out : List Int) (i j : Nat) =>
+      out = f left right))
+    (← `(fun (f : List Int → List Int → List Int) (left right out : List Int) (i j : Nat) =>
+      out = f (left.take i) right ∧ out = f (left.take j) right ∧
+      out = f left (right.take i) ∧ out = f left (right.take j))) #[3,4,5]
+  checkSourceOrder @PAScrape.Regions.relationalCandidates
+    (← `(fun (f : List Int → List Int → List Int) (left right out : List Int) (i j : Nat) =>
+      out.Perm (f left right)))
+    (← `(fun (f : List Int → List Int → List Int) (left right out : List Int) (i j : Nat) =>
+      out.Perm (f (left.take i) right) ∧ out.Perm (f (left.take j) right) ∧
+      out.Perm (f (left.take i) (right.take i)) ∧ out.Perm (f (left.take i) (right.take j)) ∧
+      out.Perm (f (left.take j) (right.take i)) ∧ out.Perm (f (left.take j) (right.take j)))) #[3,4,5]
+  checkSourceOrder @PAScrape.Regions.relationalCandidates
+    (← `(fun (a : Array Int) (i j : Nat) (z : Int) => a.toList.Pairwise (· ≤ ·)))
+    (← `(fun (a : Array Int) (i j : Nat) (z : Int) =>
+      (a.toList.take i).Pairwise (· ≤ ·) ∧ (a.toList.drop i).Pairwise (· ≤ ·) ∧
+      (a.toList.take j).Pairwise (· ≤ ·) ∧ (a.toList.drop j).Pairwise (· ≤ ·))) #[0,1,2,3]
+
+-- Array frames use Nat lower bounds; ordered function arrays use nonnegative Int prefixes.
+run_elab do
+  checkSourceOrder @PAScrape.Regions.prefixCandidates
+    (← `(fun (original current : Array Int) (i : Nat) (z : Int) => current = original))
+    (← `(fun (original current : Array Int) (i : Nat) (z : Int) =>
+      ∀ j : Nat, i ≤ j → current[j]? = original[j]?)) #[1,2,3]
+  checkSourceOrder @PAScrape.Structured.prefixCandidates
+    (← `(fun (a : Int → Int) (bound : Int) (n : Nat) => ∀ j : Int, a j ≤ a (j + 1)))
+    (← `(fun (a : Int → Int) (bound : Int) (n : Nat) =>
+      (∀ j : Int, 0 ≤ j → j < bound → a j < bound) ∧
+      (∀ j : Int, 0 ≤ j → j < bound → a j ≤ bound) ∧
+      (∀ j : Int, 0 ≤ j → j < bound → a j < j) ∧
+      (∀ j : Int, 0 ≤ j → j < bound → a j ≤ j) ∧
+      (∀ j : Int, 0 ≤ j → j < bound → a j < 0) ∧
+      (∀ j : Int, 0 ≤ j → j < bound → a j ≤ 0) ∧
+      (∀ j : Int, 0 ≤ j → j < bound → a j = j))) #[0,1,2]
+
+-- A full cap must stop both typed-slot loops before inspecting later arguments.
+run_elab do
+  let source ← elabTermAndSynthesize
+    (← `(fun (a b : Int → Int) (lo hi : Int) => region a lo lo lo lo)) none
+  lambdaTelescope source fun xs property => do
+    let ignored := mkFVar ⟨`outside_context⟩
+    for (args, expectedArgs) in #[
+        (#[xs[0]!, xs[1]!, ignored], #[xs[1]!, xs[2]!, xs[2]!, xs[2]!, xs[2]!]),
+        (#[xs[2]!, xs[3]!, ignored], #[xs[0]!, xs[3]!, xs[2]!, xs[2]!, xs[2]!])] do
+      unless (← PAScrape.Structured.slotCandidates #[property] args 0).isEmpty do
+        throwError "disabled slot scraping inspected arguments"
+      let candidates ← PAScrape.Structured.slotCandidates #[property] args 1
+      unless candidates == #[mkAppN (mkConst ``region) expectedArgs] do
+        throwError "slot cap changed priority or inspected unused arguments"
+
 run_elab do
   checkSourceRule @PAScrape.Accumulate.algebraCandidates
     (← `(fun (input rest : List Int) (p : Int → Bool) (result : Bool) => result = input.all p))

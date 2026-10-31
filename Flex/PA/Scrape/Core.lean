@@ -36,6 +36,24 @@ def appendCandidate (out : Array Expr) (e : Expr) : MetaM (Array Expr) := do
   if out.contains e || !(← isCandidate e) then return out
   return out.push e
 
+/-- Quantify indexed properties over optional lower/upper bounds.
+Nat indices are coerced when compared with Int bounds; reads stay with the caller. -/
+def indexedPredicates (domain : Expr) (lower upper : Option Expr)
+    (build : Expr → MetaM (Array Expr)) : MetaM (Array Expr) :=
+  withLocalDeclD `index domain fun index => do
+    let guard (relation : Name) (bound : Expr) (isLower : Bool) := do
+      let mut value := index
+      if domain.isConstOf ``Nat then
+        if (← whnf (← inferType bound)).isConstOf ``Int then
+          value ← mkAppM ``Int.ofNat #[index]
+      mkAppM relation (if isLower then #[bound, value] else #[value, bound])
+    let lower ← lower.mapM (fun bound => guard ``LE.le bound true)
+    let upper ← upper.mapM (fun bound => guard ``LT.lt bound false)
+    (← build index).mapM fun body => do
+      let body ← match upper with | some guard => mkArrow guard body | none => pure body
+      let body ← match lower with | some guard => mkArrow guard body | none => pure body
+      mkForallFVars #[index] body
+
 inductive Source where
   | goal | definition | generated | guarded | observation
   deriving BEq

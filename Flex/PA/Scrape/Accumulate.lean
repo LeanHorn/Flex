@@ -1,4 +1,4 @@
-import Lean
+import Flex.PA.Scrape.Core
 
 /-! Accumulator completion, guarded fragments, and worklist measures. -/
 
@@ -6,19 +6,11 @@ open Lean Meta
 
 namespace PAScrape.Accumulate
 
-private def usable (e : Expr) : Bool := !e.hasMVar && !e.hasLooseBVars
-
-private def containsArgument (e : Expr) (arguments : Array Expr) : Bool :=
-  arguments.any fun argument => (e.find? (· == argument)).isSome
-
-private def dependsOnArguments (e : Expr) (arguments : Array Expr) : Bool :=
-  let support := (collectFVars {} e).fvarIds
-  arguments.any fun argument =>
-    (collectFVars {} argument).fvarIds.any support.contains
+open PAScrape.Internal (isResolved support containsArgument dependsOnArguments appendCandidate)
 
 private def listType (type : Expr) : MetaM Bool := do
   let type ← whnf type
-  return usable type && !type.hasFVar && type.isAppOfArity ``List 1
+  return isResolved type && !type.hasFVar && type.isAppOfArity ``List 1
 
 private def compose? (left right : Expr) : MetaM (Option Expr) := do
   let type ← whnf (← inferType left)
@@ -32,18 +24,18 @@ Both composition orders are candidates; PA must establish inductiveness and safe
 def candidates (properties arguments : Array Expr) (maxCandidates : Nat := 24)
     : MetaM (Array Expr) := withNewMCtxDepth do
   if maxCandidates == 0 then return #[]
-  let arguments := arguments.filter usable
+  let arguments := arguments.filter isResolved
   let mut out := #[]
   let mut fuel := 16 * maxCandidates
   for property in properties.extract 0 32 do
-    unless usable property do continue
+    unless isResolved property do continue
     let some (_, lhs, rhs) := property.eq? | continue
     for (accumulator, target) in #[(lhs, rhs), (rhs, lhs)] do
       unless containsArgument accumulator arguments do continue
       if dependsOnArguments target arguments then continue
       let outputType ← inferType accumulator
-      if !usable outputType || outputType.hasFVar then continue
-      for id in (collectFVars {} target).fvarIds do
+      if !isResolved outputType || outputType.hasFVar then continue
+      for id in (support target) do
         let input := mkFVar id
         let inputType ← inferType input
         unless ← listType inputType do continue
@@ -52,15 +44,15 @@ def candidates (properties arguments : Array Expr) (maxCandidates : Nat := 24)
           if fuel == 0 then return out
           fuel := fuel - 1
           let remainingType ← inferType remaining
-          if !usable remainingType || remainingType.hasFVar then continue
+          if !isResolved remainingType || remainingType.hasFVar then continue
           unless ← isDefEq inputType remainingType do continue
           let rest := target.replaceFVar input remaining
-          if !usable rest then continue
+          if !isResolved rest then continue
           unless ← isDefEq outputType (← inferType rest) do continue
           for (left, right) in #[(accumulator, rest), (rest, accumulator)] do
             let some completed ← compose? left right | continue
             let candidate ← instantiateMVars (← mkEq completed target)
-            unless usable candidate do continue
+            unless isResolved candidate do continue
             try check candidate
             catch e =>
               if e.isInterrupt || e.isMaxHeartbeat || e.isMaxRecDepth then throw e
@@ -76,24 +68,16 @@ private structure Observation where
 private def observations (properties arguments : Array Expr) : MetaM (Array Observation) := do
   let mut out := #[]
   for property in properties.extract 0 32 do
-    unless usable property do continue
+    unless isResolved property do continue
     let some (_, lhs, rhs) := property.eq? | continue
     for (accumulator, target) in #[(lhs, rhs), (rhs, lhs)] do
       if containsArgument accumulator arguments && !dependsOnArguments target arguments then
         let type ← inferType accumulator
-        if usable type && !type.hasFVar then out := out.push ⟨accumulator, target⟩
+        if isResolved type && !type.hasFVar then out := out.push ⟨accumulator, target⟩
   return out
 
 private def appendChecked (out : Array Expr) (candidate : Expr) : MetaM (Array Expr) := do
-  let candidate ← instantiateMVars candidate
-  if !usable candidate || out.contains candidate then return out
-  try
-    check candidate
-    unless ← isProp candidate do return out
-    return out.push candidate
-  catch e =>
-    if e.isInterrupt || e.isMaxHeartbeat || e.isMaxRecDepth then throw e
-    return out
+  appendCandidate out (← instantiateMVars candidate)
 
 private structure Replacement where
   value : Expr
@@ -105,17 +89,17 @@ private def replacements (observation : Observation) (arguments : Array Expr)
     (scalars : Bool) (cap : Nat) : MetaM (Array Replacement) := do
   if cap == 0 then return #[]
   let mut choices : Array (Expr × Array Expr) := #[]
-  for id in (collectFVars {} observation.target).fvarIds do
+  for id in (support observation.target) do
     let input := mkFVar id
     let type ← whnf (← inferType input)
-    unless usable type && !type.hasFVar do continue
+    unless isResolved type && !type.hasFVar do continue
     unless (← listType type) || (scalars && (type.isConstOf ``Nat || type.isConstOf ``Int)) do continue
     let mut slots := #[]
     for arg in arguments.extract 0 16 do
-      if !usable arg || arg == input ||
+      if !isResolved arg || arg == input ||
           (observation.accumulator.find? (· == arg)).isSome then continue
       let argType ← inferType arg
-      unless usable argType && !argType.hasFVar do continue
+      unless isResolved argType && !argType.hasFVar do continue
       if ← isDefEq type argType then slots := slots.push arg
     unless slots.isEmpty do choices := choices.push (input, slots)
     if choices.size == 4 then break
@@ -155,7 +139,7 @@ private def algebraCompositions (left right : Expr) (multipleInputs : Bool)
 def algebraCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 16)
     : MetaM (Array Expr) := withNewMCtxDepth do
   if maxCandidates == 0 then return #[]
-  let arguments := arguments.filter usable
+  let arguments := arguments.filter isResolved
   let mut out := #[]
   let mut fuel := 32 * maxCandidates
   for observation in ← observations properties arguments do
@@ -172,7 +156,7 @@ def algebraCandidates (properties arguments : Array Expr) (maxCandidates : Nat :
 private def controlGuards (arguments : Array Expr) : MetaM (Array (Expr × Expr)) := do
   let mut out := #[]
   for arg in arguments.extract 0 16 do
-    unless usable arg && arg.isFVar do continue
+    unless isResolved arg && arg.isFVar do continue
     let type ← whnf (← inferType arg)
     let test ← if type.isConstOf ``Bool then pure (some arg)
       else if type.isAppOfArity ``Option 1 then
@@ -187,7 +171,7 @@ private def controlGuards (arguments : Array Expr) : MetaM (Array (Expr × Expr)
 def guardedCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 16)
     : MetaM (Array Expr) := withNewMCtxDepth do
   if maxCandidates == 0 then return #[]
-  let arguments := arguments.filter usable
+  let arguments := arguments.filter isResolved
   let guards ← controlGuards arguments
   if guards.isEmpty then return #[]
   let mut out := #[]
@@ -210,7 +194,7 @@ def guardedCandidates (properties arguments : Array Expr) (maxCandidates : Nat :
 def fragmentCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 16)
     : MetaM (Array Expr) := withNewMCtxDepth do
   if maxCandidates == 0 then return #[]
-  let arguments := arguments.filter usable
+  let arguments := arguments.filter isResolved
   let mut out := #[]
   let mut fuel := 32 * maxCandidates
   for observation in ← observations properties arguments do
@@ -221,7 +205,7 @@ def fragmentCandidates (properties arguments : Array Expr) (maxCandidates : Nat 
         if replacement.slots.contains fragment ||
             (observation.accumulator.find? (· == fragment)).isSome then continue
         let fragmentType ← inferType fragment
-        unless usable fragmentType && !fragmentType.hasFVar && (← isDefEq type fragmentType) do continue
+        unless isResolved fragmentType && !fragmentType.hasFVar && (← isDefEq type fragmentType) do continue
         let acc := observation.accumulator
         let rest := replacement.value
         for parts in #[#[acc, fragment, rest], #[acc, rest, fragment],
@@ -248,20 +232,20 @@ private def aggregates (function worklist : Expr) (resultType : Expr) : MetaM (A
 def worklistCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 16)
     : MetaM (Array Expr) := withNewMCtxDepth do
   if maxCandidates == 0 then return #[]
-  let arguments := arguments.filter usable
+  let arguments := arguments.filter isResolved
   let mut out := #[]
   let mut fuel := 32 * maxCandidates
   for observation in ← observations properties arguments do
     let outputType ← whnf (← inferType observation.accumulator)
-    for id in (collectFVars {} observation.target).fvarIds.extract 0 8 do
+    for id in (support observation.target).extract 0 8 do
       let input := mkFVar id
       let inputType ← inferType input
-      if !usable inputType || inputType.hasFVar || (← isProp input) || (← whnf inputType).isSort then continue
+      if !isResolved inputType || inputType.hasFVar || (← isProp input) || (← whnf inputType).isSort then continue
       for todo in arguments.extract 0 16 do
         if fuel == 0 then return out
         fuel := fuel - 1
         let todoType ← whnf (← inferType todo)
-        unless todoType.isAppOfArity ``List 1 && usable todoType && !todoType.hasFVar do continue
+        unless todoType.isAppOfArity ``List 1 && isResolved todoType && !todoType.hasFVar do continue
         if (observation.accumulator.find? (· == todo)).isSome then continue
         unless ← isDefEq inputType todoType.appArg! do continue
         let function ← withLocalDeclD `pending inputType fun value =>

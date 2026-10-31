@@ -923,6 +923,22 @@ run_elab do
           q.slots == candidate.slots && q.qualifier == candidate.qualifier) do
         throwError "compound pass displaced an ordinary anchor"
 
+-- Shared checks allow caller locals but reject unresolved or ill-typed candidates.
+open PAScrape.Internal in
+run_elab do
+  withLocalDeclD `x (mkConst ``Int) fun x => do
+    let property ← mkEq x (mkIntLit 0)
+    unless ← isCandidate property do throwError "rejected a scoped candidate"
+    let compound ← mkAppM ``Int.add #[x, mkIntLit 1]
+    unless dependsOnArguments property #[compound] &&
+        !containsArgument property #[compound] && containsArgument compound #[compound] do
+      throwError "confused variable dependence with exact argument occurrence"
+    let caller ← mkFreshExprMVar (some (mkConst ``Int))
+    for bad in #[← mkEq caller x, mkBVar 0, mkNatLit 0,
+        mkApp (mkConst ``Nat.succ) (mkConst ``True)] do
+      if ← isCandidate bad then throwError "accepted an unresolved or ill-typed candidate"
+    if ← caller.mvarId!.isAssigned then throwError "candidate check assigned caller metavariable"
+
 -- Endpoint substitutions change one occurrence; bounds may capture caller locals.
 run_elab do
   let source ← elabTermAndSynthesize (← `(fun (n i p : Int) => p = n * n)) none
@@ -937,8 +953,8 @@ run_elab do
     if ← candidates.anyM (fun q => do isDefEq both q) then
       throwError "endpoint changed both occurrences"
     unless (← PAScrape.Structured.endpointCandidates #[property] args 0).isEmpty &&
-        (← PAScrape.Structured.endpointCandidates #[property] args 1).size == 1 do
-      throwError "endpoint cap ignored"
+        (← PAScrape.Structured.endpointCandidates #[property] args 1) == candidates.extract 0 1 do
+      throwError "endpoint cap changed candidate priority"
     let caller ← mkFreshExprMVar (some (mkConst ``Int))
     discard <| PAScrape.Structured.endpointCandidates #[property] (args.push caller)
     if ← caller.mvarId!.isAssigned then throwError "endpoint assigned caller metavariable"
@@ -965,8 +981,8 @@ run_elab do
       unless ← candidates.anyM (fun q => do isDefEq expected q) do
         throwError "missing accumulator relationship"
       unless (← PAScrape.Accumulate.candidates #[property] args 0).isEmpty &&
-          (← PAScrape.Accumulate.candidates #[property] args 1).size == 1 do
-        throwError "accumulator cap ignored"
+          (← PAScrape.Accumulate.candidates #[property] args 1) == candidates.extract 0 1 do
+        throwError "accumulator cap changed candidate priority"
       for candidate in candidates do
         check candidate
         if candidate.hasMVar || candidate.hasLooseBVars then throwError "unclosed accumulator"
@@ -991,7 +1007,8 @@ private def checkSourceRule (generator : SourceGenerator)
     unless ← candidates.anyM (fun q => isDefEq q (expected.beta xs)) do
       throwError "missing source candidate {expected.beta xs}"
     unless (← generator properties args 0).isEmpty &&
-        (← generator properties args 1).size ≤ 1 do throwError "source cap ignored"
+        (← generator properties args 1) == candidates.extract 0 1 do
+      throwError "source cap changed candidate priority"
     if wideSlots then
       let ignored := mkFVar ⟨`outside_context⟩
       let wide := args ++ Array.replicate (16 - args.size) args[0]! ++ Array.replicate 10000 ignored

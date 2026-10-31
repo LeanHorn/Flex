@@ -6,6 +6,36 @@ open Lean Meta
 
 namespace PAScrape.Internal
 
+/-- Local constants are allowed; metavariables and loose bound variables are not. -/
+def isResolved (e : Expr) : Bool := !e.hasMVar && !e.hasLooseBVars
+
+def support (e : Expr) : Array FVarId :=
+  (collectFVars {} e).fvarIds
+
+/-- Exact occurrence of a predicate argument, including compound arguments. -/
+def containsArgument (e : Expr) (arguments : Array Expr) : Bool :=
+  arguments.any fun argument => (e.find? (· == argument)).isSome
+
+/-- Sharing a local variable counts even when the whole argument does not occur. -/
+def dependsOnArguments (e : Expr) (arguments : Array Expr) : Bool :=
+  let ids := support e
+  arguments.any fun argument => (support argument).any ids.contains
+
+/-- Check a candidate's type and scope, not its truth. Resource failures propagate. -/
+def isCandidate (e : Expr) : MetaM Bool := do
+  if !isResolved e then return false
+  try
+    check e
+    return ← isProp e
+  catch error =>
+    if error.isInterrupt || error.isMaxHeartbeat || error.isMaxRecDepth then throw error
+    return false
+
+/-- Keep valid candidates in discovery order. Callers handle instantiation and budgets. -/
+def appendCandidate (out : Array Expr) (e : Expr) : MetaM (Array Expr) := do
+  if out.contains e || !(← isCandidate e) then return out
+  return out.push e
+
 inductive Source where
   | goal | definition | generated | guarded | observation
   deriving BEq
@@ -119,9 +149,6 @@ def automatic (cfg : PAScrapeConfig) : Bool :=
 def numericLiteral (ty e : Expr) : MetaM Bool := do
   if ty.isConstOf ``Nat then return (← getNatValue? e).isSome
   return (← getIntValue? e).isSome
-
-def support (e : Expr) : Array FVarId :=
-  (collectFVars {} e).fvarIds
 
 def subset (xs ys : Array FVarId) : Bool :=
   xs.all ys.contains

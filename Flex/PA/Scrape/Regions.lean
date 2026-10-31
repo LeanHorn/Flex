@@ -1,4 +1,4 @@
-import Lean
+import Flex.PA.Scrape.Core
 
 /-! Quantified regions, collection prefixes, and relational candidates. -/
 
@@ -6,39 +6,26 @@ open Lean Meta
 
 namespace PAScrape.Regions
 
-private def usable (e : Expr) : Bool := !e.hasMVar && !e.hasLooseBVars
-
-private def dependsOn (e : Expr) (arguments : Array Expr) : Bool :=
-  let ids := (collectFVars {} e).fvarIds
-  arguments.any fun a => (collectFVars {} a).fvarIds.any ids.contains
-
-private def checked (e : Expr) : MetaM Bool := do
-  if !usable e then return false
-  try
-    check e
-    return ← isProp e
-  catch error =>
-    if error.isInterrupt || error.isMaxHeartbeat || error.isMaxRecDepth then throw error
-    return false
+open PAScrape.Internal (isResolved support dependsOnArguments appendCandidate)
 
 private def add (out : Array Expr) (e : Expr) (cap : Nat) : MetaM (Array Expr) := do
-  if out.size >= cap || out.contains e || !(← checked e) then return out
-  return out.push e
+  if out.size >= cap then return out
+  appendCandidate out e
 
 private def numeric (e : Expr) : MetaM Bool := do
-  if !usable e then return false
+  if !isResolved e then return false
   let type ← whnf (← inferType e)
   return type.isConstOf ``Nat || type.isConstOf ``Int
 
 private def bounds (arguments : Array Expr) : MetaM (Array Expr) :=
   arguments.filterM fun e => do
-    return usable e && (← whnf (← inferType e)).isConstOf ``Nat
+    return isResolved e && (← whnf (← inferType e)).isConstOf ``Nat
 
 private def replace (e source target : Expr) : Expr :=
   e.replace fun sub => if sub == source then some target else none
 
 private def listValue (e : Expr) : MetaM Bool := do
-  if !usable e then return false
+  if !isResolved e then return false
   let type ← whnf (← inferType e)
   return !type.hasFVar && type.isAppOfArity ``List 1
 
@@ -48,8 +35,8 @@ private partial def endpoints (e : Expr) (arguments : Array Expr)
   modify (· - 1)
   let e := e.consumeMData.headBeta
   let mut out := #[]
-  if e.hasFVar && (!dependsOn e arguments || arguments.contains e) &&
-      !(collectFVars {} e).fvarIds.any bound.contains && (← numeric e) then
+  if e.hasFVar && (!dependsOnArguments e arguments || arguments.contains e) &&
+      !(support e).any bound.contains && (← numeric e) then
     out := out.push e
   match e with
   | .forallE name type body bi | .lam name type body bi =>
@@ -74,7 +61,7 @@ def regionCandidates (properties arguments : Array Expr) (maxCandidates : Nat :=
   let mut families := #[]
   for property in properties.extract 0 24 do
     if families.size >= maxCandidates then break
-    if !usable property || !(← isProp property) then continue
+    if !isResolved property || !(← isProp property) then continue
     unless (property.find? Expr.isForall).isSome do continue
     let (sources, _) ← (endpoints property arguments).run 256
     let mut candidates := #[]
@@ -110,9 +97,9 @@ private partial def listInputs (e : Expr) (arguments : Array Expr)
   if (← get) == 0 then return #[]
   modify (· - 1)
   let e := e.consumeMData.headBeta
-  if !usable e then return #[]
+  if !isResolved e then return #[]
   if (e.isFVar || e.isAppOfArity ``Array.toList 2) &&
-      !dependsOn e arguments && (← listValue e) then return #[e]
+      !dependsOnArguments e arguments && (← listValue e) then return #[e]
   let mut out := #[]
   for arg in e.getAppArgs do
     if (← get) == 0 then break
@@ -134,10 +121,10 @@ def prefixCandidates (properties arguments : Array Expr) (maxCandidates : Nat :=
   let indices ← bounds arguments
   let mut out := #[]
   for property in properties.extract 0 24 do
-    unless usable property do continue
+    unless isResolved property do continue
     if let some (_, lhs, rhs) := property.eq? then
       for (observed, target) in #[(lhs, rhs), (rhs, lhs)] do
-        unless dependsOn observed arguments && !dependsOn target arguments do continue
+        unless dependsOnArguments observed arguments && !dependsOnArguments target arguments do continue
         let (inputs, _) ← (listInputs target arguments).run 128
         for input in inputs.extract 0 4 do
           for part in ← slices input indices (maxCandidates - out.size) do
@@ -149,16 +136,16 @@ def prefixCandidates (properties arguments : Array Expr) (maxCandidates : Nat :=
   let mut attempts := 128
   for property in properties.extract 0 24 do
     if inputs.size >= 4 || attempts == 0 then break
-    for id in (collectFVars {} property).fvarIds do
+    for id in (support property) do
       if inputs.size >= 4 || attempts == 0 then break
       attempts := attempts - 1
       let input := mkFVar id
-      if dependsOn input arguments || inputs.contains input then continue
+      if dependsOnArguments input arguments || inputs.contains input then continue
       let type ← whnf (← inferType input)
       if type.isAppOfArity ``Array 1 then inputs := inputs.push input
   for array in arguments do
     if attempts == 0 then return out
-    if !usable array then continue
+    if !isResolved array then continue
     attempts := attempts - 1
     let type ← whnf (← inferType array)
     unless type.isAppOfArity ``Array 1 do continue
@@ -180,7 +167,7 @@ private partial def relations (e : Expr) : StateT Nat MetaM (Array Expr) := do
   if (← get) == 0 then return #[]
   modify (· - 1)
   let e := e.consumeMData.headBeta
-  if !usable e then return #[]
+  if !isResolved e then return #[]
   if e.isAppOfArity ``List.Pairwise 3 || e.isAppOfArity ``List.Perm 3 then return #[e]
   let mut out := #[]
   for arg in e.getAppArgs do
@@ -201,7 +188,7 @@ def relationalCandidates (properties arguments : Array Expr) (maxCandidates : Na
     for relation in found do
       let args := relation.getAppArgs
       let list := args[2]!
-      if relation.isAppOfArity ``List.Pairwise 3 && dependsOn list arguments then
+      if relation.isAppOfArity ``List.Pairwise 3 && dependsOnArguments list arguments then
         for index in indices.extract 0 4 do
           for op in #[``List.take, ``List.drop] do
             if out.size >= maxCandidates || attempts == 0 then return out
@@ -210,7 +197,7 @@ def relationalCandidates (properties arguments : Array Expr) (maxCandidates : Na
             out ← add out (mkAppN relation.getAppFn (args.set! 2 part)) maxCandidates
       if relation.isAppOfArity ``List.Perm 3 then
         for (current, original) in #[(args[1]!, args[2]!), (args[2]!, args[1]!)] do
-          unless dependsOn current arguments && !dependsOn original arguments do continue
+          unless dependsOnArguments current arguments && !dependsOnArguments original arguments do continue
           let (inputs, _) ← (listInputs original arguments).run 128
           let mut variants := #[original]
           -- At most two source inputs are varied together, with a shared work budget.

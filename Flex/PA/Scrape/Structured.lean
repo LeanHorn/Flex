@@ -1,4 +1,5 @@
 import Flex.PA.Scrape.Indices
+import Flex.PA.Scrape.Core
 
 /-! Predicate-slot substitutions, scalar measures, and homogeneous-list observations. -/
 
@@ -6,14 +7,7 @@ open Lean Meta
 
 namespace PAScrape.Structured
 
-private def checked (candidate : Expr) : MetaM Bool := do
-  if candidate.hasMVar || candidate.hasLooseBVars then return false
-  try
-    check candidate
-    return ← isProp candidate
-  catch e =>
-    if e.isInterrupt || e.isMaxHeartbeat || e.isMaxRecDepth then throw e
-    return false
+open PAScrape.Internal (support dependsOnArguments isCandidate)
 
 private def numeric (type : Expr) : MetaM Bool := do
   let type ← whnf type
@@ -56,7 +50,7 @@ def endpointCandidates (properties arguments : Array Expr) (maxCandidates : Nat 
     let (variants, _) ← (endpointVariants property slots maxCandidates).run 256
     let mut candidates := #[]
     for candidate in variants do
-      if candidate != property && !candidates.contains candidate && (← checked candidate) then
+      if candidate != property && !candidates.contains candidate && (← isCandidate candidate) then
         candidates := candidates.push candidate
     unless candidates.isEmpty do families := families.push candidates
   let mut result := #[]
@@ -101,11 +95,11 @@ def affineCandidates (properties arguments : Array Expr) (maxCandidates : Nat :=
         if property == equation || property.hasMVar || property.hasLooseBVars then continue
         unless property.containsFVar input.fvarId! do continue
         let candidate := property.replaceFVar input replacement
-        if !out.contains candidate && (← checked candidate) then out := out.push candidate
+        if !out.contains candidate && (← isCandidate candidate) then out := out.push candidate
         if out.size >= maxCandidates then return out
       for (left, right) in #[(slot, endpoint), (endpoint, slot)] do
         let candidate ← mkAppM ``LE.le #[left, right]
-        if !out.contains candidate && (← checked candidate) then out := out.push candidate
+        if !out.contains candidate && (← isCandidate candidate) then out := out.push candidate
         if out.size >= maxCandidates then return out
   return out
 
@@ -120,15 +114,15 @@ def measureCandidates (properties arguments : Array Expr) (maxCandidates : Nat :
     let some (_, lhs, rhs) := property.eq? | continue
     for target in #[lhs, rhs] do
       unless target.isApp do continue
-      let support := (collectFVars {} target).fvarIds
-      if arguments.any (fun arg => (collectFVars {} arg).fvarIds.any support.contains) then continue
+      if dependsOnArguments target arguments then continue
+      let inputsSupport := support target
       let type ← whnf (← inferType target)
       if type.hasMVar || type.hasFVar || (← isProp target) || (← whnf type).isForall then continue
       -- Collection-valued observations use completion rather than whole-value preservation.
       unless type.isConstOf ``Nat || type.isConstOf ``Int || type.isConstOf ``Bool do continue
       let mut inputs := #[]
       let mut choices : Array (Array Expr) := #[]
-      for id in support.extract 0 8 do
+      for id in inputsSupport.extract 0 8 do
         let input := mkFVar id
         let inputType ← inferType input
         if inputType.hasMVar || inputType.hasFVar || (← isProp input) ||
@@ -158,7 +152,7 @@ def measureCandidates (properties arguments : Array Expr) (maxCandidates : Nat :
       for variant in variants do
         if variant == target then continue
         let candidate ← mkEq variant target
-        if !out.contains candidate && (← checked candidate) then out := out.push candidate
+        if !out.contains candidate && (← isCandidate candidate) then out := out.push candidate
         if out.size >= maxCandidates then return out
   return out
 
@@ -186,7 +180,7 @@ def slotCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 2
         if replacementType.hasMVar then continue
         unless ← isDefEq type replacementType do continue
         let candidate := mkAppN fn (args.set! i replacement)
-        if ← checked candidate then
+        if ← isCandidate candidate then
           unless bases.contains candidate do bases := bases.push candidate
           unless result.contains candidate do result := result.push candidate
           if result.size >= maxCandidates then return result
@@ -203,7 +197,7 @@ def slotCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 2
           if replacementType.hasMVar then continue
           unless ← isDefEq type replacementType do continue
           let candidate := mkAppN fn (args.set! i replacement)
-          if ← checked candidate then
+          if ← isCandidate candidate then
             unless result.contains candidate do result := result.push candidate
             if result.size >= maxCandidates then return result
   return result
@@ -239,7 +233,7 @@ private def compoundVariants (property : Expr) (arguments : Array Expr) (limit :
         if fuel == 0 then return bases.extract 0 limit
         fuel := fuel - 1
         let base := mkAppN fn (args.set! i slot)
-        if !bases.contains base && (← checked base) then bases := bases.push base
+        if !bases.contains base && (← isCandidate base) then bases := bases.push base
         if bases.size >= 4 then break
   if bases.isEmpty then
     if positions.isEmpty then return #[]
@@ -260,7 +254,7 @@ private def compoundVariants (property : Expr) (arguments : Array Expr) (limit :
         fuel := fuel - 1
         let changed := baseArgs.set! i slot
         let candidate := mkAppN fn changed
-        if !result.contains candidate && (← checked candidate) then result := result.push candidate
+        if !result.contains candidate && (← isCandidate candidate) then result := result.push candidate
         if result.size >= limit then return result.extract 0 limit
         for j in [:args.size] do
           if j == i || !(← numeric (← inferType args[j]!)) then continue
@@ -269,7 +263,7 @@ private def compoundVariants (property : Expr) (arguments : Array Expr) (limit :
             if fuel == 0 then return result.extract 0 limit
             fuel := fuel - 1
             let candidate := mkAppN fn (changed.set! j companion)
-            if !result.contains candidate && (← checked candidate) then result := result.push candidate
+            if !result.contains candidate && (← isCandidate candidate) then result := result.push candidate
             if result.size >= limit then return result.extract 0 limit
   return result.extract 0 limit
 
@@ -342,7 +336,7 @@ def listCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 2
       let candidate ← withLocalDeclD `element elementType fun element => do
         let member ← mkAppM ``Membership.mem #[list, element]
         mkForallFVars #[element] (← mkArrow member (← mkEq element item))
-      if ← checked candidate then
+      if ← isCandidate candidate then
         unless result.contains candidate do result := result.push candidate
         if result.size >= maxCandidates then return result
     unless matched do continue
@@ -353,7 +347,7 @@ def listCandidates (properties arguments : Array Expr) (maxCandidates : Nat := 2
         if initial == remaining then continue
         let difference ← mkAppM ``Int.sub #[initial, remaining]
         let candidate ← mkEq length difference
-        if ← checked candidate then
+        if ← isCandidate candidate then
           unless result.contains candidate do result := result.push candidate
           if result.size >= maxCandidates then return result
   return result
@@ -388,7 +382,7 @@ def listPrefixCandidates (properties arguments : Array Expr) (maxCandidates : Na
       let lhs ← mkAppM ``Int.ofNat #[← mkAppM ``List.length #[list]]
       let rhs ← mkAppM ``Int.ofNat #[← mkAppM ``List.length #[other]]
       let candidate ← mkEq lhs rhs
-      if ← checked candidate then result := result.push candidate
+      if ← isCandidate candidate then result := result.push candidate
       if result.size >= maxCandidates then return result
   for (list, elementType) in lists do
     for (type, item) in repeated do
@@ -402,7 +396,7 @@ def listPrefixCandidates (properties arguments : Array Expr) (maxCandidates : Na
           let value ← mkAppM ``GetElem?.getElem? #[list, index]
           let equality ← mkEq value (← mkAppM ``Option.some #[item])
           mkForallFVars #[index] (← mkArrow upper equality)
-        if ← checked candidate then
+        if ← isCandidate candidate then
           unless result.contains candidate do result := result.push candidate
           if result.size >= maxCandidates then return result
   return result

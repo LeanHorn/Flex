@@ -27,6 +27,7 @@ structure PAScrapeLimits where
   maxAnchoredCandidatesPerKappa : Nat := 64
   maxAnchoredAttempts : Nat := 256
   maxAnchoredNodes : Nat := 5000
+  maxFrameCandidatesPerKappa : Nat := 16
   /-- Optional broader search; extra candidates can increase certification cost. -/
   maxCompoundCandidatesPerKappa : Nat := 0
   maxEndpointCandidatesPerKappa : Nat := 16

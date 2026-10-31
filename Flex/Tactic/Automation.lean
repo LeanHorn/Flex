@@ -319,6 +319,8 @@ def proofOracle : Flex.CHC.ProofOracle := fun target => do
   if let some proof ← proveCompletedPrefix target then return some proof
   let quickLimit := min 500 (flex.automation.proofHeartbeats.get (← getOptions))
   if let some proof ← withOptions (·.set `flex.automation.proofHeartbeats quickLimit) <|
+      attempt (← `(tactic| grind only)) target (budgetLeaves := 1) then return some proof
+  if let some proof ← withOptions (·.set `flex.automation.proofHeartbeats quickLimit) <|
       attempt (← `(tactic| (run_tac exposeTarget) <;> intros <;> grind)) target
         (budgetLeaves := 1) then return some proof
   if target.isAppOfArity ``And 2 then
@@ -373,6 +375,16 @@ def synthOracle (checkBudget : TermElabM Unit := pure ()) : PASynthOracle := fun
   unless results.size == targets.size do
     throwError "PA synthesis oracle returned the wrong number of decisions"
   trace[flex.synthesis] "scalar SMT: {targets.size} queries, {(← IO.monoMsNow) - start}ms"
+  let pending := (Array.range results.size).filter fun i =>
+    match results[i]! with | .unknown _ => true | _ => false
+  if timeout != 0 && !pending.isEmpty then
+    let start ← IO.monoMsNow
+    let retry ← Flex.PA.observationSmtOracle (timeout * 1000) (pending.map (targets[·]!))
+    checkBudget
+    trace[flex.synthesis] "observation SMT: {pending.size} queries, \
+      {(retry.filter (· == .valid)).size} valid, {(← IO.monoMsNow) - start}ms"
+    for i in [:pending.size] do
+      if let .valid := retry[i]! then results := results.set! pending[i]! .valid
   let pending := (Array.range results.size).filter fun i =>
     match results[i]! with | .unknown _ => true | _ => false
   if timeout != 0 && !pending.isEmpty then

@@ -15,6 +15,7 @@ The schemas below propose candidates; PA validates their instances.
 | Numeric generalization | `v < 3` → `v ≤ 3`, `fun v b => v < b` | Guards |
 | Arithmetic guards | `k x y`, `0 ≤ x`, `y ≤ 3` → `x < 0 ∨ y ≤ 3` | Guards |
 | Source observations | `k a n → sorted a n` → `sorted a n` at the same slots | Observations |
+| Argument frames | `k xs xs` → equality between the two list slots | Observations |
 | Slot substitution | `sorted a n`, slot `i` → `sorted a i` | Structured |
 | Endpoint occurrence | `v = n * n`, slot `i` → `v = n * i` | Structured |
 | Affine transport | `i = n + 1`, `v = f n` → `v = f (i - 1)` | Structured |
@@ -119,6 +120,10 @@ private def collect (cfg : PAScrapeConfig) (body : Expr) : ScrapeM Unit := do
           maxAnchoredAttempts := (← get).anchoredAttempts + cfg.maxAnchoredAttempts
           maxAnchoredCandidatesPerKappa := cfg.maxAnchoredCandidatesPerKappa +
             cfg.maxCompoundCandidatesPerKappa + extraCap } (.source rule) body
+    if cfg.maxFrameCandidatesPerKappa > 0 then
+      frameClauses { cfg with
+        maxNodes := (← get).nodes + cfg.maxAnchoredNodes
+        maxAnchoredAttempts := (← get).anchoredAttempts + cfg.maxAnchoredAttempts } body
 
 /-- Interleave ordinary sources; observations fill the remaining slots. -/
 private def finish (cfg : PAScrapeConfig) (s : ScrapeState) : PAScrapeResult := Id.run do

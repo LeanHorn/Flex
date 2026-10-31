@@ -303,7 +303,11 @@ private def congruence (mappings : Array Mapping) (cfg : Config) : ClauseM (Arra
     cursor := cursor + 1
     let applications := (← get).applications
     for right in applications do
-      if left == right || left.getAppFn != right.getAppFn then continue
+      if left == right then continue
+      let lf := left.getAppFn
+      let rf := right.getAppFn
+      if lf != rf && !(lf.isFVar && rf.isFVar) then continue
+      unless ← isDefEq (← inferType lf) (← inferType rf) do continue
       if visited.contains (left, right) || visited.contains (right, left) then continue
       if visited.size >= cfg.maxCongruencePairs then
         throwError "CHC projection: congruence limit ({cfg.maxCongruencePairs}) exceeded"
@@ -312,6 +316,7 @@ private def congruence (mappings : Array Mapping) (cfg : Config) : ClauseM (Arra
       let bb := right.getAppArgs
       unless aa.size == bb.size do continue
       let mut premises := #[]
+      if lf != rf then premises := premises.push (← observedEquality lf rf mappings cfg)
       let mut compatible := true
       for a in aa, b in bb do
         if a == b then continue
@@ -340,6 +345,24 @@ private def congruence (mappings : Array Mapping) (cfg : Config) : ClauseM (Arra
           |>.push (implication (conj #[ij, ik]) jk)
           |>.push (implication (conj #[ik, jk]) ij)
   return facts
+
+/-- Share observations and congruence across related validity queries.
+Validity of the abstraction is sufficient; satisfiability need not transfer back. -/
+def projectQueries (assumptions conclusions : Array Expr) (cfg : Config := {})
+    : MetaM (Array Expr) := do
+  let (queries, state) ← (do
+    let assumptions ← assumptions.mapM (abstractTerm · #[] cfg)
+    let conclusions ← conclusions.mapM (abstractTerm · #[] cfg)
+    let facts ← congruence #[] cfg
+    return conclusions.map (implication (conj (facts ++ assumptions)) ·)).run {}
+  queries.mapM fun query => do
+    let mut result := query
+    for entry in state.variables.reverse do
+      result := .forallE `observation entry.type (result.abstract #[entry.value]) .default
+    if result.hasFVar || result.hasMVar || result.hasLooseBVars then
+      throwError "CHC projection: unresolved observation in validity query"
+    check result
+    return result
 
 private def projectClause (clause : Expr) (mappings : Array Mapping) (cfg : Config)
     : MetaM Expr :=

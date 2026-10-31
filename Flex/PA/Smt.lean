@@ -1,5 +1,5 @@
 import Flex.PA.Check
-import Flex.CHC.Export
+import Flex.CHC.Projection
 import Flex.CHC.Process
 import Smt
 import Mathlib.Tactic.Simproc.ExistsAndEq
@@ -46,10 +46,10 @@ private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch :=
   for declaration in (← getLCtx) do
     if ← isProp declaration.type then
       try
-        let assumption ← CHC.Prepare.atom (← zetaReduce (← instantiateMVars declaration.type)) true
+        let assumption ← zetaReduce (← instantiateMVars declaration.type)
         for id in (collectFVars {} assumption).fvarIds do
           discard <| CHC.Fragment.valueSort (← inferType (mkFVar id))
-        assumptions := assumptions.push assumption
+        assumptions := assumptions.push (← CHC.Prepare.atom assumption true)
       catch error =>
         if error.isInterrupt then throw error
         omittedAssumptions := true
@@ -439,5 +439,31 @@ def simplifiedSmtOracle (timeoutMs : Nat := 2000) : PASynthOracle :=
 /-- Normalize fixed function signatures and use CVC5's higher-order input syntax. -/
 def functionSmtOracle (timeoutMs : Nat := 2000) : PASynthOracle :=
   richSmtOracle timeoutMs true
+
+
+/-- Validate scalar observations and congruence without unfolding semantic predicates.
+Only validity transfers back; an abstract counterexample is inconclusive. -/
+def observationSmtOracle (timeoutMs : Nat := 2000) : PASynthOracle := fun queries => do
+  if queries.isEmpty then return #[]
+  withNewMCtxDepth do
+    let saved ← saveState
+    try
+      let projected ← withSharedPrefix queries (fun _ premises conclusions => do
+        let mut assumptions := premises
+        for decl in ← getLCtx do
+          if !decl.isImplementationDetail && (← isProp decl.type) then
+            let type ← instantiateMVars decl.type
+            unless assumptions.contains type do assumptions := assumptions.push type
+        CHC.Projection.projectQueries assumptions conclusions) (scalars := false)
+      let results ← smtOracle timeoutMs projected
+      return results.map fun result => match result with
+        | .valid => .valid
+        | _ => .unknown "observation abstraction inconclusive"
+    catch error =>
+      if error.isInterrupt then throw error
+      return unknowns queries.size (← error.toMessageData.toString)
+    finally
+      set saved.elab
+      CHC.restoreMetaState saved.meta
 
 end Flex.PA

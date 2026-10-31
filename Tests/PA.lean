@@ -1262,6 +1262,10 @@ run_elab do
   let queries ← stxs.mapM (fun stx => elabTerm stx none)
   synthesizeSyntheticMVarsNoPostponing
   let queries ← queries.mapM instantiateMVars
+  let opaqueResults ← Flex.PA.observationSmtOracle 2000 queries
+  unless opaqueResults.size == 3 && opaqueResults[0]! == .valid &&
+      opaqueResults[2]! == .valid && opaqueResults[1]! != .valid do
+    throwError "opaque function batch lost congruence or mixed assertions: {repr opaqueResults}"
   let results ← Flex.PA.functionSmtOracle 2000 queries
   unless results.size == 3 && results[0]! == .valid && results[2]! == .valid do
     throwError "function-valued batch lost a valid candidate: {repr results}"
@@ -1314,3 +1318,47 @@ example (xs : List (List Int)) (i : Int) (bound : xs.length ≤ i)
   flex_discharge
 
 end PAListPrefixTests
+
+namespace PAFrameTests
+open Lean Meta Elab Term Tactic
+
+run_elab do
+  let source ← elabTerm (← `(fun r : (Int → Int) → (Int → Int) → Int → Int → Prop =>
+    ∀ f : Int → Int, r f f 0 0)) none
+  synthesizeSyntheticMVarsNoPostponing
+  let source ← instantiateMVars source
+  let r ← mkFreshExprMVar (some source.bindingDomain!)
+  let body := source.bindingBody!.instantiate1 r
+  let frames (cfg : PAScrapeConfig) := do
+    return (← scrapePAQualifiersWithReport body cfg).anchored.filter
+      (·.origin == "argument frames")
+  let found ← frames { mode := .standard }
+  unless found.size == 1 && (found[0]?.map (·.slots)) == some [0, 1] do
+    throwError "frame scraping missed copied functions or proposed literal frames"
+  for q in found do
+    check q.qualifier
+    if q.qualifier.hasMVar || q.qualifier.hasFVar || q.qualifier.hasLooseBVars then
+      throwError "frame qualifier leaked a scraping binder"
+  unless (← frames { mode := .standard, maxFrameCandidatesPerKappa := 0 }).isEmpty &&
+      (← frames { mode := .standard, maxAnchoredAttempts := 0 }).isEmpty do
+    throwError "frame scraping ignored its limits"
+
+-- The safety property needs equality of the carried functions, not arithmetic qualifiers.
+example : ∃ k : (Int → Int) → (Int → Int) → Prop,
+    (∀ f, k f f) ∧ (∀ f g, k f g → k f g) ∧
+      (∀ f g, k f g → ∀ p : (Int → Int) → Prop, p f → p g) := by
+  fix (scrape := standard) (synth := grind only) (proof := grind only)
+
+-- A copied input is only a proposal: a later write invalidates the frame.
+run_elab do
+  let target ← elabTerm (← `(∃ k : (Int → Int) → (Int → Int) → Prop,
+    (∀ f, k f f) ∧ (∀ f g, k f g → k f (fun _ => 0)) ∧
+      (∀ f g, k f g → f = g))) none
+  synthesizeSyntheticMVarsNoPostponing
+  let root ← mkFreshExprMVar (some (← instantiateMVars target)) (kind := .syntheticOpaque)
+  let remaining ← Tactic.run root.mvarId! do
+    evalTactic (← `(tactic| fail_if_success
+      fix (scrape := standard) (synth := grind only) (proof := grind only)))
+  unless remaining == [root.mvarId!] && !(← root.mvarId!.isAssigned) do
+    throwError "rejected frame modified the original goal"
+end PAFrameTests

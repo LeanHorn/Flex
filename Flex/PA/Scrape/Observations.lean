@@ -188,6 +188,40 @@ private def normalizeOffsets (property : Expr) : MetaM Expr := do
   let context ← Simp.mkContext { maxSteps := 1000, failIfUnchanged := false } #[lemmas]
   return (← Meta.simp property context).1.expr
 
+/-- Repeated inputs suggest frame equalities; PA must check that later transitions preserve them. -/
+partial def frameClauses (cfg : PAScrapeConfig) (raw : Expr) (depth : Nat := 0)
+    : ScrapeM Unit := do
+  unless ← visit cfg depth do return
+  if (← get).anchoredAttempts >= cfg.maxAnchoredAttempts then return
+  let e := raw.consumeMData.headBeta
+  if let .letE _ _ value body _ := e then
+    frameClauses cfg (body.instantiate1 value) (depth + 1)
+  else if let .forallE name type body bi := e then
+    frameClauses cfg type (depth + 1)
+    withLocalDecl name bi type fun x => frameClauses cfg (body.instantiate1 x) (depth + 1)
+  else if let .mvar kvar := e.getAppFn then
+    unless ← isProp e do return
+    let args := e.getAppArgs
+    for i in [:args.size] do
+      let arg := args[i]!
+      unless arg.hasFVar && isResolved arg do continue
+      for j in [i + 1:args.size] do
+        let frames := (← get).anchored.filter fun q => q.kvar == kvar && q.origin == "argument frames"
+        if frames.size >= cfg.maxFrameCandidatesPerKappa then return
+        if frames.any (·.slots == [i, j]) then continue
+        if (← get).anchoredAttempts >= cfg.maxAnchoredAttempts then return
+        modify fun s => { s with anchoredAttempts := s.anchoredAttempts + 1 }
+        unless arg == args[j]! do continue
+        let type ← instantiateMVars (← inferType arg)
+        if type.hasFVar || !isResolved type then continue
+        if (← whnf type).isSort || (← isProp type) then continue
+        let qualifier ← withLocalDeclsDND #[(`x, type), (`y, type)] fun xs => do
+          mkLambdaFVars xs (← mkEq xs[0]! xs[1]!)
+        modify fun s => { s with
+          anchored := s.anchored.push ⟨kvar, qualifier, [i, j], "argument frames"⟩ }
+  else
+    for arg in e.getAppArgs do frameClauses cfg arg (depth + 1)
+
 /-- Alias equations propose candidates only; PA still checks every resulting predicate. -/
 private def anchoredObservation (cfg : PAScrapeConfig) (property relation : Expr)
     (equalities : Array Expr) : ScrapeM Unit := do

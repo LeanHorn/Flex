@@ -81,11 +81,11 @@ private def runFix
   -- Peeling existentials changes the goal's local context.
   withMainContext do
     let bodyGoal ← getMainGoal
-    -- Scrape before `reduce` erases surface predicates and unfolds definitions.
+    -- Scrape the original surface predicates before exposing constraint wrappers.
     let rawBody ← bodyGoal.getType
     let scraped : PAScrapeResult ←
       if scrape.mode != .no || !scrape.defs.isEmpty then do
-        let result ← scrapePAQualifiersWithReport rawBody scrape
+        let result ← benchFixPhase "scrape" <| scrapePAQualifiersWithReport rawBody scrape
         if flex.reportQualifiers.get (← getOptions) then
           reportScrapedQualifiers result
         unless result.limitsHit.isEmpty do
@@ -93,13 +93,18 @@ private def runFix
         pure result
       else pure {}
     let extraQualifiers := scraped.qualifiers
-    let body ← reduce rawBody
+    -- Expose constraint wrappers, keeping κ-free semantic predicates intact.
+    let body ← Meta.transform rawBody (pre := fun e => do
+      if !e.hasExprMVar then return .done e
+      if e.getAppFn.isMVar then return .continue
+      let exposed ← whnf e
+      return if exposed == e then .continue else .visit exposed)
 
-    let (elimVars, _) ← (exprPartitionKVars body).run kctx
+    let (elimVars, _) ← benchFixPhase "partition" <| (exprPartitionKVars body).run kctx
     unless elimVars.isEmpty do
       logWarning m!"fix: {elimVars.length} non-cut κ(s) present \
         ({elimVars.map (·.name)}) — run `zap` first. Treating all κ as cut."
-    let flatCs  ← (exprFlat body).run kctx
+    let flatCs  ← (exprFlat body pure).run kctx
     let candidateLimit := if scrape.mode == .no && scrape.defs.isEmpty then none
       else some scrape.maxCandidatesPerKappa
     let instanceLimit := candidateLimit.map fun _ => scrape.maxInstancesPerKappa
@@ -108,7 +113,8 @@ private def runFix
     let ordinaryCount := extraQualifiers.size - scraped.observationCount
     let qualifiers := extraQualifiers.extract 0 ordinaryCount ++ standardQualifiers ++
       extraQualifiers.extract ordinaryCount extraQualifiers.size
-    let initial ← buildInitialAssignment kvarsInOrder qualifiers candidateLimit instanceLimit scraped.anchored
+    let initial ← benchFixPhase "candidates" <|
+      buildInitialAssignment kvarsInOrder qualifiers candidateLimit instanceLimit scraped.anchored
     observe (.setup extraQualifiers.size standardQualifiers.size (← getQualifiers).size
       (initial.toArray.map fun (κ, cs) => (κ.name, cs.length)))
     let aStar ← benchFixPhase "synthesis" <|

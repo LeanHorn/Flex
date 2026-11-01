@@ -21,7 +21,9 @@ from chc_parity import ROOT, binary_info, capture, digest, lean_setup, terminate
 from rq1_corpus import inventory, snapshot_suite, summarize, imports
 
 
-VARIANTS = ("zap_fix_deep", "zap_solver")
+DEFAULT_VARIANTS = ("zap_fix_deep", "zap_solver")
+SOLVER_VARIANTS = ("zap_solver", "zap_spacer", "zap_eldarica")
+VARIANTS = (*DEFAULT_VARIANTS, "zap_spacer", "zap_eldarica")
 
 
 def now() -> str:
@@ -87,10 +89,10 @@ def synthesis_counts(record: dict) -> dict:
     fix = committed("fix") if checked else None
     candidates = [p for p in phases if p.get("phase") in {"spacer_candidate", "eldarica_candidate"}
                   and p.get("status") == "imported"]
-    solver = (max(0, record["initial_predicates"] - record["remaining_predicates"] - zap)
-              if checked and record["variant"] == "zap_solver" else 0 if checked else None)
     retained = record.get("retained_solver", "")
     chosen = [p for p in candidates if p["phase"] == retained + "_candidate"]
+    solver = (committed(retained) if checked and record["variant"] in SOLVER_VARIANTS
+              and retained in {"spacer", "eldarica"} and chosen else 0 if checked else None)
     heads_certified = ((record.get("status") == "proved" or
                         all(p.get("head_certification_complete") is True for p in chosen))
                        if checked and chosen else None)
@@ -98,6 +100,8 @@ def synthesis_counts(record: dict) -> dict:
     instantiated = bool(checked and record.get("remaining_predicates") == 0)
     eliminated = bool(checked and record.get("remaining_predicates") == 0 and
                        ((solver or 0) == 0 or heads_certified))
+    full_proof = bool(checked and record.get("status") == "proved")
+    adequacy = ("valid" if full_proof else "unknown") if solver else "not_applicable"
     outcome = ("unmeasured" if not checked else "heads_eliminated" if eliminated else
                "instantiated" if instantiated else "partial_instantiation" if progress else "no_instantiation")
     return {"synthesis_outcome": outcome, "zap_eliminated": zap, "fix_instantiated": fix,
@@ -105,6 +109,10 @@ def synthesis_counts(record: dict) -> dict:
             "solver_heads_certified": heads_certified,
             "solver_imported": sum(p.get("witnesses", 0) for p in candidates),
             "solver_candidate_attempts": len(candidates),
+            "solver_instantiation_complete": bool(solver and instantiated),
+            "solver_elimination_complete": bool(solver and eliminated),
+            "solver_adequacy": adequacy,
+            "solver_full_proof": bool(solver and full_proof),
             "synthesis_progress": progress, "instantiation_complete": instantiated,
             "elimination_complete": eliminated}
 
@@ -190,12 +198,52 @@ def run_case(case: dict, variant: str, args: argparse.Namespace, lean: str,
                   process_wall_ms=wall, startup_ms=None if first_event is None else
                   round((first_event - started) * 1000), artifacts=str(directory),
                   process_exit_code=process.returncode, censored=timed_out)
+    post_zap = directory / variant / "zap-goals.txt"
+    record["post_zap_goal_text_sha256"] = digest(post_zap) if post_zap.exists() else None
+    canonical = directory / variant / "post-zap-expressions.txt"
+    record["post_zap_checkpoint_kind"] = "canonical_expr" if canonical.exists() else "goal_text"
+    record["post_zap_sha256"] = digest(canonical) if canonical.exists() else record["post_zap_goal_text_sha256"]
     record.update(synthesis_counts(record))
     write_json(directory / "record.json", record)
     return record
 
 
-def summarize_results(output: Path, rows: list[dict], selected: list[dict]) -> None:
+def paired_post_zap(rows: list[dict], selected: list[dict], variants: list[str]) -> dict:
+    """Check both backends received matching recorded goals and Zap outcomes."""
+    if not {"zap_spacer", "zap_eldarica"}.issubset(variants):
+        return {"enabled": False}
+    pairs = []
+    for case in selected:
+        records = {variant: [r for r in rows if r["case"] == case["id"] and r["variant"] == variant]
+                   for variant in ("zap_spacer", "zap_eldarica")}
+        status = "matched"
+        if any(len(rs) > 1 for rs in records.values()):
+            status = "duplicate_results"
+        elif any(not rs for rs in records.values()):
+            status = "pending"
+        else:
+            left, right = (rs[0] for rs in records.values())
+            def preparation(record: dict) -> list:
+                return [(p.get("status"), p.get("predicates_before"), p.get("predicates_after"))
+                        for p in record.get("phases", [])
+                        if p.get("phase") == "zap" and p.get("status") != "running"]
+            if not left.get("post_zap_sha256") or not right.get("post_zap_sha256"):
+                status = "missing_checkpoint"
+            elif (left["post_zap_sha256"] != right["post_zap_sha256"] or
+                  left.get("post_zap_checkpoint_kind") != right.get("post_zap_checkpoint_kind") or
+                  not left.get("source_sha256") or left["source_sha256"] != right.get("source_sha256") or
+                  not preparation(left) or preparation(left) != preparation(right)):
+                status = "mismatch"
+        pairs.append({"case": case["id"], "status": status})
+    return {"enabled": True, "valid": all(p["status"] == "matched" for p in pairs),
+            "matched": sum(p["status"] == "matched" for p in pairs),
+            "total": len(pairs), "cases": pairs,
+            "method": "SHA256 of canonical closed post-Zap expressions (goal-text fallback), source hashes and Zap outcomes; "
+                      "both backends use this run's identical preparation and budget configuration."}
+
+
+def summarize_results(output: Path, rows: list[dict], selected: list[dict],
+                      variants: list[str] | None = None) -> dict:
     by_variant = {}
     for variant in sorted({r["variant"] for r in rows}):
         records = [r for r in rows if r["variant"] == variant]
@@ -208,11 +256,22 @@ def summarize_results(output: Path, rows: list[dict], selected: list[dict]) -> N
                                "vcs_with_fix_witnesses": sum((r.get("fix_instantiated") or 0) > 0 for r in records),
                                "vcs_with_solver_candidates": sum((r.get("solver_imported") or 0) > 0 for r in records),
                                "vcs_with_solver_heads_certified": sum(r.get("solver_heads_certified") is True for r in records),
+                               "vcs_with_solver_instantiation_complete": sum(r.get("solver_instantiation_complete", False) for r in records),
+                               "vcs_with_solver_elimination_complete": sum(r.get("solver_elimination_complete", False) for r in records),
+                               "solver_adequacy": dict(Counter(r.get("solver_adequacy", "unmeasured") for r in records)),
+                               "vcs_with_solver_full_proof": sum(r.get("solver_full_proof", False) for r in records),
+                               "solver_failure_stages": dict(Counter(
+                                   p.get("stage", "unreported") for r in records for p in r.get("phases", [])
+                                   if p.get("phase") in {"spacer_candidate", "eldarica_candidate"}
+                                   and p.get("status") == "failed")),
                                "cyclic_outcomes": dict(Counter(r["status"] for r in records
                                                                if r["classification"] != "acyclic_only")),
                                "by_suite": {s: dict(Counter(r["status"] for r in records if r["suite"] == s))
                                             for s in sorted({r["suite"] for r in records})}}
+    paired = paired_post_zap(rows, selected, variants or sorted(by_variant))
+    write_json(output / "paired-inputs.json", paired)
     write_json(output / "summary.json", {"selected_vcs": len(selected), "variants": by_variant,
+               "paired_post_zap": paired,
                "vcs_with_checked_synthesis_progress": len({r["case"] for r in rows if r.get("synthesis_progress")}),
                "vcs_with_instantiation_complete": len({r["case"] for r in rows if r.get("instantiation_complete")}),
                "vcs_with_elimination_complete": len({r["case"] for r in rows if r.get("elimination_complete")}),
@@ -222,13 +281,16 @@ def summarize_results(output: Path, rows: list[dict], selected: list[dict]) -> N
     fields = ["case", "suite", "classification", "variant", "synthesis_outcome", "status", "source_predicates",
               "initial_predicates", "remaining_predicates", "zap_eliminated", "fix_instantiated",
               "solver_imported", "solver_instantiated", "solver_heads_certified", "synthesis_progress",
+              "solver_instantiation_complete", "solver_elimination_complete", "solver_adequacy", "solver_full_proof",
               "instantiation_complete", "elimination_complete", "kernel_checked",
               "remaining_goals", "elapsed_ms", "heartbeats",
-              "process_wall_ms", "startup_ms", "censored", "error", "artifacts"]
+              "process_wall_ms", "startup_ms", "censored", "post_zap_checkpoint_kind", "post_zap_sha256",
+              "post_zap_goal_text_sha256", "error", "artifacts"]
     with (output / "results.csv").open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+    return paired
 
 
 def main() -> None:
@@ -236,7 +298,7 @@ def main() -> None:
     parser.add_argument("--source", type=Path, default=ROOT.parent / "flex-benchmarks")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cases", nargs="+", help="exact suite/Name IDs; default all predicate VCs")
-    parser.add_argument("--variants", nargs="+", choices=VARIANTS, default=list(VARIANTS))
+    parser.add_argument("--variants", nargs="+", choices=VARIANTS, default=list(DEFAULT_VARIANTS))
     parser.add_argument("--inventory-only", action="store_true")
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--discharge", action="store_true", help="also attempt residual VC proof (off by default)")
@@ -408,13 +470,17 @@ def main() -> None:
         results.append(record)
         with (args.output / "results.jsonl").open("a") as handle:
             handle.write(json.dumps(record) + "\n")
-        summarize_results(args.output, results, selected)
+        paired = summarize_results(args.output, results, selected, args.variants)
         print(f"{len(results)}/{len(jobs)} {case['id']} {variant}: {record['status']}", flush=True)
+    paired = paired_post_zap(results, selected, args.variants)
     metadata.update(complete=True, finished_at=now(), completed_runs=len(results),
-                    source_unchanged=hashes == source_hashes())
+                    source_unchanged=hashes == source_hashes(), paired_post_zap=paired)
     write_json(args.output / "metadata.json", metadata)
     checkpoint(args.output, {"stage": "complete", "completed": len(results), "total": len(jobs),
-                             "source_unchanged": metadata["source_unchanged"]})
+                             "source_unchanged": metadata["source_unchanged"],
+                             "paired_inputs_valid": paired.get("valid")})
+    if paired.get("enabled") and not paired["valid"]:
+        raise RuntimeError("post-Zap inputs are not matched for every backend pair; see paired-inputs.json")
     if previous is not None:
         comparison = {}
         for variant in args.variants:

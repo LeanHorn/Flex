@@ -49,17 +49,9 @@ private def checkRelations (problem : ExportedProblem) : MetaM Unit := do
         requireClosed relation.kvar.paramTypes[i]! s!"parameter metadata of '{relation.symbol}'"
         unless ← isDefEq type relation.kvar.paramTypes[i]! do
           throwError "CHC witnesses: inconsistent parameter metadata for '{relation.symbol}'"
-      let arguments ← match relation.arguments with
-        | none => pure parameters
-        | some projections => projections.mapM fun projection => do
-          requireClosed projection s!"argument projection of '{relation.symbol}'"
-          checkWithKernel projection
-          let application := mkAppN projection parameters
-          check application
-          return application.headBeta
-      unless arguments.size == relation.argumentSorts.size do
-        throwError "CHC witnesses: inconsistent projected arity for '{relation.symbol}'"
-      for argument in arguments, sort in relation.argumentSorts do
+      unless parameters.size == relation.argumentSorts.size do
+        throwError "CHC witnesses: inconsistent arity for '{relation.symbol}'"
+      for argument in parameters, sort in relation.argumentSorts do
         unless (← Fragment.valueSort (← inferType argument)) == sort do
           throwError "CHC witnesses: inconsistent SMT sort metadata for '{relation.symbol}'"
 
@@ -101,10 +93,7 @@ private def adapt (relation : Relation) (definition : Smt2Lean.ReconstructedDefi
   unless ← isDefEq definition.type (importedType relation) do
     throwError "CHC witnesses: model signature does not match '{relation.symbol}'"
   let value ← forallTelescopeReducing relation.leanType fun parameters _ => do
-    let arguments : Array Expr := match relation.arguments with
-      | none => parameters
-      | some projections => projections.map (fun projection => projection.beta parameters)
-    let arguments ← arguments.mapM fun parameter => do
+    let arguments ← parameters.mapM fun parameter => do
       if (← whnf (← inferType parameter)).isConstOf ``Bool then
         mkEq parameter (mkConst ``Bool.true)
       else

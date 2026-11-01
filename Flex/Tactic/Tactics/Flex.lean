@@ -41,7 +41,7 @@ structure Config where
   solverHeartbeats : Nat := 500000
   dischargeHeartbeats : Nat := 500000
   paTimeout : Nat := 60
-  solverTimeout : Nat := 60
+  solverTimeout : Nat := 30
   /-- Cooperative overall deadline; zero disables it. -/
   totalTimeout : Nat := 180
   scrapeLimits : PAScrapeLimits := {}
@@ -50,7 +50,6 @@ structure Setup where
   config : Config := {}
   backends : List Backend := Backend.all
   scrape : PAScrapeConfig := { mode := .deep }
-  facts : Flex.CHC.Facts.Config := {}
   synth : Option (TSyntax `tactic) := none
   proof : Option (TSyntax `tactic) := none
   closer : Option (TSyntax `tactic) := none
@@ -279,19 +278,108 @@ private structure Candidate where
   validated : Bool
   remainingHeads : Option Nat
 
+private inductive PASearch where
+  | full | sources | functions
+  deriving BEq
+
+private def runPA (ctx : Context) (scrape : PAScrapeConfig)
+    (allowUnprovedHeads : Bool) (search : PASearch := .full) : TacticM Candidate := do
+  let directSources := search != .full
+  let report ← IO.mkRef ({} : PACertificationReport)
+  let decision : PASynthOracle := fun queries => do
+    let options ← getOptions
+    let limit := min (if search == .sources then 5000 else 2000)
+      (flex.automation.proofHeartbeats.get options)
+    withOptions (fun opts => if directSources then
+        opts.set `flex.automation.proofHeartbeats limit else opts) <|
+      synthOracle ctx queries
+  let scrape := if search == .functions then
+      { scrape with
+        maxCompoundCandidatesPerKappa := max 24 scrape.maxCompoundCandidatesPerKappa
+        pointwiseFrames := true } else scrape
+  withOptions (fun opts =>
+      let opts := if search == .sources && !opts.contains `flex.automation.equationHeartbeats then
+        opts.set `flex.automation.equationHeartbeats (5000 : Nat) else opts
+      if search == .functions then opts.setBool `flex.automation.sourcePredicates true else opts) <|
+    fixImpl proveLeaf scrape (some (proofOracle ctx))
+      (synthOracle := some decision) (allowUnprovedHeads := allowUnprovedHeads)
+      (onCertification := fun result => report.set result) (directSources := directSources)
+  let report ← report.get
+  return {
+    backend := .fix
+    validated := report.allValidated
+    remainingHeads := some report.remainingHeads }
+
+/-- Prefer source instances when unrestricted slot permutations exceed the search budget. -/
+private partial def largeTemplateSearch (type : Expr) (limits : PAScrapeLimits) : MetaM Bool := do
+  let type ← whnf type
+  unless type.isAppOfArity ``Exists 2 do return false
+  let domain := type.getArg! 0
+  let arity ← forallTelescopeReducing domain fun parameters _ => pure parameters.size
+  let permutations := (List.range (min arity limits.maxParams)).foldl
+    (fun count index => count * (arity - index)) 1
+  if permutations > limits.maxInstancesPerKappa then return true
+  withLocalDeclD `κ domain fun κ =>
+    largeTemplateSearch (type.appArg!.beta #[κ]) limits
+
+private def hasCompoundObservations (type : Expr) : MetaM Bool := do
+  let found ← IO.mkRef false
+  discard <| Meta.transform type (pre := fun e => do
+    if (← found.get) then return .done e
+    let .const name _ := e.getAppFn | return .continue
+    unless (← getConstInfo name) matches .defnInfo _ do return .continue
+    unless ← isProp e do return .continue
+    for arg in e.getAppArgs do
+      if !arg.hasFVar || arg.isFVar || arg.isProj then continue
+      if let .const name _ := arg.getAppFn then
+        if (← getProjectionFnInfo? name).isSome then continue
+      if (← whnf (← inferType arg)).isForall then found.set true
+    return .continue)
+  found.get
+
 private def runBackend (ctx : Context) (backend : Backend) : TacticM Candidate := do
   match backend with
   | .fix =>
-    let report ← IO.mkRef ({} : PACertificationReport)
     let now ← IO.monoMsNow
     let deadline := now + ctx.setup.config.paTimeout * 1000
     let paCtx := if ctx.setup.config.paTimeout == 0 then ctx else
       { ctx with deadline := some (ctx.deadline.map (min deadline) |>.getD deadline) }
-    fixImpl proveLeaf ctx.setup.scrape (some (proofOracle paCtx))
-      (synthOracle := some (synthOracle paCtx)) (allowUnprovedHeads := true)
-      (onCertification := fun result => report.set result)
-    let report ← report.get
-    return { backend, validated := report.allValidated, remainingHeads := some report.remainingHeads }
+    -- Try source instances before enumerating templates. A failed attempt rolls back;
+    -- only certified heads and validated safety clauses can commit the smaller pool.
+    if (ctx.setup.scrape.mode == .standard || ctx.setup.scrape.mode == .deep) &&
+        ctx.setup.scrape.maxCandidatesPerKappa > 0 &&
+        (← withMainContext do largeTemplateSearch (← getMainTarget) ctx.setup.scrape.toPAScrapeLimits) then
+      let seconds := if ctx.setup.config.paTimeout == 0 then 20 else
+        min 20 (max 1 (ctx.setup.config.paTimeout / 3))
+      let deadline := now + seconds * 1000
+      let sourceCtx := { paCtx with
+        setup := { ctx.setup with config := { ctx.setup.config with heartbeats := 0 } }
+        deadline := some (paCtx.deadline.map (min deadline) |>.getD deadline) }
+      let budget := if ctx.setup.config.paHeartbeats == 0 then 500000 else
+        max 1 (ctx.setup.config.paHeartbeats / 3)
+      let budget ← if (← getMaxHeartbeats) == 0 then pure budget else do
+        pure (min budget (max 1 ((← getRemainingHeartbeats) / 3000)))
+      let result ← phase sourceCtx "fix source candidates" budget <|
+        runPA sourceCtx { ctx.setup.scrape with maxCandidatesPerKappa := 0 } false
+      if let .ok candidate := result then
+        trace[flex] "fix: source candidates certified"
+        return candidate
+    if ctx.setup.scrape.mode == .deep && ctx.setup.scrape.maxStatefulCandidatesPerKappa > 0 &&
+        (← withMainContext do Flex.Automation.Equations.hasStatefulRecursion (← getMainTarget)) then
+      let result ← guarded <| runPA paCtx
+        { ctx.setup.scrape with maxCandidatesPerKappa := 0 } true .sources
+      if let .ok candidate := result then
+        trace[flex] "fix: stateful source candidates validated"
+        return candidate
+      if let .error message := result then trace[flex] "fix stateful sources: {message}"
+    if ctx.setup.scrape.mode == .deep && ctx.setup.scrape.maxCandidatesPerKappa > 0 &&
+        (← withMainContext do hasCompoundObservations (← getMainTarget)) then
+      let result ← guarded <| runPA paCtx ctx.setup.scrape true .functions
+      if let .ok candidate := result then
+        trace[flex] "fix: direct source candidates validated"
+        return candidate
+      if let .error message := result then trace[flex] "fix direct sources: {message}"
+    runPA paCtx ctx.setup.scrape true
   | .spacer | .eldarica =>
     let name := if backend == .spacer then flex.spacer.executable else flex.eldarica.executable
     let mut timeout := ctx.setup.config.solverTimeout * 1000
@@ -302,7 +390,7 @@ private def runBackend (ctx : Context) (backend : Backend) : TacticM Candidate :
     let result ← Flex.CHC.solveGoal (← getMainGoal) {
       backend := if backend == .spacer then .spacer else .eldarica
       executable := some (name.get (← getOptions))
-      timeoutMs := timeout } (proofOracle ctx) (headsOnly := true) (facts := ctx.setup.facts)
+      timeoutMs := timeout } (proofOracle ctx) (headsOnly := true)
     let report ← match result with
       | .failed failure => throwError "{failure.message}"
       | .solved report | .partial report => pure report
@@ -357,6 +445,8 @@ private def solveKGoal (ctx : Context) (goal : MVarId) : TacticM Unit := do
       let candidate := { candidate with validated := valid }
       if (← best.get).all (fun (previous, _) => better candidate previous) then
         best.set (some (candidate, ← Tactic.saveState))
+      -- Inference is finished; the remaining work is an ordinary proof obligation.
+      if candidate.validated && candidate.remainingHeads == some 0 then break
     return false
   let completed ← tryCatchRuntimeEx search fun error => do
     if error.isInterrupt then
@@ -493,12 +583,12 @@ syntax "eldarica" : flexBackend
 
 /-- Preprocess, eliminate predicates, and discharge what can be proved.
 Deep scraping is the default. Unproved obligations remain as one structured VC.
+For large template searches, Fix tries source instances before the full qualifier pool.
 `proof` customizes certification; `closer` customizes residual proof search.
 `config` controls preparation, nesting, phases, budgets, and optional reporting. -/
 syntax "flex" (atomic("(" &"backends" ":=") "[" flexBackend,* "]" ")")?
   (atomic("(" &"scrape" ":=") ident ")")?
   (atomic("(" &"defs" ":=") "[" ident,* "]" ")")?
-  (atomic("(" &"lemmas" ":=") "[" ident,* "]" ")")?
   (atomic("(" &"synth" ":=") tacticSeq ")")?
   (atomic("(" &"proof" ":=") tacticSeq ")")?
   (atomic("(" &"closer" ":=") tacticSeq ")")?
@@ -506,7 +596,7 @@ syntax "flex" (atomic("(" &"backends" ":=") "[" flexBackend,* "]" ")")?
 
 elab_rules : tactic
   | `(tactic| flex $[(backends := [$backends:flexBackend,*])]? $[(scrape := $mode:ident)]?
-      $[(defs := [$defs:ident,*])]? $[(lemmas := [$lemmas:ident,*])]?
+      $[(defs := [$defs:ident,*])]?
       $[(synth := $synth:tacticSeq)]? $[(proof := $proof:tacticSeq)]?
       $[(closer := $closer:tacticSeq)]? $[(config := $config:term)]?) => do
     let backends ← match backends with
@@ -519,7 +609,6 @@ elab_rules : tactic
     let resolve (names : Array Ident) : TacticM (Array Name) :=
       names.mapM fun name => realizeGlobalConstNoOverloadWithInfo name
     let defs ← resolve (defs.map (·.getElems) |>.getD #[])
-    let lemmas ← resolve (lemmas.map (·.getElems) |>.getD #[])
     let config ← match config with
       | none => pure ({} : Flex.Portfolio.Config)
       | some value => do
@@ -531,5 +620,4 @@ elab_rules : tactic
     Flex.Portfolio.flexImpl {
       config, backends
       scrape := { config.scrapeLimits with mode, defs }
-      facts := { lemmas, defs }
       synth := ← tactic synth, proof := ← tactic proof, closer := ← tactic closer }

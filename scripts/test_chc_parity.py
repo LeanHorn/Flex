@@ -14,6 +14,142 @@ from chc_parity import case_source, deadline_cleanup, inventory, result_row, ret
 
 
 class ParityAccounting(unittest.TestCase):
+    def test_cumulative_milestones_survive_later_timeout(self):
+        record = {"case": "x", "backend": "spacer", "inventory_status": "translated",
+                  "status": "case_timeout", "wall_ms": 1, "error": "", "events": [
+                      {"stage": "import", "status": "ok", "witnesses": 3,
+                       "defaulted_witnesses": 1},
+                      {"stage": "certificate", "status": "ok", "proved_heads": 5,
+                       "remaining_heads": 0},
+                      {"stage": "heads_kernel", "status": "ok"},
+                      {"stage": "heads", "status": "eliminated"},
+                      {"stage": "discharge", "status": "running"}]}
+        row = result_row(record)
+        self.assertTrue(row["invariants_obtained"])
+        self.assertTrue(row["heads_eliminated"])
+        self.assertTrue(row["heads_checkpoint_eliminated"])
+        self.assertFalse(row["fully_proved"])
+        self.assertEqual(row["witnesses"], 3)
+        record["events"][1]["remaining_heads"] = None
+        record["events"][3]["status"] = "unknown"
+        self.assertFalse(result_row(record)["heads_eliminated"])
+        record["events"][3]["status"] = "eliminated"
+        record["events"][2]["status"] = "error"
+        self.assertFalse(result_row(record)["heads_eliminated"])
+
+    def test_full_proof_implies_heads_eliminated_and_requires_import(self):
+        record = {"case": "x", "backend": "spacer", "inventory_status": "translated",
+                  "status": "proved", "wall_ms": 1, "error": "", "events": [
+                      {"stage": "import", "status": "ok"},
+                      {"stage": "heads", "status": "remaining"},
+                      {"stage": "kernel", "status": "ok"}]}
+        row = result_row(record)
+        self.assertTrue(row["fully_proved"])
+        self.assertTrue(row["heads_eliminated"])
+        self.assertFalse(row["heads_checkpoint_eliminated"])
+        record["events"][0]["status"] = "error"
+        row = result_row(record)
+        self.assertFalse(row["fully_proved"])
+        self.assertFalse(row["heads_eliminated"])
+
+    def test_union_deduplicates_tasks_and_keeps_source_counts_separate(self):
+        cases = [{"case": name, "suite": "suite", "inventory_status": "translated",
+                  "source_sha256": "same-content"} for name in ("x", "y")]
+        records = []
+        for case, backend, proved in [("x", "spacer", False), ("x", "eldarica", True),
+                                      ("y", "spacer", True)]:
+            records.append({"case": case, "backend": backend,
+                            "inventory_status": "translated", "wall_ms": 1, "error": "",
+                            "status": "proved" if proved else "case_timeout", "events": [
+                                {"stage": "import", "status": "ok", "witnesses": 2,
+                                 "defaulted_witnesses": 0},
+                                {"stage": "kernel", "status": "ok" if proved else "running"}]})
+        summary = summarize(cases, cases, records, ["spacer", "eldarica"])
+        union = summary["either_backend"]
+        self.assertEqual(union["invariants_obtained"], 2)
+        self.assertEqual(union["heads_eliminated"], 2)
+        self.assertEqual(union["fully_proved"], 2)
+        self.assertEqual(union["imported_predicate_slots"], 4)
+        self.assertEqual(union["solver_synthesized_predicate_slots"], 4)
+        self.assertEqual(union["distinct_sources"], 1)
+        self.assertEqual(union["distinct_sources_by_milestone"]["fully_proved"], 1)
+        self.assertEqual(summary["suites"]["suite"]["either_backend"], union)
+
+    def test_predicate_counts_exclude_defaulted_and_select_one_backend_bundle(self):
+        case = {"case": "x", "suite": "suite", "inventory_status": "translated"}
+        records = []
+        for backend, defaults, proved in [("spacer", 1, True), ("eldarica", 0, False)]:
+            records.append({**case, "backend": backend, "wall_ms": 1, "error": "",
+                            "status": "proved" if proved else "partial", "events": [
+                                {"stage": "import", "status": "ok", "witnesses": 3,
+                                 "defaulted_witnesses": defaults},
+                                {"stage": "kernel", "status": "ok"}]})
+        summary = summarize([case], [case], records, ["spacer", "eldarica"])
+        union = summary["either_backend"]
+        self.assertEqual(union["imported_predicate_slots"], 3)
+        self.assertEqual(union["solver_synthesized_predicate_slots"], 3)
+        self.assertEqual(union["predicate_slots_by_milestone"]["fully_proved"], {
+            "imported": 3, "solver_synthesized": 2, "defaulted": 1,
+            "bundles_with_unknown_defaults": 0})
+
+    def test_portfolio_does_not_combine_different_backends_evidence(self):
+        record = {"case": "x", "backend": "portfolio", "inventory_status": "translated",
+                  "status": "proved", "wall_ms": 1, "error": "", "events": [
+                      {"stage": "import", "status": "ok", "backend": "spacer"},
+                      {"stage": "result", "status": "partial", "backend": "spacer"},
+                      {"stage": "kernel", "status": "ok", "backend": "eldarica"},
+                      {"stage": "result", "status": "proved", "backend": "eldarica"},
+                      {"stage": "result", "status": "proved", "backend": "portfolio",
+                       "fully_proved": True}]}
+        row = result_row(record)
+        self.assertTrue(row["invariants_obtained"])
+        self.assertFalse(row["heads_eliminated"])
+        self.assertFalse(row["fully_proved"])
+        self.assertEqual(row["attempted_backends"], "spacer;eldarica")
+        self.assertEqual(row["native_status"], "")
+
+    def test_portfolio_keeps_checked_heads_after_fallback_timeout(self):
+        case = {"case": "x", "suite": "s", "inventory_status": "translated",
+                "source_sha256": "hash"}
+        record = {**case, "backend": "portfolio", "status": "case_timeout",
+                  "wall_ms": 1, "error": "", "events": [
+                      {"stage": "export", "status": "ok", "backend": "portfolio",
+                       "relations": 3},
+                      {"stage": "import", "status": "ok", "backend": "spacer",
+                       "witnesses": 3, "defaulted_witnesses": 1},
+                      {"stage": "heads_kernel", "status": "ok", "backend": "spacer"},
+                      {"stage": "heads", "status": "eliminated", "backend": "spacer"},
+                      {"stage": "result", "status": "partial", "backend": "spacer"},
+                      {"stage": "import", "status": "ok", "backend": "eldarica",
+                       "witnesses": 3, "defaulted_witnesses": 0},
+                      {"stage": "heads_kernel", "status": "running", "backend": "eldarica"}]}
+        row = result_row(record)
+        self.assertTrue(row["heads_eliminated"])
+        self.assertFalse(row["fully_proved"])
+        self.assertEqual(row["selected_backend"], "spacer")
+        summary = summarize([case], [case], [record], ["portfolio"])
+        self.assertEqual(summary["expected_runs"], 1)
+        counts = summary["backends"]["portfolio"]["predicate_slots_by_milestone"]
+        self.assertEqual(counts["invariants_obtained"]["solver_synthesized"], 3)
+        self.assertEqual(counts["heads_eliminated"]["solver_synthesized"], 2)
+        self.assertEqual(summary["either_backend"]["heads_eliminated"], 1)
+        self.assertEqual(summary["suites"]["s"]["backends"]["portfolio"]["heads_eliminated"], 1)
+
+    def test_portfolio_full_proof_requires_same_attempt_kernel_check(self):
+        record = {"case": "x", "backend": "portfolio", "inventory_status": "translated",
+                  "status": "proved", "wall_ms": 1, "error": "", "events": [
+                      {"stage": "import", "status": "ok", "backend": "spacer"},
+                      {"stage": "kernel", "status": "ok", "backend": "spacer"},
+                      {"stage": "result", "status": "proved", "backend": "spacer"},
+                      {"stage": "result", "status": "proved", "backend": "portfolio"}]}
+        row = result_row(record)
+        self.assertTrue(row["fully_proved"])
+        self.assertTrue(row["heads_eliminated"])
+        self.assertEqual(row["selected_backend"], "spacer")
+        self.assertEqual(row["attempted_backends"], "spacer")
+        record["events"][1]["status"] = "error"
+        self.assertFalse(result_row(record)["fully_proved"])
+
     def test_retry_excludes_proofs_and_unsat_across_both_backends(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "results.csv"

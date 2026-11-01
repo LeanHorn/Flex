@@ -17,6 +17,7 @@ import Flex.Tactic
 import Flex.PA
 
 -- Sound Verification Condition Generation for Imp
+import Flex.VCG.Imp
 import Flex.VCG.While.Types
 import Flex.VCG.While.Semantics
 

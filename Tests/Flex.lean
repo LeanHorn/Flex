@@ -14,6 +14,19 @@ example : ∃ k : Int → Prop,
     k 0 ∧ (∀ i, k i → k (i + 1)) ∧ (∀ i, k i → 0 ≤ i) := by
   flex (backends := [fix]) (config := { report := true })
 
+-- Plain `flex` discovers function frames without a candidate-pool override.
+example : ∃ k : (Int → Int) → (Int → Int) → Prop,
+    (∀ f, k f f) ∧ (∀ f g, k f g → k f g) ∧
+      (∀ f g, k f g → ∀ p : (Int → Int) → Prop, p f → p g) := by
+  flex
+
+-- An insufficient source pool must roll back before trying ordinary qualifiers.
+example : ∃ k : Int → Int → Int → Int → Prop,
+    k 0 0 0 0 ∧
+      (∀ a b c d, k a b c d → k (a + 1) (b + 1) (c + 1) (d + 1)) ∧
+      (∀ a b c d, k a b c d → 0 ≤ a) := by
+  flex (backends := [fix]) (config := {scrapeLimits := {maxInstancesPerKappa := 20}})
+
 private partial def countExists : Expr → Nat
   | e@(.app f a) => (if e.isAppOfArity ``Exists 2 then 1 else 0) + countExists f + countExists a
   | .lam _ domain body _ | .forallE _ domain body _ => countExists domain + countExists body
@@ -133,3 +146,26 @@ run_elab do
   finally Flex.CHC.restoreTermState saved
 
 end FlexTests
+
+namespace StatefulFoldTests
+
+-- The completion invariant and the unregistered helper equation must be discovered.
+def step (s x : Int) := s + 2 * x
+
+def consume (s : Int) : List Int → Int
+  | [] => s
+  | x :: xs => consume (step s x) xs
+
+example : ∃ k : List Int → Int → List Int → Int → Prop,
+    (∀ xs s, k xs s xs s) ∧
+    (∀ x xs s original start, k (x :: xs) s original start →
+      k xs (step s x) original start) ∧
+    (∀ rest s original start, k rest s original start → rest = [] → s = consume start original) := by
+  flex
+
+-- Proposition-valued state can be copied and preserved like other data.
+example : ∃ k : Prop → Prop → Prop,
+    (∀ p, k p p) ∧ (∀ p q, k p q → k p q) ∧ (∀ p q, k p q → p = q) := by
+  flex
+
+end StatefulFoldTests

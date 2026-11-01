@@ -140,6 +140,10 @@ run_elab do
     throwError "accepted missing responses from a completed solver"
   if (Flex.PA.decodeSmtResponses { completion := .exited 1, stdout := "unsat\n" } 1).isOk then
     throwError "accepted responses from a failed solver"
+  let answers := Flex.PA.decodeSmtResponses {
+    completion := .exited 0, stdout := "unsat\nunknown (INCOMPLETE)\nunsat\n" } 3
+  unless answers.toOption == some #[.valid, .unknown "solver returned unknown", .valid] do
+    throwError "an annotated unknown discarded other CVC5 answers"
 
 end PABatchTests
 
@@ -150,6 +154,22 @@ open Lean Meta Elab Term
 private structure Buffer where
   values : Int → Int
   bound : Int
+
+private def originates (old current : Int → Int) (lo hi : Int) : Prop :=
+  ∀ i, lo ≤ i → i ≤ hi → ∃ j, lo ≤ j ∧ j ≤ hi ∧ current i = old j
+
+set_option flex.automation.sourcePredicates true in
+run_elab do
+  let q ← elabTermAndSynthesize (← `(∀ f : Int → Int, ∀ lo hi : Int,
+    originates f f lo hi)) none
+  let unfolded ← Flex.PA.unfoldSourcePredicates q
+  unless ← isDefEq q unfolded do throwError "source unfolding changed the proposition"
+  unless (← Flex.PA.simplifiedSmtOracle 2000 #[q]) == #[.valid] do
+    throwError "SMT could not use a nonrecursive source predicate"
+  let unsupported ← elabTermAndSynthesize (← `(∀ f g : Int → Int, f = g)) none
+  let results ← Flex.PA.simplifiedSmtOracle 2000 #[unsupported, q]
+  unless results[1]! == .valid && results[0]! != .valid do
+    throwError "a function-valued query contaminated an independent valid query"
 
 run_elab do
   let terms ← #[← `(∀ b : Buffer, 0 ≤ b.bound → 0 ≤ b.bound + 1),
@@ -923,6 +943,331 @@ run_elab do
           q.slots == candidate.slots && q.qualifier == candidate.qualifier) do
         throwError "compound pass displaced an ordinary anchor"
 
+-- Shared checks allow caller locals but reject unresolved or ill-typed candidates.
+open PAScrape.Internal in
+run_elab do
+  withLocalDeclD `x (mkConst ``Int) fun x => do
+    let property ← mkEq x (mkIntLit 0)
+    unless ← isCandidate property do throwError "rejected a scoped candidate"
+    let compound ← mkAppM ``Int.add #[x, mkIntLit 1]
+    unless dependsOnArguments property #[compound] &&
+        !containsArgument property #[compound] && containsArgument compound #[compound] do
+      throwError "confused variable dependence with exact argument occurrence"
+    let caller ← mkFreshExprMVar (some (mkConst ``Int))
+    for bad in #[← mkEq caller x, mkBVar 0, mkNatLit 0,
+        mkApp (mkConst ``Nat.succ) (mkConst ``True)] do
+      if ← isCandidate bad then throwError "accepted an unresolved or ill-typed candidate"
+    if ← caller.mvarId!.isAssigned then throwError "candidate check assigned caller metavariable"
+  let callerType ← mkFreshExprMVar (some (mkSort (.succ .zero)))
+  withLocalDeclD `pending callerType fun pending => do
+    -- Build directly so candidate validation is the first possible unification.
+    let property := mkApp3 (mkConst ``Eq [.succ .zero]) (mkConst ``Int) pending (mkIntLit 0)
+    if ← isCandidate property then throwError "accepted a candidate with an unresolved local type"
+    if ← callerType.mvarId!.isAssigned then throwError "candidate check assigned caller's local type"
+  if ← predicateApplication (mkFVar ⟨`outside_context⟩) then
+    throwError "accepted a non-application predicate"
+
+-- Endpoint substitutions change one occurrence; bounds may capture caller locals.
+run_elab do
+  let source ← elabTermAndSynthesize (← `(fun (n i p : Int) => p = n * n)) none
+  lambdaTelescope source fun xs property => do
+    let args := #[xs[1]!, xs[2]!]
+    let candidates ← PAScrape.Structured.endpointCandidates #[property] args
+    for operands in #[#[xs[0]!, xs[1]!], #[xs[1]!, xs[0]!]] do
+      let expected ← mkEq xs[2]! (← mkAppM ``HMul.hMul operands)
+      unless ← candidates.anyM (fun q => do isDefEq expected q) do
+        throwError "missing single-occurrence endpoint"
+    let both ← mkEq xs[2]! (← mkAppM ``HMul.hMul #[xs[1]!, xs[1]!])
+    if ← candidates.anyM (fun q => do isDefEq both q) then
+      throwError "endpoint changed both occurrences"
+    unless (← PAScrape.Structured.endpointCandidates #[property] args 0).isEmpty &&
+        (← PAScrape.Structured.endpointCandidates #[property] args 1) == candidates.extract 0 1 do
+      throwError "endpoint cap changed candidate priority"
+    let caller ← mkFreshExprMVar (some (mkConst ``Int))
+    discard <| PAScrape.Structured.endpointCandidates #[property] (args.push caller)
+    if ← caller.mvarId!.isAssigned then throwError "endpoint assigned caller metavariable"
+  withLocalDeclD `n (mkConst ``Nat) fun n =>
+    withLocalDeclD `i (mkConst ``Nat) fun i => do
+      let q ← mkLambdaFVars #[i] (← mkAppM ``LT.lt #[i, n])
+      let expected ← mkLambdaFVars #[i] (← mkAppM ``LE.le #[i, n])
+      unless ← (← PAScrape.deepScrapeVariants q).anyM (fun q => do isDefEq expected q) do
+        throwError "captured endpoint prevented bound weakening"
+
+-- Conservation candidates combine remaining work with the accumulator.
+run_elab do
+  for (source, expected) in #[
+      (← `(fun (input remaining output : List Int) => output = input.reverse),
+       ← `(fun (input remaining output : List Int) => remaining.reverse ++ output = input.reverse)),
+      (← `(fun (input remaining : List Int) (total : Int) => total = input.sum),
+       ← `(fun (input remaining : List Int) (total : Int) => total + remaining.sum = input.sum))] do
+    let source ← elabTermAndSynthesize source none
+    let expected ← elabTermAndSynthesize expected none
+    lambdaTelescope source fun xs property => do
+      let args := xs.extract 1 xs.size
+      let candidates ← PAScrape.Accumulate.candidates #[property] args
+      let expected := (mkAppN expected xs).headBeta
+      unless ← candidates.anyM (fun q => do isDefEq expected q) do
+        throwError "missing accumulator relationship"
+      unless (← PAScrape.Accumulate.candidates #[property] args 0).isEmpty &&
+          (← PAScrape.Accumulate.candidates #[property] args 1) == candidates.extract 0 1 do
+        throwError "accumulator cap changed candidate priority"
+      for candidate in candidates do
+        check candidate
+        if candidate.hasMVar || candidate.hasLooseBVars then throwError "unclosed accumulator"
+        unless (collectFVars {} candidate).fvarIds.all (fun id => xs.contains (mkFVar id)) do
+          throwError "accumulator binder escaped"
+      let caller ← mkFreshExprMVar (some (← inferType xs[1]!))
+      unless (← PAScrape.Accumulate.candidates #[property] #[caller, xs[2]!]).isEmpty do
+        throwError "accumulator accepted unresolved remaining work"
+      if ← caller.mvarId!.isAssigned then throwError "accumulator assigned caller metavariable"
+
+private abbrev SourceGenerator := Array Expr → Array Expr → Nat → MetaM (Array Expr)
+
+private def checkSourceRule (generator : SourceGenerator)
+    (source expected : TSyntax `term) (slots : Array Nat) (wideSlots : Bool := false)
+    : TermElabM Unit := do
+  let source ← elabTermAndSynthesize source none
+  let expected ← elabTermAndSynthesize expected none
+  lambdaTelescope source fun xs body => do
+    let properties := if let some (left, right) := body.and? then #[left, right] else #[body]
+    let args := slots.map (xs[·]!)
+    let candidates ← generator properties args 16
+    unless ← candidates.anyM (fun q => isDefEq q (expected.beta xs)) do
+      throwError "missing source candidate {expected.beta xs}"
+    unless (← generator properties args 0).isEmpty &&
+        (← generator properties args 1) == candidates.extract 0 1 do
+      throwError "source cap changed candidate priority"
+    if wideSlots then
+      let ignored := mkFVar ⟨`outside_context⟩
+      let wide := args ++ Array.replicate (16 - args.size) args[0]! ++ Array.replicate 10000 ignored
+      unless (← generator properties wide 1).size ≤ 1 do throwError "wide source cap ignored"
+    for candidate in candidates do
+      check candidate
+      if candidate.hasMVar || candidate.hasLooseBVars ||
+          !(collectFVars {} candidate).fvarIds.all (fun id => xs.contains (mkFVar id)) then
+        throwError "source candidate escaped its scope"
+    let caller ← mkFreshExprMVar (some (← inferType args[0]!))
+    discard <| generator properties (args.push caller) 1
+    if ← caller.mvarId!.isAssigned then throwError "source rule assigned caller metavariable"
+
+-- The same bounded guard composition applies to scalar measures and quantified regions.
+private def checkGuardReuse (generator : SourceGenerator)
+    (source expected : TSyntax `term) (slots : Array Nat) : TermElabM Unit := do
+  let source ← elabTermAndSynthesize source none
+  let expected ← elabTermAndSynthesize expected none
+  lambdaTelescope source fun xs property => do
+    let args := slots.map (xs[·]!)
+    let pending ← generator #[property] args 16
+    let guards ← PAScrape.Internal.controlGuards args
+    let compose := PAScrape.Internal.guardStateCandidates guards property pending
+    let (candidates, _) ← compose #[] 64 64
+    unless ← candidates.anyM (fun q => isDefEq q (expected.beta xs)) do
+      throwError "missing guarded source candidate"
+    for candidate in candidates do
+      check candidate
+      let closed ← mkLambdaFVars xs candidate
+      if closed.hasFVar || closed.hasMVar || closed.hasLooseBVars then
+        throwError "guarded source candidate escaped its scope"
+    let (capped, capFuel) ← compose #[] 64 1
+    let (attempted, attemptFuel) ← compose #[] 1 64
+    unless capped == candidates.extract 0 1 && capFuel == 63 &&
+        attempted == candidates.extract 0 2 && attempted.size == 2 && attemptFuel == 0 do
+      throwError "guard composition confused accepted formulas with attempts"
+    let (duplicates, duplicateFuel) ← compose candidates 1 64
+    unless duplicates == candidates && duplicateFuel == 0 do
+      throwError "duplicate guards changed candidates or avoided the attempt budget"
+    let caller ← mkFreshExprMVar (some (mkSort .zero))
+    let noisyGuards ← PAScrape.Internal.controlGuards (args.push caller)
+    let (noisy, _) ← PAScrape.Internal.guardStateCandidates noisyGuards property
+      (pending ++ pending.push caller) #[] 128 64
+    unless noisy == candidates do throwError "duplicate or unresolved pending candidate leaked"
+    if ← caller.mvarId!.isAssigned then throwError "guard composition assigned a caller metavariable"
+
+run_elab do
+  checkGuardReuse @PAScrape.Structured.measureCandidates
+    (← `(fun (f : Nat → Nat) (input current total : Nat) (active : Bool) =>
+      total = f input))
+    (← `(fun (f : Nat → Nat) (input current total : Nat) (active : Bool) =>
+      active = true → f current = f input)) #[2,3,4]
+  checkGuardReuse @PAScrape.Regions.regionCandidates
+    (← `(fun (a : Int → Int) (bound current : Int) (active : Option Nat) =>
+      ∀ i : Int, 0 ≤ i → i < bound → a i ≤ 7))
+    (← `(fun (a : Int → Int) (bound current : Int) (active : Option Nat) =>
+      active.isSome = true → ∀ i : Int, 0 ≤ i → i < current → a i ≤ 7)) #[2,3]
+
+private def checkSourceOrder (generator : SourceGenerator)
+    (source expected : TSyntax `term) (slots : Array Nat) : TermElabM Unit := do
+  let source ← elabTermAndSynthesize source none
+  let expected ← elabTermAndSynthesize expected none
+  lambdaTelescope source fun xs property => do
+    let args := slots.map (xs[·]!)
+    let candidates ← generator #[property] args 16
+    let mut remaining := expected.beta xs
+    let mut ordered := #[]
+    while let some (head, tail) := remaining.and? do
+      ordered := ordered.push head
+      remaining := tail
+    ordered := ordered.push remaining
+    unless candidates.size == ordered.size do throwError "source candidate count changed"
+    for i in [:ordered.size] do
+      unless ← isDefEq candidates[i]! ordered[i]! do
+        throwError "source candidate order changed at {i}: {candidates[i]!}"
+    for cap in #[0, 1, 3, ordered.size - 1, ordered.size + 1] do
+      unless (← generator #[property] args cap) == candidates.extract 0 cap do
+        throwError "source cap changed candidate order"
+    unless (← generator #[property, property] args 16) == candidates do
+      throwError "duplicate source changed candidate order"
+
+-- General function parameters keep ordering tests independent of source definitions.
+run_elab do
+  checkSourceOrder @PAScrape.Accumulate.algebraCandidates
+    (← `(fun (f : Nat → Int → Int) (a : Nat) (b : Int) (x : Nat) (y acc : Int) => acc = f a b))
+    (← `(fun (f : Nat → Int → Int) (a : Nat) (b : Int) (x : Nat) (y acc : Int) =>
+      acc * f x y = f a b ∧ acc + f x y = f a b ∧
+      f x y * acc = f a b ∧ f x y + acc = f a b ∧
+      acc * f x b = f a b ∧ f x b * acc = f a b ∧
+      acc * f a y = f a b ∧ f a y * acc = f a b)) #[3,4,5]
+  checkSourceOrder @PAScrape.Accumulate.fragmentCandidates
+    (← `(fun (f : List Nat → List Int) (input rest : List Nat) (fragment acc : List Int) =>
+      acc = f input))
+    (← `(fun (f : List Nat → List Int) (input rest : List Nat) (fragment acc : List Int) =>
+      acc ++ (fragment ++ f rest) = f input ∧
+      acc ++ (f rest ++ fragment) = f input ∧
+      fragment ++ (f rest ++ acc) = f input ∧
+      f rest ++ (fragment ++ acc) = f input)) #[2,3,4]
+  checkSourceOrder @PAScrape.Accumulate.guardedCandidates
+    (← `(fun (f : List Nat → List Int) (input rest : List Nat) (acc : List Int)
+        (active : Option Nat) => acc = f input))
+    (← `(fun (f : List Nat → List Int) (input rest : List Nat) (acc : List Int)
+        (active : Option Nat) =>
+      (active.isSome = true → acc ++ f rest = f input) ∧
+      (active.isSome = false → acc = f input) ∧
+      (active.isSome = false → acc ++ f rest = f input) ∧
+      (active.isSome = true → acc = f input) ∧
+      (active.isSome = true → f rest ++ acc = f input) ∧
+      (active.isSome = false → f rest ++ acc = f input))) #[2,3,4]
+  checkSourceOrder @PAScrape.Accumulate.worklistCandidates
+    (← `(fun (f : Nat → Bool) (input : Nat) (todo : List Nat) (acc : Bool) => acc = f input))
+    (← `(fun (f : Nat → Bool) (input : Nat) (todo : List Nat) (acc : Bool) =>
+      (acc && todo.any f) = f input ∧ (acc || todo.any f) = f input ∧
+      (todo.any f && acc) = f input ∧ (todo.any f || acc) = f input ∧
+      (acc && todo.all f) = f input ∧ (acc || todo.all f) = f input ∧
+      (todo.all f && acc) = f input ∧ (todo.all f || acc) = f input)) #[2,3]
+
+-- Equality varies each input independently; permutation also combines their prefixes.
+run_elab do
+  checkSourceOrder @PAScrape.Regions.prefixCandidates
+    (← `(fun (f : List Int → List Int → List Int) (left right out : List Int) (i j : Nat) =>
+      out = f left right))
+    (← `(fun (f : List Int → List Int → List Int) (left right out : List Int) (i j : Nat) =>
+      out = f (left.take i) right ∧ out = f (left.take j) right ∧
+      out = f left (right.take i) ∧ out = f left (right.take j))) #[3,4,5]
+  checkSourceOrder @PAScrape.Regions.relationalCandidates
+    (← `(fun (f : List Int → List Int → List Int) (left right out : List Int) (i j : Nat) =>
+      out.Perm (f left right)))
+    (← `(fun (f : List Int → List Int → List Int) (left right out : List Int) (i j : Nat) =>
+      out.Perm (f (left.take i) right) ∧ out.Perm (f (left.take j) right) ∧
+      out.Perm (f (left.take i) (right.take i)) ∧ out.Perm (f (left.take i) (right.take j)) ∧
+      out.Perm (f (left.take j) (right.take i)) ∧ out.Perm (f (left.take j) (right.take j)))) #[3,4,5]
+  checkSourceOrder @PAScrape.Regions.relationalCandidates
+    (← `(fun (a : Array Int) (i j : Nat) (z : Int) => a.toList.Pairwise (· ≤ ·)))
+    (← `(fun (a : Array Int) (i j : Nat) (z : Int) =>
+      (a.toList.take i).Pairwise (· ≤ ·) ∧ (a.toList.drop i).Pairwise (· ≤ ·) ∧
+      (a.toList.take j).Pairwise (· ≤ ·) ∧ (a.toList.drop j).Pairwise (· ≤ ·))) #[0,1,2,3]
+
+-- Array frames use Nat lower bounds; ordered function arrays use nonnegative Int prefixes.
+run_elab do
+  checkSourceOrder @PAScrape.Regions.prefixCandidates
+    (← `(fun (original current : Array Int) (i : Nat) (z : Int) => current = original))
+    (← `(fun (original current : Array Int) (i : Nat) (z : Int) =>
+      ∀ j : Nat, i ≤ j → current[j]? = original[j]?)) #[1,2,3]
+  checkSourceOrder @PAScrape.Structured.prefixCandidates
+    (← `(fun (a : Int → Int) (bound : Int) (n : Nat) => ∀ j : Int, a j ≤ a (j + 1)))
+    (← `(fun (a : Int → Int) (bound : Int) (n : Nat) =>
+      (∀ j : Int, 0 ≤ j → j < bound → a j < bound) ∧
+      (∀ j : Int, 0 ≤ j → j < bound → a j ≤ bound) ∧
+      (∀ j : Int, 0 ≤ j → j < bound → a j < j) ∧
+      (∀ j : Int, 0 ≤ j → j < bound → a j ≤ j) ∧
+      (∀ j : Int, 0 ≤ j → j < bound → a j < 0) ∧
+      (∀ j : Int, 0 ≤ j → j < bound → a j ≤ 0) ∧
+      (∀ j : Int, 0 ≤ j → j < bound → a j = j))) #[0,1,2]
+
+-- A full cap must stop both typed-slot loops before inspecting later arguments.
+run_elab do
+  let source ← elabTermAndSynthesize
+    (← `(fun (a b : Int → Int) (lo hi : Int) => region a lo lo lo lo)) none
+  lambdaTelescope source fun xs property => do
+    let ignored := mkFVar ⟨`outside_context⟩
+    for (args, expectedArgs) in #[
+        (#[xs[0]!, xs[1]!, ignored], #[xs[1]!, xs[2]!, xs[2]!, xs[2]!, xs[2]!]),
+        (#[xs[2]!, xs[3]!, ignored], #[xs[0]!, xs[3]!, xs[2]!, xs[2]!, xs[2]!])] do
+      unless (← PAScrape.Structured.slotCandidates #[property] args 0).isEmpty do
+        throwError "disabled slot scraping inspected arguments"
+      let candidates ← PAScrape.Structured.slotCandidates #[property] args 1
+      unless candidates == #[mkAppN (mkConst ``region) expectedArgs] do
+        throwError "slot cap changed priority or inspected unused arguments"
+
+run_elab do
+  checkSourceRule @PAScrape.Accumulate.algebraCandidates
+    (← `(fun (input rest : List Int) (p : Int → Bool) (result : Bool) => result = input.all p))
+    (← `(fun (input rest : List Int) (p : Int → Bool) (result : Bool) =>
+      (result && rest.all p) = input.all p)) #[1,3]
+  checkSourceRule @PAScrape.Accumulate.algebraCandidates
+    (← `(fun (left right xs ys out : List Int) (f : Int → Int → Int) => out = List.zipWith f left right))
+    (← `(fun (left right xs ys out : List Int) (f : Int → Int → Int) =>
+      out ++ List.zipWith f xs ys = List.zipWith f left right)) #[2,3,4]
+  checkSourceRule @PAScrape.Structured.affineCandidates
+    (← `(fun (n i acc : Nat) => i = n + 1 ∧ acc = ((List.range n).map (· + 1)).prod))
+    (← `(fun (n i acc : Nat) => acc = ((List.range (i - 1)).map (· + 1)).prod)) #[1,2]
+  checkSourceRule @PAScrape.Structured.measureCandidates
+    (← `(fun (f : Nat → Nat → Nat) (a b x y : Nat) => x = f a b))
+    (← `(fun (f : Nat → Nat → Nat) (a b x y : Nat) => f x y = f a b)) #[3,4]
+  checkSourceRule @PAScrape.Accumulate.guardedCandidates
+    (← `(fun (input rest out : List Int) (p : Int → Bool) (active : Bool) => out = input.takeWhile p))
+    (← `(fun (input rest out : List Int) (p : Int → Bool) (active : Bool) =>
+      active = true → out ++ rest.takeWhile p = input.takeWhile p)) #[1,2,4]
+  checkSourceRule @PAScrape.Accumulate.guardedCandidates
+    (← `(fun (input rest out : List Int) (p : Int → Bool) (active : Bool) => out = input.takeWhile p))
+    (← `(fun (input rest out : List Int) (p : Int → Bool) (active : Bool) =>
+      active = false → out = input.takeWhile p)) #[1,2,4]
+  checkSourceRule @PAScrape.Accumulate.fragmentCandidates
+    (← `(fun (input rest : List (List Int)) (current out : List Int) => out = input.flatten))
+    (← `(fun (input rest : List (List Int)) (current out : List Int) =>
+      out ++ (current ++ rest.flatten) = input.flatten)) #[1,2,3]
+  checkSourceRule @PAScrape.Regions.regionCandidates
+    (← `(fun (original a : Array Int) (lo hi i : Nat) (v : Int) =>
+      ∀ j, a[j]? = if lo ≤ j ∧ j < hi then some v else original[j]?))
+    (← `(fun (original a : Array Int) (lo hi i : Nat) (v : Int) =>
+      ∀ j, a[j]? = if lo ≤ j ∧ j < i then some v else original[j]?)) #[1,4] true
+  checkSourceRule @PAScrape.Regions.regionCandidates
+    (← `(fun (input : Array Int) (i : Nat) => ∀ j (h : j < input.size), input[j] ≥ 0))
+    (← `(fun (input : Array Int) (i : Nat) =>
+      ∀ j, j < i → ∀ h : j < input.size, input[j] ≥ 0)) #[1]
+  checkSourceRule @PAScrape.Regions.prefixCandidates
+    (← `(fun (original : Array Int) (i : Nat) (total : Int) => total = original.toList.sum))
+    (← `(fun (original : Array Int) (i : Nat) (total : Int) =>
+      total = (original.toList.take i).sum)) #[1,2]
+  checkSourceRule @PAScrape.Regions.relationalCandidates
+    (← `(fun (a : Array Int) (i : Nat) => a.toList.Pairwise (· ≤ ·)))
+    (← `(fun (a : Array Int) (i : Nat) => (a.toList.take i).Pairwise (· ≤ ·))) #[0,1]
+  checkSourceRule @PAScrape.Regions.relationalCandidates
+    (← `(fun (left right out : List Int) (i j : Nat) => out.Perm (left ++ right)))
+    (← `(fun (left right out : List Int) (i j : Nat) =>
+      out.Perm (left.take i ++ right.take j))) #[2,3,4]
+  checkSourceRule @PAScrape.Accumulate.worklistCandidates
+    (← `(fun (f : Nat → Nat) (input : Nat) (todo : List Nat) (acc : Nat) => acc = f input))
+    (← `(fun (f : Nat → Nat) (input : Nat) (todo : List Nat) (acc : Nat) =>
+      acc + (todo.map f).sum = f input)) #[2,3]
+
+run_elab do
+  let target ← elabTermAndSynthesize (← `(∀ (f : Nat → Int) (i : Nat) (total : Int),
+    total = ((List.range i).map f).sum →
+    total + f i = ((List.range (i + 1)).map f).sum)) none
+  let some tactic ← Flex.Automation.Equations.tactic? target
+    | throwError "missing relevant fold equations"
+  unless (← Flex.Automation.proveWith tactic target).isSome do
+    throwError "could not certify the generic fold step"
+
 end PAStructuredTests
 
 namespace PAFunctionBatchTests
@@ -937,6 +1282,10 @@ run_elab do
   let queries ← stxs.mapM (fun stx => elabTerm stx none)
   synthesizeSyntheticMVarsNoPostponing
   let queries ← queries.mapM instantiateMVars
+  let opaqueResults ← Flex.PA.observationSmtOracle 2000 queries
+  unless opaqueResults.size == 3 && opaqueResults[0]! == .valid &&
+      opaqueResults[2]! == .valid && opaqueResults[1]! != .valid do
+    throwError "opaque function batch lost congruence or mixed assertions: {repr opaqueResults}"
   let results ← Flex.PA.functionSmtOracle 2000 queries
   unless results.size == 3 && results[0]! == .valid && results[2]! == .valid do
     throwError "function-valued batch lost a valid candidate: {repr results}"
@@ -989,3 +1338,79 @@ example (xs : List (List Int)) (i : Int) (bound : xs.length ≤ i)
   flex_discharge
 
 end PAListPrefixTests
+
+namespace PAFrameTests
+open Lean Meta Elab Term Tactic
+
+-- Whole-function equality is not inductive here; equality at the untouched index is.
+example : ∃ k : (Int → Int) → (Int → Int) → Int → Int → Prop,
+    (∀ f i j, k f f i j) ∧
+    (∀ f g i j v, k f g i j → i ≠ j → k f (fun x => if x = j then v else g x) i j) ∧
+    (∀ f g i j, k f g i j → f i = g i) := by
+  fix (scrape := standard) (scrapeConfig := { pointwiseFrames := true })
+    (synth := grind only) (proof := grind only)
+
+run_elab do
+  let source ← elabTerm (← `(fun r : (Int → Int) → (Int → Int) → Int → Int → Prop =>
+    ∀ f : Int → Int, r f f 0 0)) none
+  synthesizeSyntheticMVarsNoPostponing
+  let source ← instantiateMVars source
+  let r ← mkFreshExprMVar (some source.bindingDomain!)
+  let body := source.bindingBody!.instantiate1 r
+  let frames (cfg : PAScrapeConfig) := do
+    return (← scrapePAQualifiersWithReport body cfg).anchored.filter
+      (·.origin == "argument frames")
+  let found ← frames { mode := .standard }
+  unless found.size == 1 && (found[0]?.map (·.slots)) == some [0, 1] do
+    throwError "frame scraping missed copied functions or proposed literal frames"
+  for q in found do
+    check q.qualifier
+    if q.qualifier.hasMVar || q.qualifier.hasFVar || q.qualifier.hasLooseBVars then
+      throwError "frame qualifier leaked a scraping binder"
+  unless (← frames { mode := .standard, maxFrameCandidatesPerKappa := 0 }).isEmpty &&
+      (← frames { mode := .standard, maxAnchoredAttempts := 0 }).isEmpty do
+    throwError "frame scraping ignored its limits"
+
+-- The safety property needs equality of the carried functions, not arithmetic qualifiers.
+example : ∃ k : (Int → Int) → (Int → Int) → Prop,
+    (∀ f, k f f) ∧ (∀ f g, k f g → k f g) ∧
+      (∀ f g, k f g → ∀ p : (Int → Int) → Prop, p f → p g) := by
+  fix (scrape := standard) (synth := grind only) (proof := grind only)
+
+-- A copied input is only a proposal: a later write invalidates the frame.
+run_elab do
+  let target ← elabTerm (← `(∃ k : (Int → Int) → (Int → Int) → Prop,
+    (∀ f, k f f) ∧ (∀ f g, k f g → k f (fun _ => 0)) ∧
+      (∀ f g, k f g → f = g))) none
+  synthesizeSyntheticMVarsNoPostponing
+  let root ← mkFreshExprMVar (some (← instantiateMVars target)) (kind := .syntheticOpaque)
+  let remaining ← Tactic.run root.mvarId! do
+    evalTactic (← `(tactic| fail_if_success
+      fix (scrape := standard) (synth := grind only) (proof := grind only)))
+  unless remaining == [root.mvarId!] && !(← root.mvarId!.isAssigned) do
+    throwError "rejected frame modified the original goal"
+end PAFrameTests
+
+namespace PAObservationTests
+open Lean Meta Elab Term
+
+-- Equality labels preserve chains; opaque division supplies no invented arithmetic facts.
+run_elab do
+  for (input, valid) in #[
+      (← `(∀ a b c d : List Int, a = b → b = c → c = d → a = d), true),
+      (← `(∀ x y d : Int, x = y → x / d = y / d), true),
+      (← `(∀ x d : Int, x / d = 0), false)] do
+    let target ← elabTerm input none
+    synthesizeSyntheticMVarsNoPostponing
+    let target ← instantiateMVars target
+    forallTelescope target fun parameters conclusion => do
+      let mut assumptions := #[]
+      for parameter in parameters do
+        let type ← inferType parameter
+        if ← isProp type then assumptions := assumptions.push type
+      let queries ← Flex.PA.Observation.projectQueries assumptions #[conclusion]
+      let proof ← proveLeafWith (← `(tactic| grind)) queries[0]!
+      unless proof.isSome == valid do throwError "incorrect projected equality semantics"
+      if let some proof := proof then checkWithKernel proof
+
+end PAObservationTests

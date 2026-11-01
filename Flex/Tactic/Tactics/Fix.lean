@@ -67,6 +67,20 @@ structure PACertificationReport where
   allValidated : Bool := true
   deriving Inhabited, Repr
 
+/-- Prefer properties of the current state before properties of compound updated values. -/
+private def directSourceCandidate (candidate : PAAnchoredQualifier) : MetaM Bool :=
+  lambdaTelescope candidate.qualifier fun _ body => do
+    if candidate.origin == "stateful completion" then return true
+    if ← forallTelescopeReducing body fun _ tail => pure (tail.isConstOf ``True) then
+      return false
+    for arg in body.getAppArgs do
+      if !arg.hasFVar || arg.isFVar then continue
+      let type ← whnf (← inferType arg)
+      if type.isSort || type.isProp || type.isConstOf ``Int || type.isConstOf ``Nat ||
+          type.isConstOf ``Bool then continue
+      return false
+    return true
+
 private def runFix
   (oracle : PAOracle := proveLeaf)
   (scrape : PAScrapeConfig := {})
@@ -75,17 +89,18 @@ private def runFix
   (synthOracle : Option PASynthOracle := none)
   (allowUnprovedHeads : Bool := false)
   (onCertification : PACertificationReport → TacticM Unit := fun _ => pure ())
+  (directSources : Bool := false)
     : TacticM Unit := withMainContext do
   let (kctx, kvarsInOrder) ← peelKVars
 
   -- Peeling existentials changes the goal's local context.
   withMainContext do
     let bodyGoal ← getMainGoal
-    -- Scrape before `reduce` erases surface predicates and unfolds definitions.
+    -- Scrape the original surface predicates before exposing constraint wrappers.
     let rawBody ← bodyGoal.getType
     let scraped : PAScrapeResult ←
       if scrape.mode != .no || !scrape.defs.isEmpty then do
-        let result ← scrapePAQualifiersWithReport rawBody scrape
+        let result ← benchFixPhase "scrape" <| scrapePAQualifiersWithReport rawBody scrape
         if flex.reportQualifiers.get (← getOptions) then
           reportScrapedQualifiers result
         unless result.limitsHit.isEmpty do
@@ -93,22 +108,31 @@ private def runFix
         pure result
       else pure {}
     let extraQualifiers := scraped.qualifiers
-    let body ← reduce rawBody
+    -- Expose constraint wrappers, keeping κ-free semantic predicates intact.
+    let body ← Meta.transform rawBody (pre := fun e => do
+      if !e.hasExprMVar then return .done e
+      if e.getAppFn.isMVar then return .continue
+      let exposed ← whnf e
+      return if exposed == e then .continue else .visit exposed)
 
-    let (elimVars, _) ← (exprPartitionKVars body).run kctx
+    let (elimVars, _) ← benchFixPhase "partition" <| (exprPartitionKVars body).run kctx
     unless elimVars.isEmpty do
       logWarning m!"fix: {elimVars.length} non-cut κ(s) present \
         ({elimVars.map (·.name)}) — run `zap` first. Treating all κ as cut."
-    let flatCs  ← (exprFlat body).run kctx
+    let flatCs  ← (exprFlat body pure).run kctx
     let candidateLimit := if scrape.mode == .no && scrape.defs.isEmpty then none
       else some scrape.maxCandidatesPerKappa
     let instanceLimit := candidateLimit.map fun _ => scrape.maxInstancesPerKappa
     let standardQualifiers ← getStandardQualifiers
     -- Preserve existing candidates before spending the remaining budget on new relations.
     let ordinaryCount := extraQualifiers.size - scraped.observationCount
-    let qualifiers := extraQualifiers.extract 0 ordinaryCount ++ standardQualifiers ++
-      extraQualifiers.extract ordinaryCount extraQualifiers.size
-    let initial ← buildInitialAssignment kvarsInOrder qualifiers candidateLimit instanceLimit scraped.anchored
+    let qualifiers := if directSources then standardQualifiers else
+      extraQualifiers.extract 0 ordinaryCount ++ standardQualifiers ++
+        extraQualifiers.extract ordinaryCount extraQualifiers.size
+    let anchored ← if directSources then scraped.anchored.filterM (fun q => liftM (directSourceCandidate q))
+      else pure scraped.anchored
+    let initial ← benchFixPhase "candidates" <|
+      buildInitialAssignment kvarsInOrder qualifiers candidateLimit instanceLimit anchored
     observe (.setup extraQualifiers.size standardQualifiers.size (← getQualifiers).size
       (initial.toArray.map fun (κ, cs) => (κ.name, cs.length)))
     let aStar ← benchFixPhase "synthesis" <|
@@ -178,10 +202,11 @@ def fixImpl
   (observe : PAObserver := fun _ => pure ())
   (synthOracle : Option PASynthOracle := none)
   (allowUnprovedHeads : Bool := false)
-  (onCertification : PACertificationReport → TacticM Unit := fun _ => pure ()) : TacticM Unit := do
+  (onCertification : PACertificationReport → TacticM Unit := fun _ => pure ())
+  (directSources : Bool := false) : TacticM Unit := do
   let saved ← Tactic.saveState
   tryCatchRuntimeEx
-      (runFix oracle scrape proofOracle observe synthOracle allowUnprovedHeads onCertification)
+      (runFix oracle scrape proofOracle observe synthOracle allowUnprovedHeads onCertification directSources)
       (fun error => do
     Flex.CHC.restoreTermState saved.term
     set saved.tactic

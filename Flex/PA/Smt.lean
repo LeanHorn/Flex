@@ -1,8 +1,14 @@
 import Flex.PA.Check
 import Flex.CHC.Export
+import Flex.PA.Observation
 import Flex.CHC.Process
 import Smt
 import Mathlib.Tactic.Simproc.ExistsAndEq
+
+register_option flex.automation.sourcePredicates : Bool := {
+  defValue := false
+  descr := "Expose nonrecursive source predicates and pointwise function equalities in PA queries."
+}
 
 namespace Flex.PA
 
@@ -46,10 +52,10 @@ private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch :=
   for declaration in (← getLCtx) do
     if ← isProp declaration.type then
       try
-        let assumption ← CHC.Prepare.atom (← zetaReduce (← instantiateMVars declaration.type)) true
+        let assumption ← zetaReduce (← instantiateMVars declaration.type)
         for id in (collectFVars {} assumption).fvarIds do
           discard <| CHC.Fragment.valueSort (← inferType (mkFVar id))
-        assumptions := assumptions.push assumption
+        assumptions := assumptions.push (← CHC.Prepare.atom assumption true)
       catch error =>
         if error.isInterrupt then throw error
         omittedAssumptions := true
@@ -127,7 +133,10 @@ private def parseResponses (output : String) (count : Nat) : Except String (Arra
     | "unsat" => pure .valid
     | "sat" => pure .invalid
     | "unknown" => pure (.unknown "solver returned unknown")
-    | _ => throw s!"unexpected SMT response: {line}"
+    | line =>
+      if line.startsWith "unknown (" && line.endsWith ")" then
+        pure (.unknown "solver returned unknown")
+      else throw s!"unexpected SMT response: {line}"
 
 /-- On timeout, preserve complete responses and leave unfinished queries unknown. -/
 def decodeSmtResponses (response : CHC.Process.Result) (count : Nat)
@@ -272,17 +281,41 @@ private def withNamedFunctions (expressions : Array Expr)
       m.insert e input
     k (expressions.map fun e => e.replace replacements.get?)
 
+/-- Expose nonrecursive source predicates, preserving theory operations and recursive calls. -/
+def unfoldSourcePredicates (expression : Expr) : MetaM Expr := do
+  let fuel ← IO.mkRef 64
+  Meta.transform expression (pre := fun e => do
+    if (← fuel.get) == 0 then return .done e
+    let .const name _ := e.getAppFn | return .continue
+    let .defnInfo _ ← getConstInfo name | return .continue
+    let env ← getEnv
+    if let some index := env.getModuleIdxFor? name then
+      let mod := env.header.moduleNames[index.toNat]!
+      if #[`Init, `Lean, `Std, `Mathlib, `Auto, `Smt, `Aesop, `Flex].any (·.isPrefixOf mod) then
+        return .continue
+    unless ← isProp e do return .continue
+    if ← isRecursiveDefinition name then return .continue
+    if let some unfolded ← unfoldDefinition? e then
+      fuel.modify (· - 1)
+      return .visit unfolded
+    return .continue)
+
 /-- Simplify shared assumptions once and expose record fields. -/
 private def withSimplifiedBatch (compact : Bool) (queries : Array Expr)
     (k : Array Expr → Array Expr → MetaM Batch) : MetaM Batch := do
   withSharedPrefix queries (fun _ premises conclusions => do
+    let sources := flex.automation.sourcePredicates.get (← getOptions)
+    let extensional ← if sources then ({} : SimpTheorems).addConst ``funext_iff
+      else pure {}
     let context ← Simp.mkContext { maxSteps := 10000, failIfUnchanged := false }
-      #[← getSimpTheorems] (← getSimpCongrTheorems)
+      #[← getSimpTheorems, extensional] (← getSimpCongrTheorems)
     let mut simprocs := #[← Simp.getSimprocs]
     if compact then
       simprocs := simprocs.push (← ({} : Simp.Simprocs).add ``ExistsAndEq.existsAndEq true)
     let simplify (e : Expr) : MetaM Expr := do
-      unfoldAbbreviations (← Meta.simp (← instantiateMVars e) context simprocs).1.expr
+      let e ← instantiateMVars e
+      let e ← if sources then unfoldSourcePredicates e else pure e
+      unfoldAbbreviations (← Meta.simp e context simprocs).1.expr
     let mut assumptions := premises
     for declaration in ← getLCtx do
       if !declaration.isImplementationDetail && (← isProp declaration.type) then
@@ -307,6 +340,63 @@ private partial def solverSexp : Sexp → Sexp
         xs.zipIdx.all (fun (x, i) => i % 2 == 0 || x == .atom "->") then
       .expr (.atom "->" :: (xs.zipIdx.filterMap fun (x, i) => if i % 2 == 0 then some x else none))
     else .expr xs
+
+private def hasFunctionSort : Smt.Term → Bool
+  | .arrowT .. => true
+  | .appT f a => hasFunctionSort f || hasFunctionSort a
+  | .forallT _ t b | .existsT _ t b => hasFunctionSort t || hasFunctionSort b
+  | .letT _ v b => hasFunctionSort v || hasFunctionSort b
+  | _ => false
+
+private def functionSignature : Smt.Term → List Smt.Term
+  | .arrowT a b => a :: functionSignature b
+  | t => [t]
+
+private partial def firstOrderTerm (arities : Std.HashMap String Nat) : Smt.Term → Bool
+  | .symbolT name => arities[name]?.getD 0 == 0
+  | .literalT _ => true
+  | .arrowT .. => false
+  | .forallT name type body | .existsT name type body =>
+    !hasFunctionSort type && firstOrderTerm (arities.insert name 0) body
+  | .letT name value body =>
+    firstOrderTerm arities value && firstOrderTerm (arities.insert name 0) body
+  | term@(.appT ..) =>
+    let (head, args) := application term []
+    match head with
+    | .symbolT name =>
+      (arities[name]?.all (· == args.length)) && args.all (firstOrderTerm arities)
+    | _ => false
+where
+  application : Smt.Term → List Smt.Term → Smt.Term × List Smt.Term
+    | .appT f a, args => application f (a :: args)
+    | f, args => (f, args)
+
+/-- A higher-order candidate must not invalidate unrelated first-order SMT queries. -/
+private def firstOrderCommands (commands : List Smt.Translate.Command) : Bool := Id.run do
+  let mut arities : Std.HashMap String Nat := {}
+  for command in commands do
+    match command with
+    | .declare name type =>
+      let signature := functionSignature type
+      if signature.any hasFunctionSort then return false
+      arities := arities.insert name (signature.length - 1)
+    | .defineFun name ps cod _ _ =>
+      if hasFunctionSort cod || ps.any (hasFunctionSort ·.2) then return false
+      arities := arities.insert name ps.length
+    | .declareDatatypes _ datatypes =>
+      for constructors in datatypes do
+        for (name, fields) in constructors do
+          if fields.any (hasFunctionSort ·.2) then return false
+          arities := arities.insert name fields.length
+          for (field, _) in fields do arities := arities.insert field 1
+    | _ => pure ()
+  return commands.all fun command => match command with
+    | .assert term => firstOrderTerm arities term
+    | .defineFun _ ps _ term _ =>
+      firstOrderTerm (ps.foldl (fun m (n, _) => m.insert n 0) arities) term
+    | .defineSort _ ps type => !hasFunctionSort type && !ps.any hasFunctionSort
+    | _ => true
+
 private def buildRichBatch (queries : Array Expr) (timeoutMs : Nat)
     (functions : Bool := false) : MetaM Batch :=
   withSimplifiedBatch functions queries fun assumptions conclusions => do
@@ -335,6 +425,8 @@ private def buildRichBatch (queries : Array Expr) (timeoutMs : Nat)
                 |>.run { toProcess := [fact] }
                 |>.run graph
                 |>.run translation
+            unless functions || firstOrderCommands (nextGraph.commands.toList.map (·.2)) do
+              throwError "PA SMT: candidate requires higher-order translation"
             graph := nextGraph
             translation := nextTranslation
             roots := roots.push fact
@@ -346,8 +438,15 @@ private def buildRichBatch (queries : Array Expr) (timeoutMs : Nat)
             if i >= assumptions.size then
               results := results.set! (i - assumptions.size) (.unknown reason)
         let (_, commands) ← StateT.run
-          (graph.graph.orderedDfs roots.toList (Smt.Translate.Query.emitVertex graph.commands)) []
-        let mut script := s!"(set-option :print-success false)\n(set-option :produce-proofs false)\n(set-option :timeout {timeoutMs})\n(set-logic ALL)\n"
+          (graph.graph.orderedDfs roots.toList fun e => do
+            unless (facts.extract assumptions.size facts.size).contains e do
+              Smt.Translate.Query.emitVertex graph.commands e) []
+        -- Satisfiability of a quantified context can be harder than its valid consequences.
+        indices := indices.filter (fun i => !conclusions[i]!.isConstOf ``False) ++
+          indices.filter (fun i => conclusions[i]!.isConstOf ``False)
+        let perQuery := if flex.automation.sourcePredicates.get (← getOptions) then
+            max 1 (timeoutMs / max 1 indices.size) else timeoutMs
+        let mut script := s!"(set-option :print-success false)\n(set-option :produce-proofs false)\n(set-option :timeout {perQuery})\n(set-logic ALL)\n"
         if functions then
           script := s!"(set-option :print-success false)\n(set-option :produce-proofs false)\n(set-option :tlimit-per {timeoutMs})\n(set-logic HO_ALL)\n"
           script := script ++ Sexp.serializeMany (commands.reverse.map (solverSexp ∘ ToSexp.toSexp)) ++ "\n"
@@ -355,7 +454,13 @@ private def buildRichBatch (queries : Array Expr) (timeoutMs : Nat)
           script := script ++ Smt.Translate.Command.cmdsAsQuery commands.reverse ++ "\n"
         for index in indices do
           let name := Smt.Term.quoteSymbol names[flags[index]!.fvarId!]!
-          script := script ++ s!"(push 1)\n(assert (not {name}))\n(check-sat)\n(pop 1)\n"
+          let some command := graph.commands[facts[assumptions.size + index]!]?
+            | throwError "PA SMT: missing candidate assertion"
+          let assertion := if functions then
+              toString (solverSexp (ToSexp.toSexp command)) else toString command
+          -- Query definitions belong inside push/pop: quantified candidates otherwise
+          -- burden every check, even when their answer flags are unconstrained.
+          script := script ++ s!"(push 1)\n{assertion}\n(assert (not {name}))\n(check-sat)\n(pop 1)\n"
         return {
           script := script ++ "(exit)\n"
           indices, results
@@ -383,7 +488,8 @@ private def runFunctionBatch (script : String) (count timeoutMs : Nat)
       if checking then
         let now ← IO.monoMsNow
         if now >= deadline then break
-        solver.setOption "tlimit-per" (toString (deadline - now))
+        let share := max 1 ((deadline - now) / max 1 (count - answers.size))
+        solver.setOption "tlimit-per" (toString share)
       let response := (← command.invoke solver symbols).trimAscii.toString
       if checking || !response.isEmpty then answers := answers.push response
     return answers
@@ -439,5 +545,31 @@ def simplifiedSmtOracle (timeoutMs : Nat := 2000) : PASynthOracle :=
 /-- Normalize fixed function signatures and use CVC5's higher-order input syntax. -/
 def functionSmtOracle (timeoutMs : Nat := 2000) : PASynthOracle :=
   richSmtOracle timeoutMs true
+
+
+/-- Validate scalar observations and congruence without unfolding semantic predicates.
+Only validity transfers back; an abstract counterexample is inconclusive. -/
+def observationSmtOracle (timeoutMs : Nat := 2000) : PASynthOracle := fun queries => do
+  if queries.isEmpty then return #[]
+  withNewMCtxDepth do
+    let saved ← saveState
+    try
+      let projected ← withSharedPrefix queries (fun _ premises conclusions => do
+        let mut assumptions := premises
+        for decl in ← getLCtx do
+          if !decl.isImplementationDetail && (← isProp decl.type) then
+            let type ← instantiateMVars decl.type
+            unless assumptions.contains type do assumptions := assumptions.push type
+        Observation.projectQueries assumptions conclusions) (scalars := false)
+      let results ← smtOracle timeoutMs projected
+      return results.map fun result => match result with
+        | .valid => .valid
+        | _ => .unknown "observation abstraction inconclusive"
+    catch error =>
+      if error.isInterrupt then throw error
+      return unknowns queries.size (← error.toMessageData.toString)
+    finally
+      set saved.elab
+      CHC.restoreMetaState saved.meta
 
 end Flex.PA

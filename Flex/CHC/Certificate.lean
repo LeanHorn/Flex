@@ -124,6 +124,9 @@ private def tryOracle (oracle : ProofOracle) (target : Expr) : TermElabM (Option
       finally restoreTermState saved)
     (fun _ => do restoreTermState saved; return none)
 
+/-- Isolate an oracle and inline its helper theorems before checking the evidence. -/
+def checkedOracle (oracle : ProofOracle) : ProofOracle := tryOracle oracle
+
 /-- Reduce beta, let, and metadata wrappers, preserving readable definitions. -/
 private def normalize (expression : Expr) : MetaM Expr := do
   let expression ← instantiateMVars expression

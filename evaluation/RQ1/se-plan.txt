@@ -1,220 +1,333 @@
-S/E extension plan — evidence and design, 2026-10-27
+HISTORICAL RQ1 EXPERIMENT — superseded by ../CHC-backend.txt.
+Observation-based S/E synthesis and source-fact enrichment have been removed.
+The measurements below describe that earlier implementation, not current direct
+export coverage. PA's separate validity-query observations are retained.
 
-STATUS
+S/E coverage plan — source audit, 2026-11-01
+Library baseline: e9bdc4a2. Step 1 adds evaluation support; the Flex library is unchanged.
 
-Public zap; spacer now synthesizes and eliminates the remaining predicates in
-Str.NextMatch and Str.NextMatchBack, without lemma hints for synthesis. Their
-residual Lean proofs are complete and kernel checked: coverage rises 47 -> 49/61.
-The other four validated prototypes below are not automatic coverage gains.
-Program-specific semantic lemmas or manual projection/model lifting do not
-qualify them as automatic successes.
+STEP 1 BASELINE — COMPLETED 2026-11-01
 
-Validated prototypes (all kernel checked; only standard Lean axioms):
+Results: results/se-baseline-20261101/{step1-summary.txt,overlap.json,overlap.csv}.
+Raw trials/configuration: results/se-baseline-20261101/run/.
+66 independent trials: 33 VCs x two backends; no Fix reruns. All 33 canonical
+post-Zap expression pairs match; measured sources stayed unchanged. Fixed limits:
+60s per solver, 180s per whole trial, 2,000,000 heartbeats per phase, recursion
+limit 16384. Serial run under caffeinate; total wall time about 24m42s.
 
-  VC                         Cyclic candidate       Other predicates
-  Str.NextMatch              Eldarica Loop          10 eliminated by Zap
-  Str.NextMatchBack          Eldarica Loop          10 eliminated by Zap
-  Char.NextMatch             Eldarica main Loop      3 cyclic + 7 acyclic manual
-  Str.Next                  Eldarica Forward        5 existing manual joins
-  Str.NextBack              Eldarica Backward       5 existing manual joins
-  FibFasto                  Eldarica Inv            none
+Among the 24 Fix-success references, Spacer imported and eliminated all remaining
+heads in 3, Eldarica in 4, union 4. Complete automatic proofs: Spacer 1, Eldarica 2,
+union 2. The four cases are FibSqrt, SortMergeSort, Str.NextMatch and
+Str.NextMatchBack; the string pair retains residual VCs in this run.
+None of the nine remaining cases imported an invariant. Partial bridges are not
+adequacy proofs, and historical Fix times are not paired with these new times.
 
-All six residual proofs are complete. The returned main-loop models were not
-replaced by handwritten invariants. Char's prototype has three additional manual
-predicates classified cyclic by the source graph. An actual Zap run removes
-those intermediates and leaves only the main loop predicate. These are
-feasibility results, not six new public spacer/eldarica successes. Only the first
-two have since passed through the public pipeline without synthesis lemma hints.
+Concrete blockers: variable-divisor export rejects Clear, MoveElementsFromList
+and MoveElements; Char.NextMatch exceeds equality-congruence generation limits.
+Most other failures are UNSAT on the projected query, not refutations of source
+VCs. Two Eldarica TwoWay trials hit the whole-case deadline. In the NextBack
+Spacer trial, preparation/export took ~94s versus 0.524s in the solver process.
+Prioritize bounded/relevant congruence and sound handling of unsupported scalar
+operations alongside automatic source facts; simply increasing solver timeouts
+does not address these bottlenecks.
 
-Evidence, source hashes, queries, solver transcripts and proofs:
-  results/se-derisk-20261027/          original 14-case assessment and probes
-  results/se-match-20261027/           first two complete proofs
-  results/se-more-20261027/            four further complete proofs
-  results/se-connected-20261027/       public-tactic baseline and proof harness
-These local result directories are gitignored; this plan is tracked.
+ACTIVE FRONTEND WORK — CHALLENGE LOG
 
-MOTIVATING EXAMPLE: FIX AND S/E CAN COMPLEMENT EACH OTHER
+C1. Equality expansion: the old frontend generated every opaque-value triple,
+    exceeding 4096 facts for Char.NextMatch. Implemented clause-local integer
+    identity labels, SMT equality transitivity, memoized abstraction and a hash
+    lookup for observations. Labels never become imported predicate parameters;
+    witnesses use the original Lean equality observations. CHC and PA regression
+    checks pass, including opaque-equality chains and function congruence.
+C2. Variable division/remainder: strict export only supports positive literal
+    divisors. Projection now treats other divisions/remainders as opaque scalar
+    observations with congruence. This removes an export restriction, not the
+    need for arithmetic semantics when a proof genuinely depends on division.
+C3. Missing source facts: definition wrappers and universally quantified source
+    contracts hide relations needed for inductiveness. Added bounded automatic
+    equations and contract instances through a checked equivalence, keeping all
+    preconditions, plus constructor introduction instances for observed Prop
+    inductives. The equivalence is kernel-checked; negative checks ensure guards
+    are not discarded. This is opt-in (Facts.Config.automatic): the measured
+    enrichment experiment added no RQ1 coverage, so it is NOT enabled by default.
+C4. Fact relevance and cost: more true facts may increase feature counts and
+    solver/preparation cost. Eager enrichment hit the 180s Char.NextMatch trial
+    deadline; that exploratory batch was stopped after one completed trial.
+    A NextMatch diagnostic took 18.46s through enriched export. Revised policy:
+    ordinary projection first; only an UNSAT result triggers automatic facts.
+    Both attempts share the configured solver-process budget. Successful ordinary
+    queries avoid enrichment; retries still repeat preparation. Keep strict limits
+    rather than increasing budgets or injecting desired invariants.
+C5. Recursive/quantified semantics: opaque fold or prefix properties may remain
+    insufficient even after export succeeds. Do not invent preservation axioms.
+    Outer MoveElements remains deferred; record any remaining semantic gaps.
+C6. Adequacy: model import and head elimination do not establish that a residual
+    can be proved. Preserve and report residuals; new complete proofs are counted
+    separately from imported candidates and removed export blockers.
 
-Illustrative CHCs, not a measured Fix-versus-S/E result. Let a : Int -> Int and
-i, p, v, j : Int. update(a,i,v) changes only entry i to v.
+Artifacts: results/se-frontend-20261101/. The aborted eager trial is in run/;
+the measured ordinary-then-enriched batch is in run-retry/. Its frozen source
+enabled enrichment; the final default disables it. Comparison: comparison.json
+and comparison.csv. No full-corpus rerun.
+Validation: library build and Tests/CHC, Tests/PA, Tests/Flex pass; CHC/Flex were
+repeated after the final default change. The CHC checks cover equality chains,
+opaque division, guarded contracts, and a source-wrapper/constructor example
+whose projected query becomes provable only with automatic facts enabled.
 
-  init:    kappa(a, 0, p)
-  step:    kappa(a, i, p) /\ v <= p
-             -> kappa(update(a, i, v), i + 1, p)
-  safety:  kappa(a, i, p) /\ 0 <= j /\ j < i -> a(j) <= p
+STEP 2 MEASURED RESULTS — 18/18 trials, nine selected VCs, both backends
 
-A sufficient invariant is the bounded prefix property:
+Same budgets as step 1; measured sources unchanged and every canonical post-Zap
+input matches baseline. All seven previously successful case/backend pairs
+retain invariant import and head elimination (four VCs in the union). The same
+three complete proofs remain: FibSqrt/Eldarica, SortMergeSort/both backends.
+Str.NextMatch and Str.NextMatchBack retain residual VCs with both backends.
 
-  P(a, i, p) := forall j, 0 <= j -> j < i -> a(j) <= p
+New targets                         Spacer              Eldarica
+Clear                               abstract UNSAT       solver timeout
+MoveElementsFromList                 abstract UNSAT       solver timeout
+Str.Next                            abstract UNSAT       solver timeout
+Str.NextBack                        abstract UNSAT       solver timeout
+Char.NextMatch                      whole-case timeout   whole-case timeout
 
-Initialization is vacuous because the prefix is empty. Preservation splits on
-j = i: the new entry uses v <= p; otherwise integer arithmetic gives j < i,
-the update leaves a(j) unchanged, and the old prefix property applies.
+Clear and MoveElementsFromList no longer fail division export: both ordinary
+and enriched queries reach the solvers. Char.NextMatch no longer has the old
+syntactic triple-expansion rule, but its end-to-end run still times out; the
+finished-stage timings were not captured, so do not claim its export recovered.
+The four enriched Spacer queries remain UNSAT; their Eldarica retries time out.
+Thus this stage adds zero proven RQ1 coverage. Combined coverage stays 52/61,
+214/227 predicate slots; this is not a new full-corpus measurement.
 
-  Fix: If P is among its candidates and its oracle discharges the obligations,
-       it can certify preservation inside Lean using the update definition,
-       reusable update lemmas and arithmetic. Discovering P is a separate task.
+Next gates: inspect Char.NextMatch's preparation/export separately; improve
+relevance of source facts and observation templates; add reusable list length,
+read/update and fold semantics, and guarded UTF8/endpoint relationships. Merely
+exporting opaque observations does not supply these inductive relationships.
+None of these results establishes that S/E fundamentally cannot solve the VCs.
 
-  S/E: Treating P as an opaque Boolean observation does not express how an
-       update changes it. The solver needs an encoding that exposes this
-       relationship, such as suitable array reasoning or generic derived facts.
-       This is a limit of that projection, not an impossibility for S/E.
+GOAL AND CURRENT EVIDENCE
 
-Expected overlap is strong for arithmetic bounds and linear relations. Frames
-and preserved semantic atoms can also work through observation projection.
-Quantified collection properties and recursive definitions can require more
-semantic support. Neither backend is guaranteed to solve every such case.
+Measure how much existing Fix coverage S/E can reproduce, while attempting the
+nine still-incomplete VCs. Current combined coverage: 52/61 VCs, 214/227 predicate
+slots. This is not a standalone Fix or S/E coverage count.
 
-Evaluation rule: use generated definitions, source assumptions, reusable library
-facts and facts derived by general automation. Requiring a new program-specific
-preservation or monotonicity proof is an assisted experiment, not automatic
-invariant synthesis coverage. For example, a handwritten Fibonacci monotonicity
-lemma cannot be used to claim that the pipeline handles Fibonacci unaided.
+Thirteen slots remain. The known manual proofs use True for three of them:
+SortMerge k1/k3 and one MoveElements borrow predicate. The other ten carry
+substantive properties. True witnesses still need checking with the other
+invariants; they are not already counted as automatically inferred.
 
-This motivates testing complementary coverage. It does not establish that any
-particular successful Fix case is beyond S/E; that needs a controlled comparison.
+Two existing Str.NextMatch/NextMatchBack cases have both checked S/E and Fix
+proofs. The other saved S/E prototypes establish feasibility only: they used
+manual projections, semantic bridges, and sometimes strengthened safety queries.
+Do not count these as automatic coverage, or promise that integration alone
+will reproduce their models.
 
-WHAT THE SIX CASES REQUIRE
+REMAINING VCS: SOURCE REQUIREMENTS AND POSSIBLE SUPPORT
 
-1. Str.NextMatch / NextMatchBack
-   Preserve frames and a semantic state predicate over records/maps. The saved
-   model uses boundary observations; a checked equivalence recovers the full
-   source ghost_str_inv under its original assumptions. Whole semantic state
-   atoms now work through the public observation-projection frontend.
-   Opaque UTF8 internals need not become SMT axioms. The independent nonempty
-   occurrence branch remains a Lean residual. NextMatch equivalence is proved
-   in se-match-20261027/workspace/Candidate.lean.
+Names below abbreviate the corresponding Pattern... / BucketMapImpl__0__...
+declarations. Counts are remaining/total predicate slots, not loop counts.
 
-2. Char.NextMatch
-   Project the 10-argument cyclic k3 to bounds, frame equalities and the back
-   boundary. The returned Loop is fully adequate; its extra initial-finger
-   lower bound follows from the original boundary assumption. Preserve the
-   existing conditional callback contract. Exact character widths and checked
-   arithmetic matter to that contract. No new UTF8 induction was required.
-   The saved Return model was not used to replace the ten other manual
-   predicates: three are cyclic, seven acyclic (corrected source-graph audit).
+1. Char.NextMatch — 1/11
+   Need: finite character-width cases; immutable map/record frames; conditional
+   callback facts linking byte equality, validity and boundaries; exact checked
+   addition/subtraction guards.
+   Add: bounded definition exposure, local-contract instantiation and consistent
+   observation normalization. Current scalar model import should suffice.
+   Evidence: a contract-aware reduced query gave an Eldarica Loop model and a
+   complete original proof. Its extra bound checks were manually selected.
+   First gate: export the actual post-Zap clauses without those extra targets.
 
-3. Str.Next / NextBack
-   Project 36 source arguments to relevant scalar state and observations.
-   The returned Forward/Backward definitions ignore their boundary-array
-   parameter: scalar model import is sufficient for these particular models.
-   The useful inferred disjunctions are mem=MAX or mem=0, and memb=MAX or memb=k.
-   They were NOT assumed in synthesis. Original lead/tail callback contracts,
-   dynamic-state facts, and checked endpoint lemmas justify them in Lean.
-   boundary(n) and boundary(0) also establish safe increment/decrement.
+2. Str.Next — 1/6
+   Need: ghost_str_inv/ghost_tw_dyn structure; shared bytes_eq observations;
+   guarded lead-boundary contract; boundary at the end of the string.
+   Add: source predicate exposure and automatic derivation of elementary endpoint
+   facts from source UTF8 assumptions. Try bounded unfolding/base constructors
+   before requiring general UTF8 induction.
+   Evidence: saved Forward model is scalar and ignores its boundary-array slot.
+   The reduced query explicitly requested the mem=MAX or mem=0 disjunction.
+   First gate: obtain an adequate model without inserting that disjunction.
 
-4. FibFasto
-   Add observations fib(i-1), fib(i), fib(n), plus a symbolic cap. Instantiate
-   the model at the original cap 2^64-1. Checked bridges: base cases, recurrence,
-   monotonicity, and equality congruence. The lifted model proves initialization,
-   preservation, arithmetic safety and the result equality. Scalar import is
-   already adequate. The literal-cap probes timed out at 5s; symbolic-cap
-   Eldarica succeeded. This supports testing general bound parameterization,
-   not a claim that it always improves solving.
+3. Str.NextBack — 1/6
+   Need: suffix-memory conditions, guarded needle/tail-boundary contracts,
+   boundary at zero, and checked decrement.
+   Add: the same source-fact path, retaining branch conditions and source aliases.
+   Evidence: saved Backward model is scalar; its memb=MAX or memb=k target was
+   manually selected. Full arrays are not prerequisite for that particular model.
+   First gate: automatic endpoint/contract handling on original post-Zap clauses.
 
-SHARED ARCHITECTURE
+4. SortMerge — 4/12
+   Two substantive invariants: copied interval + frame, and merge-loop bounds,
+   sorted output prefix, frame, source membership and next-element comparisons.
+   The other two manual witnesses are True.
+   Add: function/array reads and updates, cross-array interval properties,
+   two-index sortedness and existential source-membership witnesses.
+   Source sort_is_perm means one-way range membership plus outside-range equality,
+   not multiset permutation. Arrays alone do not supply those quantified facts.
+   Gates: copy loop -> sortedness/frame -> membership -> complete original VC.
+   Evidence: saved short copy/merge probes timed out or were unknown; their
+   correspondence to all original clauses was not proved.
 
-A. Keep original and synthesis views separate.
-   Preserve original predicate slots and the original VC for certification.
-   Build fresh projected slots for the solver. An independent clause containing
-   no kappa anywhere may stay solely as a residual obligation. Never omit a
-   safety clause merely because its head is not a kappa: a kappa in its guard
-   constrains the adequacy of the inferred invariant.
+5. MoveElements — 2/3; implementation remains deferred
+   One substantive invariant: cleared source prefix, unchanged suffix/length,
+   and destination equal to the fold over the processed original prefix.
+   The other manual witness is True. Exit requires exact list equalities.
+   Add: list/ADT semantics, Int.toNat/default reads and update behavior, and a
+   checked generic fold representation with prefix/suffix reasoning.
+   The source already supplies new.slots = absorb_bucket(old.slots, source[i]).
+   Start with that abstract supplied step; expanding hash insertion/modulo is
+   not necessarily required. Raw SMT arrays do not preserve list semantics.
+   Gates: index clearing -> fold over supplied step -> combination -> original VC.
+   First overlap target is Fix-covered MoveElementsFromList.
+   Evidence: numeric models omit the semantic equalities; expanded recursion and
+   append-graph experiments failed or timed out. No automatic gain established.
 
-B. Explicit, typed projection metadata.
-   Mapping { original : KVar, projected : KVar, arguments : Array Expr }
-   ProjectedGoal { kvars : List KVar, body : Expr, mappings : Array Mapping }
-   Each argument is a CLOSED lambda over ALL original predicate arguments,
-   returning Int, Bool or Prop. Retain scalar identities, source-derived
-   semantic observations, and useful equality observations. Record provenance,
-   original order/types and unused arguments; reject escaping/dependent terms.
-   Lift M to fun xs => M (projection1 xs) ... without adding assumptions.
+6. TwoWay.Next — 1/10
+   Need: equality of shifted byte intervals, periodicity, remembered-prefix
+   conditions, sentinel modes, scan callbacks and continuation contracts.
+   Add: array reads, generic interval restriction/join/shift support and a sound
+   lift of universally quantified observations. Preserve all return contracts.
+   First gate: exact interval/scan component, using ScanUp/Down as overlap controls.
+   Evidence: numeric core solved; semantic probe was incomplete and unresolved.
 
-C. Conservative clause abstraction with conditional congruence.
-   Repeated observations must have consistent identities. Preserve connectives
-   and branch conditions. Normalize unconditional equality aliases and checked
-   constructor projections. Aliasing alone is insufficient: a frame equality
-   carried as a Boolean feature can justify transporting a semantic atom.
-   Generate bounded equality/congruence constraints for observed terms:
-     x=y -> (P(x,z) <-> P(y,z)).
-   Do not assume injectivity for arbitrary functions or semantics for opaque
-   predicates. Finite abstraction may be incomplete; UNSAT then does not show
-   that the original VC is false.
+7. TwoWay.MaximalSuffix — 1/7
+   Source safety includes periodicity and lexicographic dominance:
+   for every earlier start, there exists a mismatch, with all earlier bytes equal.
+   Add: an adequate encoding of these forall-exists-forall properties, including
+   witness/model lifting. Mere array export or opaque Boolean atoms is insufficient.
+   The known manual invariant also uses nonlinear divisibility and rotations;
+   these are not proved necessary for every possible solver invariant.
+   First gate: a faithful small dominance component before major implementation.
+   Evidence: Spacer rejected an existential in the tested rule; Eldarica timed out.
 
-D. Checked semantic facts, distinct from invariant hints.
-   Some examples need more than equality congruence: endpoint facts, source
-   callback contracts, Fibonacci recurrence/monotonicity. Any additional fact
-   must come from the source assumptions, a definitional equation, or a checked
-   Lean lemma. Design a general proof-bearing fact/rewrite interface; no VC
-   names, assumed invariants or domain axioms in Flex. Observation discovery
-   and choosing which proved facts to instantiate remain engineering work.
+8. TwoWay.ReverseMaximalSuffix — 1/9
+   Same dominance/periodicity requirements over the affine view m(k-1-i), plus
+   the period-bound early exit. This source VC does not require UTF8.
+   Add: reuse a successful forward representation with index substitution and
+   exact early-exit conditions; do not build an independent reverse encoder.
+   First gate: checked reversal mapping after the forward dominance gate.
+   Evidence: no validated full-source S/E model.
 
-E. Model import and certification.
-   Reuse the existing strict scalar importer where sufficient. Validate the
-   projected signature, all projection result types, closure and original
-   predicate identity before lifting. Kernel-check candidates and certify
-   ORIGINAL heads; retain every residual obligation. Keep separate statuses
-   for solver SAT, model import, instantiation, head elimination and full proof.
-   Preserve the existing strict arithmetic path for ordinary CHC-COMP inputs.
+9. TwoWay.NextBack — 1/10
+   Need: reverse interval/memory reasoning, conditional window bounds, and source
+   UTF8/boundary preservation, together with checked wrap/overflow behavior.
+   Add: search support plus a faithful treatment of inductive UTF8 facts.
+   A boundary means valid UTF8 prefix and suffix, not only an integer range.
+   First gate: generic boundary preservation before integrating the whole search.
+   Evidence: the old semantic query omitted full UTF8 and continuation details.
 
-F. Bounded work and rollback.
-   Invocation-local caps for features, visited nodes, observed terms, equality/
-   congruence pairs and clauses. Deduplicate before expansion. Avoid unrestricted
-   cubic equality generation. Keep preparation, solver and certification budgets
-   separate. Failed speculative stages restore caller state. Limits must yield
-   explicit conservative failure/omission, never invented facts. No PA sweep.
+SHARED EXTENSIONS AND OWNERSHIP
 
-REMAINING EIGHT: EVIDENCE AND OPEN REPRESENTATION CHOICES
+A. Automatic source facts — Facts.lean / Projection.lean
+   Discover relevant equations and expose nonrecursive source predicates;
+   instantiate local conditional contracts with bounded, typed triggers.
+   Retain guards. Derive additional facts with Lean proofs; do not assume desired
+   invariants or user-authored per-VC preservation lemmas.
 
-  SortPartition
-    No useful semantic model from the 5s screen. Needs partition prefix/order,
-    pivot/frame facts and existential range-membership witnesses. The source
-    permutation predicate is range membership plus frame, not a multiset theorem.
+B. Typed observations — Projection.lean
+   Normalize aliases, record fields, reads and affine index expressions
+   consistently; preserve conditional congruence and stable argument mappings.
+   Existing scalar projection remains useful alongside direct theory export.
 
-  SortMerge
-    Copy and two-phase merge probes unresolved. Needs cross-array sorted prefixes,
-    multiple loop mappings and existential source-membership (is_mix) facts.
-    Exact source-clause correspondence of the manual core still needs auditing.
+C. Direct theory round trips — Export.lean / Witness.lean / SMTLib-to-Lean
+   Extend sort/operator metadata, export, model parsing, reconstruction and
+   lifting together. Start with total Int-indexed maps; add monomorphized list/ADT
+   support separately. Preserve Nat/Int and finite-list semantics explicitly.
+   Current ValueSort and standalone model import are Bool/Int only.
+   lean-smt's generic constructor translator excludes parametric inductives;
+   importing it alone does not implement List support.
 
-  MoveElementsFromList / MoveElements
-    Numeric projections solved; recursive append/insert/absorb semantics did not.
-    Direct recursive-function encoding was rejected/unresolved. An Append Horn
-    graph avoided Eldarica's rejection but timed out at 5s; installed Spacer
-    crashed under two inlining configurations. This is not an impossibility result.
-    Need recursive ADT graphs or checked fold summaries, plus prefix/suffix frames.
+D. Quantified collection reasoning
+   Try proved reusable interval laws or a sound arbitrary-index abstraction.
+   One observed index cannot establish two-index sortedness. Finite sampled
+   indices cannot replace universal quantification. Existential mismatch/member
+   witnesses require their own sound handling and model-lifting story.
 
-  TwoWay.Next / MaximalSuffix / ReverseMaximalSuffix / NextBack
-    Numeric projections solved; useful semantic models remain unvalidated.
-    Requirements include bytes_eq, quantified periodicity, nonlinear divisibility,
-    forall-exists-forall lexicographic witnesses, and reverse UTF8 boundaries.
-    Spacer rejected quantifiers in the tested recursive rules; Eldarica returned
-    inconclusive or reached the short cap. NextBack's partial query omitted its
-    full boundary semantics. These failures do not establish infeasibility.
+E. Recursive/inductive semantics
+   Investigate relational graphs or reusable checked fold interpretations.
+   Positive constructor clauses alone allow overapproximations; they do not give
+   an exact interpretation of source UTF8 or recursive functions. Any bridge
+   needed when lifting a model must be justified for its actual use/polarity.
 
-For these families, compare direct theory export with checked semantic summaries
-before committing to an encoding. Pure numeric SAT is not evidence of sufficient
-invariants. Any required new prefix/fold/semantic observation generation must be
-identified explicitly; representation support alone may not discover it.
+EXISTING FIX COMPARISON SET
 
-FUTURE THEORY SUPPORT
+Start from the 20 complete Fix-dependent cases in
+results/unified-flex-20261029/manifest.json, then add the two Str.NextMatch
+variants, SortPartition and MoveElementsFromList: a 24-case evidence-backed
+comparison list, separate from the nine remaining cases.
 
-Observation projection is not full array/ADT support. Proper direct support
-requires coordinated recursive sorts, export operators, model reconstruction,
-and witness adaptation. lean-smt currently has no array translator; the pinned
-SMTLib-to-Lean standalone Model API accepts only Bool/Int. Its general translator
-already has array/ADT machinery with abstract interpretations. Extend that API
-properly if direct theory support proves useful; do not bypass its restrictions
-by disguising definitions as assertions or changing only Flex's allowlist.
+Representative overlap fixtures:
+  arithmetic: FibSqrt / FibSumLoop;
+  source predicates, frames, callbacks: Str.NextMatch / NextMatchBack;
+  list observations: ContainsKeyInList / GetInList;
+  quantified reads/updates: ScanUp / ScanDown / SortInsert / SortPartition;
+  list clearing: AllocateSlots / Clear;
+  recursive completion: MoveElementsFromList / FibFibFast.
+Recurrence equations alone may not establish Fibonacci monotonicity. A new
+handwritten semantic proof does not qualify as automatic S/E support.
 
-DECISION GATES BEFORE THE COMBINED IMPLEMENTATION
+SYSTEMATIC IMPLEMENTATION ORDER
 
-1. Retain these six checked candidates as integration fixtures; resolve which
-   semantic facts and observation templates a general frontend must discover.
-2. Validate a faithful semantic component for each remaining representation
-   family. Record failed/partial evidence rather than promising eight unlocks.
-3. Finalize common projection/lifting contracts and the separate direct-theory
-   API using those results. Then implement shared stages with bounded behavior.
-4. Exercise public zap; spacer/eldarica on the original six VCs, including Zap's
-   treatment of all acyclic joins. Complete residual proofs and audit axioms.
-5. Check strict scalar CHC regressions and focused prior RQ1 successes once the
-   integration works. Count gains only from these public-pipeline runs.
+1. Freeze attribution and one S/E baseline.
+   Reuse the 24 existing Fix proofs; select the nine remaining cases explicitly.
+   Compare separate Spacer and Eldarica runs from identical post-Zap constraints.
+   Extend scripts/benchmark_rq1.py and its existing harness rather than add a
+   parallel evaluation framework. Record source hashes and preprocessing options.
+
+2. Implement bounded source exposure and contract discovery.
+   Exercise existing Str.NextMatch overlap controls, then Char.NextMatch,
+   Str.Next and Str.NextBack, in that order. Use only source assumptions,
+   generated equations and generic proved rules during synthesis.
+   Gate: original heads and a complete residual proof once per claimed gain.
+
+3. Frontload theory feasibility before broad interface work.
+   Use exact read/update/copy and fold components from the sources. Retain all
+   relevant safety obligations; validate any slicing against the original goal.
+   Check returned model shapes and a minimal Lean round trip. Do not generalize
+   a failed 5-second hand-reduced probe into an impossibility claim.
+
+4. Implement arrays plus model reconstruction end to end.
+   Recheck ScanUp/Down, SortInsert and SortPartition for Fix/S/E overlap.
+   Then attack SortMerge incrementally. If quantified membership remains the
+   blocker, report it separately from successful array export.
+
+5. Add general interval/observer support where evidence justifies it.
+   Check universal lifting and multiple observation indices explicitly.
+   Target TwoWay.Next and SortMerge's semantic obligations. Keep existential
+   witness support separate from plain universal frame reasoning.
+
+6. Add ADTs and generic recursive-state support as a separate phase.
+   Start with ContainsKeyInList/GetInList and MoveElementsFromList overlap.
+   Keep outer MoveElements deferred until the smaller fold/list gates succeed.
+   Avoid unfolding irrelevant hash/UTF8 internals merely to satisfy an exporter.
+
+7. Investigate the high-risk suffix/UTF8 families.
+   MaximalSuffix -> ReverseMaximalSuffix after a faithful dominance probe.
+   NextBack follows successful interval support and a valid boundary bridge.
+   Stop at an explicit semantic/solver limitation if no general route succeeds.
+
+8. Consolidate and report overlap.
+   After each extension rerun affected cases and a small stable regression set.
+   At the end run the comparison list once. Report Fix intersection S/E,
+   Fix-only, S/E-only and neither, for both VCs and predicate slots.
+   Report synthesis time, imported candidates, original heads eliminated,
+   adequacy validation and full proof separately. Manual residual proof is
+   allowed; automatic closure is a different result. Trivial-witness/preprocess
+   gains belong to preprocessing, not the external solver.
+
+EVIDENCE AND LIMITS
+
+Inventory: pr-migration-20261029/statistics.json (subtract the subsequent
+SortPartition and MoveElementsFromList gains).
+Fix evidence: results/unified-flex-20261029/, fix-stage1-20261031/,
+fix-partition-20261031/, fix-buckets-20261101/cleanup-final/.
+Original sources: results/synthesis-baseline-20261026-final/workspaces/.
+Existing S/E integration: results/se-connected-20261027/.
+Prototypes and complete manually lifted proofs: results/se-match-20261027/,
+se-more-20261027/{char,forward,reverse,fib}/.
+Reduced probes: results/se-derisk-20261027/{sorts,collections,strings/twoway}/;
+strings/wrappers/repair_core.smt2 contains the manually strengthened memory goals.
+Outer MoveElements probes/shelved code: results/fix-buckets-20261101/.
+These result directories remain gitignored.
+
+No new automatic S/E coverage is claimed by this audit. Successful export,
+numeric SAT, a manually strengthened query and a complete automatic synthesis
+pipeline are distinct outcomes. Failure under a bounded encoding does not prove
+that a VC fundamentally requires Fix.

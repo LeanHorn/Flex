@@ -1,3 +1,8 @@
+HISTORICAL RQ1 EXPERIMENT — superseded by ../CHC-backend.txt.
+Observation-based S/E synthesis and source-fact enrichment have been removed.
+The measurements below describe that earlier implementation, not current direct
+export coverage. PA's separate validity-query observations are retained.
+
 S/E coverage plan — source audit, 2026-11-01
 Library baseline: e9bdc4a2. Step 1 adds evaluation support; the Flex library is unchanged.
 
@@ -25,6 +30,78 @@ Spacer trial, preparation/export took ~94s versus 0.524s in the solver process.
 Prioritize bounded/relevant congruence and sound handling of unsupported scalar
 operations alongside automatic source facts; simply increasing solver timeouts
 does not address these bottlenecks.
+
+ACTIVE FRONTEND WORK — CHALLENGE LOG
+
+C1. Equality expansion: the old frontend generated every opaque-value triple,
+    exceeding 4096 facts for Char.NextMatch. Implemented clause-local integer
+    identity labels, SMT equality transitivity, memoized abstraction and a hash
+    lookup for observations. Labels never become imported predicate parameters;
+    witnesses use the original Lean equality observations. CHC and PA regression
+    checks pass, including opaque-equality chains and function congruence.
+C2. Variable division/remainder: strict export only supports positive literal
+    divisors. Projection now treats other divisions/remainders as opaque scalar
+    observations with congruence. This removes an export restriction, not the
+    need for arithmetic semantics when a proof genuinely depends on division.
+C3. Missing source facts: definition wrappers and universally quantified source
+    contracts hide relations needed for inductiveness. Added bounded automatic
+    equations and contract instances through a checked equivalence, keeping all
+    preconditions, plus constructor introduction instances for observed Prop
+    inductives. The equivalence is kernel-checked; negative checks ensure guards
+    are not discarded. This is opt-in (Facts.Config.automatic): the measured
+    enrichment experiment added no RQ1 coverage, so it is NOT enabled by default.
+C4. Fact relevance and cost: more true facts may increase feature counts and
+    solver/preparation cost. Eager enrichment hit the 180s Char.NextMatch trial
+    deadline; that exploratory batch was stopped after one completed trial.
+    A NextMatch diagnostic took 18.46s through enriched export. Revised policy:
+    ordinary projection first; only an UNSAT result triggers automatic facts.
+    Both attempts share the configured solver-process budget. Successful ordinary
+    queries avoid enrichment; retries still repeat preparation. Keep strict limits
+    rather than increasing budgets or injecting desired invariants.
+C5. Recursive/quantified semantics: opaque fold or prefix properties may remain
+    insufficient even after export succeeds. Do not invent preservation axioms.
+    Outer MoveElements remains deferred; record any remaining semantic gaps.
+C6. Adequacy: model import and head elimination do not establish that a residual
+    can be proved. Preserve and report residuals; new complete proofs are counted
+    separately from imported candidates and removed export blockers.
+
+Artifacts: results/se-frontend-20261101/. The aborted eager trial is in run/;
+the measured ordinary-then-enriched batch is in run-retry/. Its frozen source
+enabled enrichment; the final default disables it. Comparison: comparison.json
+and comparison.csv. No full-corpus rerun.
+Validation: library build and Tests/CHC, Tests/PA, Tests/Flex pass; CHC/Flex were
+repeated after the final default change. The CHC checks cover equality chains,
+opaque division, guarded contracts, and a source-wrapper/constructor example
+whose projected query becomes provable only with automatic facts enabled.
+
+STEP 2 MEASURED RESULTS — 18/18 trials, nine selected VCs, both backends
+
+Same budgets as step 1; measured sources unchanged and every canonical post-Zap
+input matches baseline. All seven previously successful case/backend pairs
+retain invariant import and head elimination (four VCs in the union). The same
+three complete proofs remain: FibSqrt/Eldarica, SortMergeSort/both backends.
+Str.NextMatch and Str.NextMatchBack retain residual VCs with both backends.
+
+New targets                         Spacer              Eldarica
+Clear                               abstract UNSAT       solver timeout
+MoveElementsFromList                 abstract UNSAT       solver timeout
+Str.Next                            abstract UNSAT       solver timeout
+Str.NextBack                        abstract UNSAT       solver timeout
+Char.NextMatch                      whole-case timeout   whole-case timeout
+
+Clear and MoveElementsFromList no longer fail division export: both ordinary
+and enriched queries reach the solvers. Char.NextMatch no longer has the old
+syntactic triple-expansion rule, but its end-to-end run still times out; the
+finished-stage timings were not captured, so do not claim its export recovered.
+The four enriched Spacer queries remain UNSAT; their Eldarica retries time out.
+Thus this stage adds zero proven RQ1 coverage. Combined coverage stays 52/61,
+214/227 predicate slots; this is not a new full-corpus measurement.
+
+Next gates: inspect Char.NextMatch's preparation/export separately; improve
+relevance of source facts and observation templates; add reusable list length,
+read/update and fold semantics, and guarded UTF8/endpoint relationships. Merely
+exporting opaque observations does not supply these inductive relationships.
+None of these results establishes that S/E fundamentally cannot solve the VCs.
 
 GOAL AND CURRENT EVIDENCE
 

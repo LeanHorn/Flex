@@ -84,6 +84,8 @@ Install `z3` and `eld` on `PATH`, or set `flex.spacer.executable` and
 
 `Flex.CHC.solveGoal` provides the underlying library API, including complete
 certification, residual obligations, and rollback on failure.
+Export supports Int/Bool constraints and rejects unsupported theories without
+abstraction. See [backend support and challenges](evaluation/CHC-backend.txt).
 
 ## `flex`
 

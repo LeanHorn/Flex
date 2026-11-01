@@ -26,8 +26,6 @@ structure Relation where
   kvar : KVar
   leanType : Lean.Expr
   argumentSorts : Array ValueSort
-  /-- Closed projections over every original argument; absent for direct export. -/
-  arguments : Option (Array Expr) := none
   deriving Inhabited
 
 /-- Checked assertions ending in `check-sat`, with metadata for model reconstruction. -/
@@ -145,8 +143,7 @@ private def witnessKind (type : Expr) : MetaM WitnessKind := do
     if result.isProp then return .predicate
     return if parameters.isEmpty then .constant else .function
 
-private def checkPredicateType (name : Name) (type : Expr)
-    (allowProjection : Bool) : MetaM Unit := do
+private def checkPredicateType (name : Name) (type : Expr) : MetaM Unit := do
   if type.hasFVar || type.hasMVar || type.hasLooseBVars || type.hasLevelMVar then
     throwError "CHC preparation: predicate '{name}' has an open or unresolved signature"
   forallTelescopeReducing type fun parameters _ =>
@@ -154,14 +151,13 @@ private def checkPredicateType (name : Name) (type : Expr)
       let domain ← inferType parameter
       if domain.hasFVar then
         throwError "CHC preparation: predicate '{name}' has a dependent argument {i + 1}"
-      if allowProjection then continue
       try discard <| Fragment.valueSort domain
       catch error =>
         if error.isInterrupt then throw error
         throwError "CHC preparation: predicate '{name}' argument {i + 1} has unsupported type {domain}; expected Int, Bool, or Prop"
 
 /-- Validate the existential prefix before creating predicate witness slots. -/
-partial def checkPredicatePrefix (input : Expr) (allowProjection : Bool := false) : MetaM Unit := do
+partial def checkPredicatePrefix (input : Expr) : MetaM Unit := do
   let input ← whnf input
   unless input.isAppOfArity ``Exists 2 do return
   let type := input.getArg! 0
@@ -169,7 +165,7 @@ partial def checkPredicatePrefix (input : Expr) (allowProjection : Bool := false
   let .lam name _ body bi := predicate
     | throwError "CHC preparation: expected a lambda in an existential binder"
   match ← witnessKind type with
-  | .predicate => checkPredicateType name type allowProjection
+  | .predicate => checkPredicateType name type
   | .carrier =>
     throwError "CHC preparation: unsupported theory wrapper: existential carrier '{name}' : {type}; array and other abstract theory models require an interpretation before predicate synthesis"
   | .theoryParameter =>
@@ -179,7 +175,7 @@ partial def checkPredicatePrefix (input : Expr) (allowProjection : Bool := false
   | .function =>
     throwError "CHC preparation: unsupported existential background function '{name}' : {type}; only Prop-valued predicates can be synthesized"
   withLocalDecl name bi type fun parameter =>
-    checkPredicatePrefix (body.instantiate1 parameter) allowProjection
+    checkPredicatePrefix (body.instantiate1 parameter)
 
 /-- Expose named propositions and beta/let wrappers, preserving arithmetic operators. -/
 partial def expose (expression : Expr) : MetaM Expr := do

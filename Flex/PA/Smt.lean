@@ -1,5 +1,6 @@
 import Flex.PA.Check
-import Flex.CHC.Projection
+import Flex.CHC.Export
+import Flex.PA.Observation
 import Flex.CHC.Process
 import Smt
 import Mathlib.Tactic.Simproc.ExistsAndEq
@@ -559,7 +560,7 @@ def observationSmtOracle (timeoutMs : Nat := 2000) : PASynthOracle := fun querie
           if !decl.isImplementationDetail && (← isProp decl.type) then
             let type ← instantiateMVars decl.type
             unless assumptions.contains type do assumptions := assumptions.push type
-        CHC.Projection.projectQueries assumptions conclusions) (scalars := false)
+        Observation.projectQueries assumptions conclusions) (scalars := false)
       let results ← smtOracle timeoutMs projected
       return results.map fun result => match result with
         | .valid => .valid

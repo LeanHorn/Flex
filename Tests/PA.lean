@@ -1390,3 +1390,27 @@ run_elab do
   unless remaining == [root.mvarId!] && !(← root.mvarId!.isAssigned) do
     throwError "rejected frame modified the original goal"
 end PAFrameTests
+
+namespace PAObservationTests
+open Lean Meta Elab Term
+
+-- Equality labels preserve chains; opaque division supplies no invented arithmetic facts.
+run_elab do
+  for (input, valid) in #[
+      (← `(∀ a b c d : List Int, a = b → b = c → c = d → a = d), true),
+      (← `(∀ x y d : Int, x = y → x / d = y / d), true),
+      (← `(∀ x d : Int, x / d = 0), false)] do
+    let target ← elabTerm input none
+    synthesizeSyntheticMVarsNoPostponing
+    let target ← instantiateMVars target
+    forallTelescope target fun parameters conclusion => do
+      let mut assumptions := #[]
+      for parameter in parameters do
+        let type ← inferType parameter
+        if ← isProp type then assumptions := assumptions.push type
+      let queries ← Flex.PA.Observation.projectQueries assumptions #[conclusion]
+      let proof ← proveLeafWith (← `(tactic| grind)) queries[0]!
+      unless proof.isSome == valid do throwError "incorrect projected equality semantics"
+      if let some proof := proof then checkWithKernel proof
+
+end PAObservationTests

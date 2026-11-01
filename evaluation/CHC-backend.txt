@@ -1,0 +1,101 @@
+S/E integration: contract, deletions and challenge log — 2026-11-01
+
+CURRENT CONTRACT
+
+Lean VC -> checked logical normalization -> direct SMT-LIB export -> solver
+model -> typed Lean predicates -> head proofs and residual VC -> full proof.
+All clauses, including κ-free safety clauses, are exported. Unsupported terms
+fail explicitly; no scalar-observation fallback, added semantic facts or retries
+on altered queries. Model import alone is not an invariant-validity proof.
+Normalization changes syntax by equivalence, not the required property.
+
+REMOVED
+
+* CHC/Facts.lean: explicit and automatic semantic fact instantiation, definition
+  expansion and constructor facts. Removed the solver lemmas/defs hint syntax
+  and automatic-fact retry. flex's defs option remains for Fix scraping only.
+* CHC/Projection.lean: observation discovery, projected predicate signatures,
+  κ-free clause filtering and model lifting through observation arguments.
+* Projection metadata in Export.Relation and the corresponding Witness adapter.
+* The function-observation demo. The conditional-step demo now unfolds its actual
+  definition before direct export, with no supplied invariant or semantic lemma.
+* PA validity-query abstraction moved to PA/Observation.lean. This remains part
+  of Fix; it is not used to manufacture S/E synthesis queries.
+
+SUPPORTED FRAGMENT / EXTENSION GATES
+
+Current predicate/value sorts: Int, Bool and Prop. Arithmetic: comparisons,
+addition/subtraction/negation, multiplication (including nonlinear terms), and
+division/modulus by positive integer literals. Boolean structure and conditionals
+are supported. Nonlinear Horn bodies are supported independently of arithmetic
+linearity. Exportability does not guarantee either solver can solve a query.
+
+Feature              Current boundary                     What is needed
+Variable div/mod     Rejected by Export.Fragment.checkTerm  Exact Lean/SMT semantics,
+                                                          especially zero/negative divisors
+Real arithmetic      No Real value sort/translator          Sort, operators, model import,
+                                                          proof automation
+Bitvectors           No bitvector value sort                Widths, signed/unsigned ops,
+                                                          modular semantics, model import
+Arrays               No array sort or select/store          Faithful read/write/extensional
+                                                          semantics and model reconstruction
+Datatypes/lists      Non-scalar signatures rejected         Constructors/selectors/testers,
+                                                          recursive model terms and proofs
+Recursive functions  No recursive semantic translation      Exact definitions or justified
+and quantified       beyond the supported fragment         encoding; quantify/recursion
+properties                                                support is backend-dependent
+Theory wrappers      Existential carriers/functions        Interpret source theory symbols;
+                     rejected by Prepare                   do not infer them as κ predicates
+
+CHALLENGES OBSERVED (keep updating with concrete cases and artifacts)
+
+C1. Semantic fidelity: the removed projection replaced Lean predicates/functions
+    with observations and omitted κ-free clauses. Certificates still targeted the
+    original VC, but solver statuses described a different query. Direct export
+    now retains every clause; tests check retention of a κ-free False clause.
+C2. Lost meaning: Clear/MoveElementsFromList reached the solvers only after
+    variable division became opaque. They still obtained no model. This was not
+    genuine division support, nor evidence that the original VCs were UNSAT.
+C3. Fact selection: the 18-trial source-enrichment experiment recovered zero new
+    RQ1 invariants. All seven prior successful backend/case pairs were preserved;
+    four VCs had imported invariants and all heads proved, two had full proofs.
+    Enriched Clear, MoveElementsFromList, Str.Next and Str.NextBack remained
+    abstract-UNSAT with Spacer and timed out with Eldarica. No claim of inherent
+    S/E incapability follows. Evidence: RQ1/results/se-frontend-20261101/.
+C4. Frontend cost: Char.NextMatch exceeded the 180s whole-trial limit with both
+    backends. Finished-stage timings were unavailable; do not call this a solver
+    timeout or attribute it to a particular stage. Earlier equality-triple
+    generation hit a 4096-fact limit. Both belong to the removed synthesis path.
+C5. Representation size: nested/existential/disjunctive guards can expand rapidly.
+    Normalize keeps theory formulas compact and eliminates equality-bound
+    witnesses; clause limits remain explicit. Keep this equivalence-based work.
+C6. Models: SAT, a complete parsable model, typed predicate import, head proofs,
+    and full VC proof are different outcomes. Preserve helper-definition handling,
+    Bool/Prop conversion and completion of genuinely unused model predicates.
+C7. Proof cost: a native solver result need not yield an automatic Lean proof.
+    Record export, solver, import and certification times separately. Preserve
+    every unproved obligation; do not count a residual bridge as a full proof.
+
+CHC-COMP EVALUATION
+
+scripts/CHCParity.lean already compares original SMT input with direct Lean
+export. CHCPipeline.lean and spacer/eldarica now use the same direct-export policy.
+Compare each backend independently with matching options and solver budgets.
+Report per theory: source tasks, translation failures, export failures, native
+SAT/UNSAT/unknown/timeouts, exported-query outcomes, model imports, head elimination
+and full Lean proofs. Preserve original and exported SMT plus raw solver output.
+Keep unsupported tasks in the coverage accounting. No new full-corpus evaluation
+has been run for this cleanup; historical RQ1 abstraction results are separate.
+
+When extending beyond LIA, require source/generated/SMT semantic agreement,
+model reconstruction and a Lean certification check for each new operator/sort.
+Do not describe an opaque replacement as support for the original theory.
+
+CLEANUP VALIDATION
+
+Library build; Tests/CHC, Tests/PA and Tests/Flex; all eight Demo/Spacer theorems
+using real Spacer/Eldarica; compilation of CHCParity, CHCPipeline and RQ1Baseline:
+all pass. These are focused checks, not a rerun of RQ1 or CHC-COMP coverage.
+Logs: CHC-COMP/results/se-cleanup-20261101/checks/results.json.
+Future entries should name the input/theory, failing stage, source and exported
+artifacts, raw solver outcome, and whether a complete original Lean proof exists.

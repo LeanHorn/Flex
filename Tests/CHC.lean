@@ -12,6 +12,31 @@ private def elaborate (term : TSyntax `term) : TermElabM Expr := do
 private def response (model : String) : SolverResult :=
   SolverResult.ofProcess { completion := .exited 0, stdout := "sat\n" ++ model }
 
+-- Unsupported semantics fail before invoking a solver and preserve the goal.
+run_elab do
+  for (input, stage) in #[
+      (← `(∃ k : (Int → Int) → Prop, ∀ f, k f), Stage.prepare),
+      (← `(∃ k : List Int → Prop, k []), Stage.prepare),
+      (← `(∃ k : Int → Prop, k 0 ∧ (∀ x, k x → x / (x + 1) = 0)), Stage.exporting)] do
+    let goal ← mkFreshExprMVar (← elaborate input)
+    let result ← solveGoal goal.mvarId! { executable := some "/__flex_export_rejection_no_solver__" }
+    let .failed failure := result | throwError "unsupported CHC was accepted"
+    unless failure.stage == stage && failure.solver.isNone do
+      throwError "unsupported CHC reached the solver: {failure.message}"
+    if ← goal.mvarId!.isAssignedOrDelayedAssigned then
+      throwError "failed export changed the goal"
+
+-- A κ-free safety clause must reach the solver too.
+run_elab do
+  let goal ← mkFreshExprMVar (← elaborate (← `(∃ k : Int → Prop,
+    k 0 ∧ (∀ x, k x → k (x + 1)) ∧ False)))
+  let prepared ← prepareGoal goal.mvarId!
+  let problem ← exportConstraints prepared.kvars (← prepared.exportGoal.getType)
+  unless problem.clauseCount == 3 && problem.commands.any (fun
+      | .assert (.symbolT "false") => true
+      | _ => false) do
+    throwError "export omitted the κ-free safety clause"
+
 -- The normalization bridge must prove the original existential/disjunctive guard.
 run_elab do
   let target ← elaborate (← `(∃ k : Int → Prop,
@@ -96,38 +121,3 @@ run_elab do
       throwError "invalid evidence changed the residual"
     if ← residual.isAssignedOrDelayedAssigned then
       throwError "invalid evidence proved False"
-
--- Scalar observations lift through function arguments; ill-typed projections roll back.
-run_elab do
-  let target ← elaborate (← `(∃ k : (Int → Int) → Int → Prop,
-    (∀ f x, 0 ≤ f x → k f x) ∧ (∀ f x, k f x → 0 ≤ f x)))
-  let goal ← mkFreshExprMVar target
-  let (_, originals, bodyGoal) ← peelExistentialsAndIntro goal.mvarId!
-  let proxy ← mkFreshExprMVar (← elaborate (← `(∃ k : Int → Prop → Prop,
-    (∀ x p, p → k x p) ∧ (∀ x p, k x p → p))))
-  let prepared ← prepareGoal proxy.mvarId!
-  let problem ← exportConstraints prepared.kvars (← prepared.exportGoal.getType)
-  let projections ← #[← `(fun (_ : Int → Int) (x : Int) => x),
-    ← `(fun (f : Int → Int) (x : Int) => 0 ≤ f x)].mapM elaborate
-  let relation := { problem.relations[0]! with
-    kvar := originals.head!
-    leanType := ← originals.head!.mvarId.getType
-    arguments := some projections }
-  let problem := { problem with relations := #[relation] }
-  let model := response "(model (define-fun k_0 ((x Int) (p Bool)) Bool p))"
-  let malformed := { problem with relations := #[{ relation with
-    arguments := some #[projections[0]!, projections[0]!] }] }
-  let accepted ← try
-    discard <| importWitnesses malformed model
-    pure true
-  catch _ => pure false
-  if accepted || (← originals.head!.mvarId.isAssignedOrDelayedAssigned) then
-    throwError "invalid projection was accepted or assigned a witness"
-  let witnesses ← importWitnesses problem model
-  let certificate ← certifyWitnesses problem witnesses bodyGoal
-    (fun target => do proveLeafWith (← `(tactic| grind)) target)
-  unless certificate.goals.isEmpty do throwError "lifted observation did not certify"
-  let proof ← instantiateMVars goal
-  if proof.hasMVar || proof.hasSorry then throwError "incomplete projected certificate"
-  checkWithKernel proof
-  unless ← isDefEq (← inferType proof) target do throwError "projection changed the goal"

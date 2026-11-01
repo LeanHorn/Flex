@@ -50,7 +50,6 @@ structure Setup where
   config : Config := {}
   backends : List Backend := Backend.all
   scrape : PAScrapeConfig := { mode := .deep }
-  facts : Flex.CHC.Facts.Config := {}
   synth : Option (TSyntax `tactic) := none
   proof : Option (TSyntax `tactic) := none
   closer : Option (TSyntax `tactic) := none
@@ -391,7 +390,7 @@ private def runBackend (ctx : Context) (backend : Backend) : TacticM Candidate :
     let result ← Flex.CHC.solveGoal (← getMainGoal) {
       backend := if backend == .spacer then .spacer else .eldarica
       executable := some (name.get (← getOptions))
-      timeoutMs := timeout } (proofOracle ctx) (headsOnly := true) (facts := ctx.setup.facts)
+      timeoutMs := timeout } (proofOracle ctx) (headsOnly := true)
     let report ← match result with
       | .failed failure => throwError "{failure.message}"
       | .solved report | .partial report => pure report
@@ -590,7 +589,6 @@ For large template searches, Fix tries source instances before the full qualifie
 syntax "flex" (atomic("(" &"backends" ":=") "[" flexBackend,* "]" ")")?
   (atomic("(" &"scrape" ":=") ident ")")?
   (atomic("(" &"defs" ":=") "[" ident,* "]" ")")?
-  (atomic("(" &"lemmas" ":=") "[" ident,* "]" ")")?
   (atomic("(" &"synth" ":=") tacticSeq ")")?
   (atomic("(" &"proof" ":=") tacticSeq ")")?
   (atomic("(" &"closer" ":=") tacticSeq ")")?
@@ -598,7 +596,7 @@ syntax "flex" (atomic("(" &"backends" ":=") "[" flexBackend,* "]" ")")?
 
 elab_rules : tactic
   | `(tactic| flex $[(backends := [$backends:flexBackend,*])]? $[(scrape := $mode:ident)]?
-      $[(defs := [$defs:ident,*])]? $[(lemmas := [$lemmas:ident,*])]?
+      $[(defs := [$defs:ident,*])]?
       $[(synth := $synth:tacticSeq)]? $[(proof := $proof:tacticSeq)]?
       $[(closer := $closer:tacticSeq)]? $[(config := $config:term)]?) => do
     let backends ← match backends with
@@ -611,7 +609,6 @@ elab_rules : tactic
     let resolve (names : Array Ident) : TacticM (Array Name) :=
       names.mapM fun name => realizeGlobalConstNoOverloadWithInfo name
     let defs ← resolve (defs.map (·.getElems) |>.getD #[])
-    let lemmas ← resolve (lemmas.map (·.getElems) |>.getD #[])
     let config ← match config with
       | none => pure ({} : Flex.Portfolio.Config)
       | some value => do
@@ -623,5 +620,4 @@ elab_rules : tactic
     Flex.Portfolio.flexImpl {
       config, backends
       scrape := { config.scrapeLimits with mode, defs }
-      facts := { lemmas, defs }
       synth := ← tactic synth, proof := ← tactic proof, closer := ← tactic closer }

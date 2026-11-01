@@ -201,6 +201,7 @@ def fib (n : Int) : Int :=
   if n ≤ 1 then 1 else fib (n - 1) + fib (n - 2)
   termination_by n.toNat
 
+set_option maxHeartbeats 500000 in
 theorem fib_scraped :
   ∃ k : Int → Int → Int → Int → Prop,
     ∀ n : Int, 0 ≤ n →

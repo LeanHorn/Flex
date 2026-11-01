@@ -101,6 +101,28 @@ private def saveGoals (ctx : Context) (phase : String) : TacticM Unit := do
   let goals ← (← getUnsolvedGoals).mapM fun goal => return (← Meta.ppGoal goal).pretty
   IO.FS.writeFile (ctx.output / s!"{phase}-goals.txt") (String.intercalate "\n\n" goals)
 
+/-- Compare closed goal expressions across independent backend runs. -/
+private def saveCheckpoint (ctx : Context) : TacticM Unit := do
+  saveGoals ctx "zap"
+  let saved ← Tactic.saveState
+  try
+    let expressions ← (← getUnsolvedGoals).mapM fun goal => do
+      let closed ← goal.revertAll
+      let expression ← instantiateMVars (← closed.getType)
+      if expression.hasMVar || expression.hasFVar || expression.hasLooseBVars then
+        throwError "post-Zap checkpoint contains unresolved variables"
+      let expression ← Core.transform expression (post := fun e => pure <| .done <|
+        match e with
+        | .mdata _ body => body
+        | .forallE _ type body bi => .forallE .anonymous type body bi
+        | .lam _ type body bi => .lam .anonymous type body bi
+        | .letE _ type value body nondep => .letE .anonymous type value body nondep
+        | _ => e)
+      return reprStr expression
+    IO.FS.writeFile (ctx.output / "post-zap-expressions.txt")
+      (String.intercalate "\n\n" expressions)
+  finally restore saved
+
 private def attempt (ctx : Context) (phase : String) (action : TacticM Unit)
     : TacticM Bool := do
   let before ← totalPredicates
@@ -160,37 +182,62 @@ private def runSolver (ctx : Context) (backend : Backend)
   let label := if backend == .spacer then "spacer" else "eldarica"
   let index ← IO.mkRef 0
   onPredicates do
+    let i ← index.get
+    index.modify (· + 1)
     let result ← solveGoal (← getMainGoal) { backend, timeoutMs := ctx.solverMs }
       Flex.Automation.proofOracle (headsOnly := true)
+    let solver := match result with
+      | .failed failure => failure.solver
+      | .solved report | .partial report => some report.solver
+    let timings := match result with
+      | .failed failure => failure.timings
+      | .solved report | .partial report => report.timings
+    let mut diagnostics := [("stage_timings", toJson (timings.map fun timing =>
+      Json.mkObj [("stage", toJson (reprStr timing.stage)),
+        ("elapsed_ns", toJson timing.elapsedNs)]))]
+    if let some solver := solver then
+      IO.FS.writeFile (ctx.output / s!"{label}-{i}.stdout") solver.process.stdout
+      IO.FS.writeFile (ctx.output / s!"{label}-{i}.stderr") solver.process.stderr
+      let status := match solver.outcome with
+        | .sat _ => "sat" | .unsat => "unsat" | .unknown _ => "unknown"
+        | .timedOut => "timeout" | .error _ => "error"
+      diagnostics := diagnostics ++ [("solver_status", toJson status),
+        ("solver_ms", toJson solver.process.elapsedMs)]
     match result with
     | .failed failure =>
-      emit ctx (label ++ "_candidate") "failed" [
-        ("stage", toJson (reprStr failure.stage)), ("error", toJson failure.message)]
+      emit ctx (label ++ "_candidate") "failed" (diagnostics ++ [
+        ("stage", toJson (reprStr failure.stage)), ("error", toJson failure.message),
+        ("relations", toJson failure.relations), ("clauses", toJson failure.clauses)])
       throwError failure.message
     | .solved report | .partial report =>
       remainingHeads.modify fun total => do
         return (← total) + (← report.certificate.remainingHeads)
       provedHeads.modify (· + report.certificate.provedHeads)
-      let i ← index.get
-      index.modify (· + 1)
       IO.FS.writeFile (ctx.output / s!"{label}-{i}.smt2") report.problem.toSMTLib
-      IO.FS.writeFile (ctx.output / s!"{label}-{i}.stdout") report.solver.process.stdout
       let witnesses ← report.witnesses.toList.mapM fun witness => do
         return s!"{witness.symbol} := {(← ppExpr witness.value).pretty}"
       IO.FS.writeFile (ctx.output / s!"{label}-{i}-invariants.txt")
         (String.intercalate "\n" witnesses)
-      emit ctx (label ++ "_candidate") "imported" [
+      emit ctx (label ++ "_candidate") "imported" (diagnostics ++ [
         ("witnesses", toJson report.witnesses.size),
         ("proved_heads", toJson report.certificate.provedHeads),
         ("remaining_heads", toJson report.certificate.remainingHeads),
         ("head_certification_complete", toJson (report.certificate.remainingHeads.map (· == 0))),
-        ("residual_vc", toJson report.certificate.residualVC.isSome)]
+        ("residual_vc", toJson report.certificate.residualVC.isSome)])
       setGoals report.certificate.goals.toList
 
 private def pipeline (ctx : Context) : TacticM Unit := do
   discard <| attempt ctx "zap" <| onPredicates (evalTactic (← `(tactic| zap)))
+  saveCheckpoint ctx
   if (← totalPredicates) > 0 then
-    if ctx.variant == "zap_solver" then
+    if ctx.variant == "zap_spacer" || ctx.variant == "zap_eldarica" then
+      let backend := if ctx.variant == "zap_spacer" then Backend.spacer else Backend.eldarica
+      let label := if backend == .spacer then "spacer" else "eldarica"
+      let heads ← IO.mkRef (some 0)
+      let proved ← IO.mkRef 0
+      if ← attempt ctx label (runSolver ctx backend heads proved) then
+        ctx.retainedSolver.set label
+    else if ctx.variant == "zap_solver" then
       let entry ← Tactic.saveState
       let mut best := entry
       let mut hasBest := false
@@ -248,7 +295,8 @@ private def checkBridge (original target : Expr) (goals : Array MVarId) : TermEl
   finally restoreTermState saved
 
 private def runImpl (name : Name) (variant caseName : String) : TermElabM Unit := do
-  unless #["zap_fix_basic", "zap_fix_standard", "zap_fix_deep", "zap_solver"].contains variant do
+  unless #["zap_fix_basic", "zap_fix_standard", "zap_fix_deep", "zap_solver",
+      "zap_spacer", "zap_eldarica"].contains variant do
     throwError "unknown RQ1 variant {variant}"
   let saved ← Term.saveState
   let start ← IO.monoMsNow

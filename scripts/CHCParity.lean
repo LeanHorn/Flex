@@ -1,4 +1,5 @@
 import Flex.CHC
+import Flex.Tactic.Automation
 import Std.Time.DateTime.Timestamp
 
 /-! CHC parity benchmark. The Python runner appends generated statements, never their proofs. -/
@@ -14,16 +15,22 @@ namespace FlexParity
 private structure Settings where
   input : System.FilePath
   output : System.FilePath
+  events : System.FilePath
+  mode : String
+  backendName : String
   solver : Flex.CHC.Config
+  eldaricaExecutable : Option String
   heartbeats : Nat
   proofHeartbeats : Nat
+  smtTimeout : Nat
+  proofBudgetMs : Nat
 
-private def envNat (name : String) (fallback : Nat) : IO Nat := do
+private def envNat (name : String) (fallback : Nat) (allowZero : Bool := false) : IO Nat := do
   match ← IO.getEnv name with
   | none => return fallback
   | some value =>
     let some n := value.toNat? | throw <| IO.userError s!"invalid {name}: {value}"
-    if n == 0 then throw <| IO.userError s!"{name} must be positive"
+    if n == 0 && !allowZero then throw <| IO.userError s!"{name} must be positive"
     return n
 
 private def settings : IO Settings := do
@@ -31,23 +38,32 @@ private def settings : IO Settings := do
     | throw <| IO.userError "missing FLEX_PARITY_INPUT"
   let some output ← IO.getEnv "FLEX_PARITY_OUTPUT"
     | throw <| IO.userError "missing FLEX_PARITY_OUTPUT"
-  let backend ← match (← IO.getEnv "FLEX_PARITY_BACKEND").getD "spacer" with
-    | "spacer" => pure Backend.spacer
+  let mode := (← IO.getEnv "FLEX_PARITY_MODE").getD "parity"
+  unless mode == "parity" || mode == "portfolio" do
+    throw <| IO.userError s!"unknown evaluation mode: {mode}"
+  let backendName := (← IO.getEnv "FLEX_PARITY_BACKEND").getD "spacer"
+  let backend ← match backendName with
+    | "spacer" | "portfolio" => pure Backend.spacer
     | "eldarica" => pure Backend.eldarica
     | name => throw <| IO.userError s!"unknown backend: {name}"
   let executable ← IO.getEnv "FLEX_PARITY_EXECUTABLE"
   let timeoutMs ← envNat "FLEX_PARITY_SOLVER_MS" ({} : Flex.CHC.Config).timeoutMs
   return {
-    input, output
+    input, output, events := output, mode, backendName
     solver := { backend, executable, timeoutMs }
+    eldaricaExecutable := ← IO.getEnv "FLEX_PARITY_ELDARICA_EXECUTABLE"
     heartbeats := ← envNat "FLEX_PARITY_HEARTBEATS" 2000000
-    proofHeartbeats := ← envNat "FLEX_PARITY_PROOF_HEARTBEATS" 20000 }
+    proofHeartbeats := ← envNat "FLEX_PARITY_PROOF_HEARTBEATS" 20000
+    smtTimeout := ← envNat "FLEX_PARITY_SMT_TIMEOUT" 30
+    proofBudgetMs := ← envNat "FLEX_PARITY_PROOF_MS"
+      (if mode == "portfolio" then 15000 else 0) true }
 
 private def emit (cfg : Settings) (stage status : String)
     (fields : List (String × Json) := []) : IO Unit :=
-  IO.FS.withFile (cfg.output / "events.jsonl") .append fun handle =>
+  IO.FS.withFile (cfg.events / "events.jsonl") .append fun handle =>
     handle.putStrLn (Json.mkObj ([
-      ("stage", toJson stage), ("status", toJson status)] ++ fields)).compress
+      ("stage", toJson stage), ("status", toJson status),
+      ("backend", toJson cfg.backendName)] ++ fields)).compress
 
 private def budget (heartbeats : Nat) (action : TermElabM α) : TermElabM α :=
   withTheReader Core.Context (fun ctx => { ctx with maxHeartbeats := heartbeats * 1000 }) <|
@@ -173,6 +189,97 @@ private def checkBridge (original target : Expr) (goals : Array MVarId) : TermEl
             throwError "certificate depends on {axiomName}"
   finally saved.restore
 
+private structure AttemptResult where
+  backend : String := ""
+  status : String := "not_run"
+  imported : Bool := false
+  headsEliminated : Bool := false
+  proved : Bool := false
+
+private def AttemptResult.rank (r : AttemptResult) : Nat :=
+  if r.proved then 3 else if r.headsEliminated then 2 else if r.imported then 1 else 0
+
+/-- Each backend starts from the same prepared goal; only checked milestones survive. -/
+private def runAttempt (cfg : Settings) (target original : Expr)
+    (prepared : PreparedGoal) (problem : ExportedProblem) : TermElabM AttemptResult := do
+  let saved ← saveState
+  let stage ← IO.mkRef "solver"
+  let progress ← IO.mkRef ({ backend := cfg.backendName } : AttemptResult)
+  try
+    tryCatchRuntimeEx (do
+      let process := cfg.solver.toProcessConfig
+      IO.FS.writeFile (cfg.output / "invocation.json") (Json.mkObj [
+        ("executable", toJson process.executable), ("args", toJson process.args),
+        ("timeout_ms", toJson process.timeoutMs)]).pretty
+      let result ← solve cfg "solver" "exported" problem.toSMTLib
+      let .sat _ := result.outcome
+        | let status := "solver_" ++ outcomeName result.outcome
+          emit cfg "result" status
+          return { backend := cfg.backendName, status }
+      stage.set "import"
+      let witnesses ← phase cfg (← stage.get) (importWitnesses problem result)
+        (fun ws => [("witnesses", toJson ws.size),
+          ("defaulted_witnesses", toJson (ws.filter (·.defaulted)).size)])
+      progress.modify fun r => { r with imported := true }
+      let candidates ← witnesses.mapM fun witness => do
+        let value ← withOptions (·.setBool `pp.funBinderTypes true) <|
+          Meta.ppExpr witness.value
+        return Json.mkObj [
+          ("symbol", toJson witness.symbol), ("predicate", toJson value.pretty),
+          ("defaulted", toJson witness.defaulted)]
+      IO.FS.writeFile (cfg.output / "witnesses.json") (toJson candidates).pretty
+      stage.set "certificate"
+      let prove := proofOracle {
+        heartbeats := cfg.proofHeartbeats, smtTimeout := cfg.smtTimeout }
+      let start ← IO.monoMsNow
+      -- Stop starting proof attempts after this model's shared search budget.
+      let oracle : ProofOracle := fun target => do
+        if cfg.proofBudgetMs != 0 && (← IO.monoMsNow) - start >= cfg.proofBudgetMs then
+          return none
+        prove target
+      let certificate ← phase cfg (← stage.get)
+        (certifyWitnesses problem witnesses prepared.bodyGoal oracle (headsOnly := true))
+        (fun c => [("goals", toJson c.goals.size),
+          ("proved_heads", toJson c.provedHeads),
+          ("remaining_heads", toJson c.remainingHeads)])
+      stage.set "heads_kernel"
+      phase cfg (← stage.get) (checkBridge original target certificate.goals)
+      let allHeads := certificate.remainingHeads == some 0
+      progress.modify fun r => { r with headsEliminated := allHeads }
+      emit cfg "heads" (match certificate.remainingHeads with
+        | some 0 => "eliminated"
+        | some _ => "remaining"
+        | none => "unknown")
+      let headsResidual ← certificate.goals.toList.mapM fun goal => do
+        return (← Meta.ppGoal goal).pretty
+      IO.FS.writeFile (cfg.output / "heads-residual.txt")
+        (String.intercalate "\n\n---\n\n" headsResidual)
+      stage.set "discharge"
+      let remaining ← phase cfg (← stage.get) (do
+        let mut remaining := #[]
+        for goal in certificate.goals do
+          unless ← goal.isAssignedOrDelayedAssigned do
+            let goals ← goal.withContext <|
+              Tactic.run goal (Flex.Automation.discharge (checkedOracle oracle))
+            remaining := remaining ++ goals.toArray
+        remaining.filterM fun goal => return !(← goal.isAssignedOrDelayedAssigned))
+        (fun goals => [("goals", toJson goals.size)])
+      stage.set "kernel"
+      phase cfg (← stage.get) (checkBridge original target remaining)
+      let goals ← remaining.toList.mapM fun goal => do
+        return (← Meta.ppGoal goal).pretty
+      IO.FS.writeFile (cfg.output / "residual.txt") (String.intercalate "\n\n---\n\n" goals)
+      let proved := remaining.isEmpty
+      let status := if proved then "proved" else "partial"
+      emit cfg "result" status [("goals", toJson remaining.size)]
+      return { (← progress.get) with
+        status, proved, headsEliminated := allHeads || proved })
+      (fun error => do
+        let status := (← stage.get) ++ "_failed"
+        emit cfg "result" status [("error", toJson (← errorText error))]
+        return { (← progress.get) with status })
+  finally saved.restore
+
 private def runFlex (cfg : Settings) (name : Name) : TermElabM Unit := do
   let saved ← saveState
   let stage ← IO.mkRef "prepare"
@@ -180,38 +287,41 @@ private def runFlex (cfg : Settings) (name : Name) : TermElabM Unit := do
     tryCatchRuntimeEx (do
       let target := Lean.mkConst name
       let original ← mkFreshExprMVar (some target) (kind := .syntheticOpaque)
-      let prepared ← phase cfg (← stage.get) <| prepareGoal original.mvarId!
+      let prepared ← phase cfg "prepare" <| prepareGoal original.mvarId!
       stage.set "export"
-      let problem ← phase cfg (← stage.get)
+      let problem ← phase cfg "export"
         (exportConstraints prepared.kvars (← prepared.exportGoal.getType))
         (fun p => [("relations", toJson p.relations.size), ("clauses", toJson p.clauseCount)])
-      stage.set "solver"
-      let result ← solve cfg (← stage.get) "exported" problem.toSMTLib
-      let .sat _ := result.outcome
-        | emit cfg "result" ("solver_" ++ outcomeName result.outcome); return
-      stage.set "import"
-      let witnesses ← phase cfg (← stage.get) (importWitnesses problem result)
-        (fun ws => [("witnesses", toJson ws.size),
-          ("defaulted_witnesses", toJson (ws.filter (·.defaulted)).size)])
-      stage.set "certificate"
-      let oracle := proofOracle { heartbeats := cfg.proofHeartbeats }
-      let certificate ← phase cfg (← stage.get)
-        (certifyWitnesses problem witnesses prepared.bodyGoal oracle)
-        (fun c => [("goals", toJson c.goals.size),
-          ("proved_heads", toJson c.provedHeads), ("proved_queries", toJson c.provedQueries)])
-      stage.set "kernel"
-      phase cfg (← stage.get) (checkBridge original target certificate.goals)
-      let goals ← certificate.goals.toList.mapM fun goal => do
-        return (← Meta.ppGoal goal).pretty
-      IO.FS.writeFile (cfg.output / "residual.txt") (String.intercalate "\n\n---\n\n" goals)
-      emit cfg "result" (if certificate.goals.isEmpty then "proved" else "partial")
-        [("goals", toJson certificate.goals.size)])
+      if cfg.mode != "portfolio" then
+        discard <| runAttempt cfg target original prepared problem
+        return
+      let mut best : AttemptResult := {}
+      let mut imported := false
+      let mut heads := false
+      for backend in #[Backend.spacer, Backend.eldarica] do
+        let backendName := if backend == .spacer then "spacer" else "eldarica"
+        let output := cfg.output / backendName
+        IO.FS.createDirAll output
+        let solver : Flex.CHC.Config := {
+          backend, timeoutMs := cfg.solver.timeoutMs
+          executable := if backend == .spacer then cfg.solver.executable else cfg.eldaricaExecutable }
+        let attempt := { cfg with output, backendName, solver }
+        let result ← runAttempt attempt target original prepared problem
+        imported := imported || result.imported
+        heads := heads || result.headsEliminated
+        if result.rank >= best.rank then best := result
+        if result.proved then break
+      emit cfg "result" best.status [
+        ("selected_backend", toJson best.backend),
+        ("invariants_obtained", toJson imported),
+        ("heads_eliminated", toJson heads),
+        ("fully_proved", toJson best.proved)])
       (fun error => do
         emit cfg "result" ((← stage.get) ++ "_failed")
           [("error", toJson (← errorText error))])
   finally saved.restore
 
-/-- Run the native baseline even when translation failed; only then attempt the Lean target. -/
+/-- Portfolio mode exports once and skips the separately recorded native baseline. -/
 def run (targetName : Option Name := none) : TermElabM Unit := do
   let cfg ← settings
   emit cfg "start" "ok" [
@@ -219,15 +329,16 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
   let process := cfg.solver.toProcessConfig
   IO.FS.writeFile (cfg.output / "invocation.json") (Json.mkObj [
     ("executable", toJson process.executable), ("args", toJson process.args),
-    ("timeout_ms", toJson process.timeoutMs)]).pretty
-  try
-    let source ← IO.FS.readFile cfg.input
-    let (input, removed, addedLogic) ← ofExcept (nativeInput source)
-    emit cfg "native_prepare" "ok" [
-      ("removed_commands", toJson removed), ("added_horn_logic", toJson addedLogic)]
-    discard <| solve cfg "native_solver" "native" input
-  catch error =>
-    emit cfg "native_prepare" "error" [("error", toJson (← errorText error))]
+    ("timeout_ms", toJson process.timeoutMs), ("mode", toJson cfg.mode)]).pretty
+  if cfg.mode == "parity" then
+    try
+      let source ← IO.FS.readFile cfg.input
+      let (input, removed, addedLogic) ← ofExcept (nativeInput source)
+      emit cfg "native_prepare" "ok" [
+        ("removed_commands", toJson removed), ("added_horn_logic", toJson addedLogic)]
+      discard <| solve cfg "native_solver" "native" input
+    catch error =>
+      emit cfg "native_prepare" "error" [("error", toJson (← errorText error))]
   match targetName with
   | some name => runFlex cfg name
   | none => emit cfg "result" "translation_failed"

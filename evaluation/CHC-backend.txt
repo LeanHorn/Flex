@@ -75,6 +75,12 @@ C6. Models: SAT, a complete parsable model, typed predicate import, head proofs,
 C7. Proof cost: a native solver result need not yield an automatic Lean proof.
     Record export, solver, import and certification times separately. Preserve
     every unproved obligation; do not count a residual bridge as a full proof.
+C8. Proof helper scope: the first CHC-COMP runner passed the raw CHC oracle to
+    residual discharge. Two Eldarica models reached final kernel type mismatches
+    involving generated _proof helpers. Residual calls now use checkedOracle,
+    which restores state and inlines helpers. Replaying both saved models gives
+    checked partial bridges with one remaining obligation, not full proofs.
+    Evidence: CHC-COMP/results/se-proof-wrapper-20261101/.
 
 CHC-COMP EVALUATION
 

@@ -41,7 +41,7 @@ structure Config where
   solverHeartbeats : Nat := 500000
   dischargeHeartbeats : Nat := 500000
   paTimeout : Nat := 60
-  solverTimeout : Nat := 60
+  solverTimeout : Nat := 30
   /-- Cooperative overall deadline; zero disables it. -/
   totalTimeout : Nat := 180
   scrapeLimits : PAScrapeLimits := {}

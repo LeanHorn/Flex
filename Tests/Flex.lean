@@ -146,3 +146,26 @@ run_elab do
   finally Flex.CHC.restoreTermState saved
 
 end FlexTests
+
+namespace StatefulFoldTests
+
+-- The completion invariant and the unregistered helper equation must be discovered.
+def step (s x : Int) := s + 2 * x
+
+def consume (s : Int) : List Int → Int
+  | [] => s
+  | x :: xs => consume (step s x) xs
+
+example : ∃ k : List Int → Int → List Int → Int → Prop,
+    (∀ xs s, k xs s xs s) ∧
+    (∀ x xs s original start, k (x :: xs) s original start →
+      k xs (step s x) original start) ∧
+    (∀ rest s original start, k rest s original start → rest = [] → s = consume start original) := by
+  flex
+
+-- Proposition-valued state can be copied and preserved like other data.
+example : ∃ k : Prop → Prop → Prop,
+    (∀ p, k p p) ∧ (∀ p q, k p q → k p q) ∧ (∀ p q, k p q → p = q) := by
+  flex
+
+end StatefulFoldTests

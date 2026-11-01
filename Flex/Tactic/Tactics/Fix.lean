@@ -67,6 +67,20 @@ structure PACertificationReport where
   allValidated : Bool := true
   deriving Inhabited, Repr
 
+/-- Prefer properties of the current state before properties of compound updated values. -/
+private def directSourceCandidate (candidate : PAAnchoredQualifier) : MetaM Bool :=
+  lambdaTelescope candidate.qualifier fun _ body => do
+    if candidate.origin == "stateful completion" then return true
+    if ← forallTelescopeReducing body fun _ tail => pure (tail.isConstOf ``True) then
+      return false
+    for arg in body.getAppArgs do
+      if !arg.hasFVar || arg.isFVar then continue
+      let type ← whnf (← inferType arg)
+      if type.isSort || type.isProp || type.isConstOf ``Int || type.isConstOf ``Nat ||
+          type.isConstOf ``Bool then continue
+      return false
+    return true
+
 private def runFix
   (oracle : PAOracle := proveLeaf)
   (scrape : PAScrapeConfig := {})
@@ -75,6 +89,7 @@ private def runFix
   (synthOracle : Option PASynthOracle := none)
   (allowUnprovedHeads : Bool := false)
   (onCertification : PACertificationReport → TacticM Unit := fun _ => pure ())
+  (directSources : Bool := false)
     : TacticM Unit := withMainContext do
   let (kctx, kvarsInOrder) ← peelKVars
 
@@ -111,10 +126,13 @@ private def runFix
     let standardQualifiers ← getStandardQualifiers
     -- Preserve existing candidates before spending the remaining budget on new relations.
     let ordinaryCount := extraQualifiers.size - scraped.observationCount
-    let qualifiers := extraQualifiers.extract 0 ordinaryCount ++ standardQualifiers ++
-      extraQualifiers.extract ordinaryCount extraQualifiers.size
+    let qualifiers := if directSources then standardQualifiers else
+      extraQualifiers.extract 0 ordinaryCount ++ standardQualifiers ++
+        extraQualifiers.extract ordinaryCount extraQualifiers.size
+    let anchored ← if directSources then scraped.anchored.filterM (fun q => liftM (directSourceCandidate q))
+      else pure scraped.anchored
     let initial ← benchFixPhase "candidates" <|
-      buildInitialAssignment kvarsInOrder qualifiers candidateLimit instanceLimit scraped.anchored
+      buildInitialAssignment kvarsInOrder qualifiers candidateLimit instanceLimit anchored
     observe (.setup extraQualifiers.size standardQualifiers.size (← getQualifiers).size
       (initial.toArray.map fun (κ, cs) => (κ.name, cs.length)))
     let aStar ← benchFixPhase "synthesis" <|
@@ -184,10 +202,11 @@ def fixImpl
   (observe : PAObserver := fun _ => pure ())
   (synthOracle : Option PASynthOracle := none)
   (allowUnprovedHeads : Bool := false)
-  (onCertification : PACertificationReport → TacticM Unit := fun _ => pure ()) : TacticM Unit := do
+  (onCertification : PACertificationReport → TacticM Unit := fun _ => pure ())
+  (directSources : Bool := false) : TacticM Unit := do
   let saved ← Tactic.saveState
   tryCatchRuntimeEx
-      (runFix oracle scrape proofOracle observe synthOracle allowUnprovedHeads onCertification)
+      (runFix oracle scrape proofOracle observe synthOracle allowUnprovedHeads onCertification directSources)
       (fun error => do
     Flex.CHC.restoreTermState saved.term
     set saved.tactic

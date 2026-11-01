@@ -140,6 +140,10 @@ run_elab do
     throwError "accepted missing responses from a completed solver"
   if (Flex.PA.decodeSmtResponses { completion := .exited 1, stdout := "unsat\n" } 1).isOk then
     throwError "accepted responses from a failed solver"
+  let answers := Flex.PA.decodeSmtResponses {
+    completion := .exited 0, stdout := "unsat\nunknown (INCOMPLETE)\nunsat\n" } 3
+  unless answers.toOption == some #[.valid, .unknown "solver returned unknown", .valid] do
+    throwError "an annotated unknown discarded other CVC5 answers"
 
 end PABatchTests
 
@@ -150,6 +154,22 @@ open Lean Meta Elab Term
 private structure Buffer where
   values : Int → Int
   bound : Int
+
+private def originates (old current : Int → Int) (lo hi : Int) : Prop :=
+  ∀ i, lo ≤ i → i ≤ hi → ∃ j, lo ≤ j ∧ j ≤ hi ∧ current i = old j
+
+set_option flex.automation.sourcePredicates true in
+run_elab do
+  let q ← elabTermAndSynthesize (← `(∀ f : Int → Int, ∀ lo hi : Int,
+    originates f f lo hi)) none
+  let unfolded ← Flex.PA.unfoldSourcePredicates q
+  unless ← isDefEq q unfolded do throwError "source unfolding changed the proposition"
+  unless (← Flex.PA.simplifiedSmtOracle 2000 #[q]) == #[.valid] do
+    throwError "SMT could not use a nonrecursive source predicate"
+  let unsupported ← elabTermAndSynthesize (← `(∀ f g : Int → Int, f = g)) none
+  let results ← Flex.PA.simplifiedSmtOracle 2000 #[unsupported, q]
+  unless results[1]! == .valid && results[0]! != .valid do
+    throwError "a function-valued query contaminated an independent valid query"
 
 run_elab do
   let terms ← #[← `(∀ b : Buffer, 0 ≤ b.bound → 0 ≤ b.bound + 1),
@@ -1321,6 +1341,14 @@ end PAListPrefixTests
 
 namespace PAFrameTests
 open Lean Meta Elab Term Tactic
+
+-- Whole-function equality is not inductive here; equality at the untouched index is.
+example : ∃ k : (Int → Int) → (Int → Int) → Int → Int → Prop,
+    (∀ f i j, k f f i j) ∧
+    (∀ f g i j v, k f g i j → i ≠ j → k f (fun x => if x = j then v else g x) i j) ∧
+    (∀ f g i j, k f g i j → f i = g i) := by
+  fix (scrape := standard) (scrapeConfig := { pointwiseFrames := true })
+    (synth := grind only) (proof := grind only)
 
 run_elab do
   let source ← elabTerm (← `(fun r : (Int → Int) → (Int → Int) → Int → Int → Prop =>

@@ -10,7 +10,10 @@ namespace Flex.Automation.Equations
 
 private def sourceDefinition (name : Name) : MetaM Bool := do
   if ((privateToUserName? name).getD name).isInternalDetail then return false
-  unless (← getConstInfo name) matches .defnInfo _ do return false
+  if (← getProjectionFnInfo? name).isSome then return false
+  let .defnInfo info ← getConstInfo name | return false
+  if ← forallTelescopeReducing info.type fun _ result =>
+      pure (result.isSort && !result.isProp) then return false
   let env ← getEnv
   if let some index := env.getModuleIdxFor? name then
     let mod := env.header.moduleNames[index.toNat]!
@@ -46,6 +49,8 @@ private def constants (target : Expr) : MetaM (Array Name) := do
 /-- Finite collection rewrites, selected only when the corresponding operation occurs. -/
 private def collectionLemmas (names : Array Name) : Array Name := Id.run do
   let mut library := #[]
+  if names.contains ``List.length then
+    library := library ++ #[``List.length_nil, ``List.length_cons]
   if names.contains ``List.range then library := library.push ``List.range_succ
   if names.contains ``List.map then
     library := library ++ #[``List.map_append, ``List.map_cons, ``List.map_nil]
@@ -69,10 +74,45 @@ private def collectionLemmas (names : Array Name) : Array Name := Id.run do
     library := library ++ #[``List.append_assoc, ``List.append_nil, ``List.nil_append, ``List.cons_append]
   return library
 
+/-- Recognize recursive calls of shape `state → List α → state` for candidate selection. -/
+def hasStatefulRecursion (target : Expr) : MetaM Bool := withNewMCtxDepth do
+  let found ← IO.mkRef false
+  let fuel ← IO.mkRef 2048
+  discard <| Meta.transform target (pre := fun e => do
+    if (← fuel.get) == 0 || (← found.get) then return .done e
+    fuel.modify (· - 1)
+    let .const name _ := e.getAppFn | return .continue
+    let args := e.getAppArgs
+    if args.size < 2 then return .continue
+    unless (← sourceDefinition name) && (← isRecursiveDefinition name) do return .continue
+    let f := mkAppN e.getAppFn (args.extract 0 (args.size - 2))
+    let .forallE _ state rest _ ← whnf (← inferType f) | return .continue
+    if rest.hasLooseBVars then return .continue
+    let .forallE _ list result _ ← whnf rest | return .continue
+    unless (← whnf list).isAppOfArity ``List 1 do return .continue
+    if result.hasLooseBVars then return .continue
+    if ← isDefEq state result then found.set true
+    return .continue)
+  found.get
+
 /-- Discovery runs inside the oracle's saved, budgeted tactic state. -/
 private def lemmas (target : Expr) : MetaM (Array Name × Array Name) := do
-  let names ← constants target
-  let library := collectionLemmas names
+  let observed ← constants target
+  let mut names := #[]
+  for name in observed do
+    unless names.contains name do names := names.push name
+    unless (← sourceDefinition name) && (← isRecursiveDefinition name) do continue
+    let some eqns ← getEqnsFor? name | continue
+    let mut helpers := #[]
+    for eqn in eqns do
+      helpers := helpers ++ (← getConstInfo eqn).type.getUsedConstants
+    let mut added := 0
+    for helper in helpers do
+      if added == 4 then break
+      if names.contains helper then continue
+      if (← sourceDefinition helper) && !(← isRecursiveDefinition helper) then
+        names := names.push helper
+        added := added + 1
   let mut equations := #[]
   let mut definitions := 0
   for name in names do
@@ -84,22 +124,27 @@ private def lemmas (target : Expr) : MetaM (Array Name × Array Name) := do
       pure none
     let some eqns := eqns? | continue
     for eqn in eqns do
-      -- The preceding native portfolio already tried registered equations.
-      if ← Grind.grindExt.isEMatchTheorem eqn then continue
       unless equations.contains eqn do equations := equations.push eqn
       if equations.size >= 24 then break
-  return (library, equations)
+  let mut used := names
+  for equation in equations do used := used ++ (← getConstInfo equation).type.getUsedConstants
+  return (collectionLemmas used, equations)
 
-/-- Standard fold rewrites are finite; recursive equations are instantiated by bounded grind. -/
+/-- Try the selected equations first, then the registered native rules. -/
 def solve : TacticM Unit := withMainContext do
-  let (library, equations) ← lemmas (← (← getMainGoal).getType)
+  let (library, equations) ← lemmas (← getMainTarget)
   if library.isEmpty && equations.isEmpty then throwError "no relevant equations"
+  let additional ← equations.filterM fun name => do
+    return !(← Grind.grindExt.isEMatchTheorem name)
   let library := library.map mkIdent
   let equations := equations.map mkIdent
+  let additional := additional.map mkIdent
   evalTactic (← `(tactic|
     (simp (config := { maxSteps := 1000, failIfUnchanged := false })
       only [$[$library:ident],*] at *) <;>
-    grind (gen := 3) (instances := 200) [$[$equations:ident],*]))
+    first
+    | grind (gen := 3) (instances := 200) only [$[$equations:ident],*]
+    | grind (gen := 3) (instances := 200) [$[$additional:ident],*]))
 
 /-- The cheap eligibility check does not request or create equation theorems. -/
 def tactic? (target : Expr) : MetaM (Option (TSyntax `tactic)) := do
@@ -138,6 +183,11 @@ register_option flex.automation.functionSmt : Bool := {
 register_option flex.automation.equations : Bool := {
   defValue := true
   descr := "Use bounded source equations and fold lemmas during candidate validation and proof."
+}
+
+register_option flex.automation.equationHeartbeats : Nat := {
+  defValue := 2000
+  descr := "Heartbeat cap for each source-equation proof attempt."
 }
 
 register_option flex.automation.structureSteps : Nat := {
@@ -223,9 +273,36 @@ def proveWith (tactic : TSyntax `tactic) (target : Expr) : TermElabM (Option Exp
 private def proveWithEquations (target : Expr) : TermElabM (Option Expr) := do
   unless flex.automation.equations.get (← getOptions) do return none
   let some tactic ← Equations.tactic? target | return none
-  let limit := min 2000 (flex.automation.proofHeartbeats.get (← getOptions))
+  let opts ← getOptions
+  let limit := min (flex.automation.equationHeartbeats.get opts)
+    (flex.automation.proofHeartbeats.get opts)
   withOptions (·.set `flex.automation.proofHeartbeats limit) <|
     attempt tactic target (budgetLeaves := 1)
+
+private def exposeSourcePredicates : TacticM Unit := withMainContext do
+  let mut goal ← getMainGoal
+  let mut changed := false
+  for decl in ← getLCtx do
+    if decl.isImplementationDetail || !(← isProp decl.type) then continue
+    let type ← Flex.PA.unfoldSourcePredicates decl.type
+    if type != decl.type then
+      goal ← goal.replaceLocalDeclDefEq decl.fvarId type
+      changed := true
+  goal.withContext do
+    let old ← goal.getType
+    let target ← Flex.PA.unfoldSourcePredicates old
+    unless changed || old != target do throwError "no source predicates to expose"
+    replaceMainGoal [← goal.replaceTargetDefEq target]
+
+private def proveWithSourcePredicates (target : Expr) : TermElabM (Option Expr) := do
+  unless flex.automation.sourcePredicates.get (← getOptions) do return none
+  let limit := min 2000 (flex.automation.proofHeartbeats.get (← getOptions))
+  withOptions (·.set `flex.automation.proofHeartbeats limit) <|
+    attempt (← `(tactic|
+      (run_tac exposeSourcePredicates) <;>
+      simp_all (config := { maxSteps := 10000 }) <;>
+      first | grind | aesop (config := { maxRuleApplications := 200 }) (add unsafe 20% (by omega))))
+      target (budgetLeaves := 1)
 
 private theorem listEqReplicateOfPrefix {α : Type u} (xs : List α) (i : Int) (value : α)
     (bound : xs.length ≤ i)
@@ -323,6 +400,7 @@ def proofOracle : Flex.CHC.ProofOracle := fun target => do
   if let some proof ← withOptions (·.set `flex.automation.proofHeartbeats quickLimit) <|
       attempt (← `(tactic| (run_tac exposeTarget) <;> intros <;> grind)) target
         (budgetLeaves := 1) then return some proof
+  if let some proof ← proveWithSourcePredicates target then return some proof
   if target.isAppOfArity ``And 2 then
     if let some proof ← attempt
         (← `(tactic| (try simp_all (config := { maxSteps := 10000 })) <;> grind))
@@ -413,6 +491,11 @@ def synthOracle (checkBudget : TermElabM Unit := pure ()) : PASynthOracle := fun
     | .valid | .invalid => return result
     | .unknown reason =>
       trace[flex.oracle] "SMT synthesis inconclusive: {reason}"
+      if (← proveWithSourcePredicates target).isSome then return .valid
+      let quickLimit := min 500 (flex.automation.proofHeartbeats.get (← getOptions))
+      if (← withOptions (·.set `flex.automation.proofHeartbeats quickLimit) <|
+          attempt (← `(tactic| grind only)) target (budgetLeaves := 1)).isSome then
+        return .valid
       for tactic in #[← `(tactic| omega), ← `(tactic| grind),
           ← `(tactic| constructor <;> grind),
           ← `(tactic| (simp (config := { maxSteps := 10000, failIfUnchanged := true })

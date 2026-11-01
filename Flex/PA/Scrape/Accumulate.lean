@@ -84,6 +84,75 @@ private def observations (properties arguments : Array Expr) : MetaM (Array Obse
 private def appendChecked (out : Array Expr) (candidate : Expr) : MetaM (Array Expr) := do
   appendCandidate out (← instantiateMVars candidate)
 
+/-- Propose a completed state or a remaining-work bound from one source property. -/
+private def statefulPropertyCandidates (property : Expr) (changing snapshots : Array Expr)
+    (maxCandidates : Nat) : MetaM (Array Expr) := do
+  unless isResolved property do return #[]
+  let mut out := #[]
+  let mut fuel := 32 * maxCandidates
+  if let some (_, lhs, rhs) := property.eq? then
+    for (current, target) in #[(lhs, rhs), (rhs, lhs)] do
+      unless changing.contains current && !dependsOnArguments target changing do continue
+      let args := target.getAppArgs
+      unless target.getAppFn.isConst do continue
+      for i in [:args.size] do
+        unless snapshots.contains args[i]! do continue
+        unless ← isDefEq (← inferType args[i]!) (← inferType current) do continue
+        for j in [i + 1:args.size] do
+          let input := args[j]!
+          unless snapshots.contains input && (← listType (← inferType input)) do continue
+          for remaining in changing do
+            if fuel == 0 then return out
+            fuel := fuel - 1
+            if remaining == current then continue
+            unless ← isDefEq (← inferType remaining) (← inferType input) do continue
+            let completed := mkAppN target.getAppFn ((args.set! i current).set! j remaining)
+            out ← appendChecked out (← mkEq completed target)
+            if out.size >= maxCandidates then return out
+  let name := property.getAppFn.constName?.getD .anonymous
+  let args := property.getAppArgs
+  unless [``LE.le, ``Int.le, ``Nat.le].contains name && args.size >= 2 do return out
+  let current := args[args.size - 2]!
+  let target := args.back!
+  unless changing.contains current && !dependsOnArguments target changing do return out
+  let type ← whnf (← inferType current)
+  unless type.isConstOf ``Int || type.isConstOf ``Nat do return out
+  let measures ← IO.mkRef (#[] : Array Expr)
+  discard <| Meta.transform target (pre := fun e => do
+    let .app _ input := e | return .continue
+    unless e.getAppFn.isConst && snapshots.contains input do return .continue
+    if (← listType (← inferType input)) && (← isDefEq (← inferType e) type) then
+      measures.modify (·.push e)
+    return .continue)
+  for measure in ← measures.get do
+    for remaining in changing do
+      if fuel == 0 then return out
+      fuel := fuel - 1
+      unless ← isDefEq (← inferType remaining) (← inferType measure.appArg!) do continue
+      let pending := mkApp measure.appFn! remaining
+      let sum := mkApp2 (mkConst (if type.isConstOf ``Int then ``Int.add else ``Nat.add)) current pending
+      out ← appendChecked out (mkAppN property.getAppFn (args.set! (args.size - 2) sum))
+      if out.size >= maxCandidates then return out
+  return out
+
+/-- Complete source calls using changing slots; preserve the original-state inputs.
+Interleave properties so one source cannot consume the whole candidate budget. -/
+def statefulCandidates (properties arguments : Array Expr) (stable : Array Bool)
+    (maxCandidates : Nat := 16) : MetaM (Array Expr) := withNewMCtxDepth do
+  if maxCandidates == 0 || stable.isEmpty then return #[]
+  let slots := Array.range arguments.size
+  let changing := (slots.filter fun i => !(stable[i]?.getD false)).map (arguments[·]!)
+  let snapshots := (slots.filter fun i => stable[i]?.getD false).map (arguments[·]!)
+  let groups ← (properties.extract 0 32).mapM fun property =>
+    statefulPropertyCandidates property changing snapshots maxCandidates
+  let mut out := #[]
+  for i in [:maxCandidates] do
+    for group in groups do
+      if let some candidate := group[i]? then
+        out ← appendChecked out candidate
+        if out.size >= maxCandidates then return out
+  return out
+
 /-- Complete a source observation `acc = F(input)` with `F(remaining)`.
 Both composition orders are candidates; PA must establish inductiveness and safety. -/
 def candidates (properties arguments : Array Expr) (maxCandidates : Nat := 24)

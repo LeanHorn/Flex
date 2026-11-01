@@ -98,7 +98,7 @@ private def collect (cfg : PAScrapeConfig) (body : Expr) : ScrapeM Unit := do
   if automatic cfg && cfg.maxAnchoredCandidatesPerKappa > 0 then
     observationClauses { cfg with maxNodes := (← get).nodes + cfg.maxAnchoredNodes } .anchored body
     -- Gather twice the supplemental quota, then share it across named predicates.
-    if cfg.maxCompoundCandidatesPerKappa > 0 then
+    if cfg.mode == .deep && cfg.maxCompoundCandidatesPerKappa > 0 then
       let ordinary := (← get).anchored
       let quota := 2 * cfg.maxCompoundCandidatesPerKappa
       observationClauses { cfg with
@@ -112,6 +112,8 @@ private def collect (cfg : PAScrapeConfig) (body : Expr) : ScrapeM Unit := do
       modify fun s => { s with anchored := ordinary ++ selected }
     -- Supplemental deep candidates cannot displace the existing anchored pool.
     if cfg.mode == .deep then
+      let stable ← stablePredicateSlots body cfg.maxNodes
+      modify fun s => { s with stableSlots := stable }
       let extraCap := SourceRule.all.foldl (fun n rule => n + rule.cap cfg) 0
       for rule in SourceRule.all do
         if rule.cap cfg == 0 then continue
@@ -124,6 +126,11 @@ private def collect (cfg : PAScrapeConfig) (body : Expr) : ScrapeM Unit := do
       frameClauses { cfg with
         maxNodes := (← get).nodes + cfg.maxAnchoredNodes
         maxAnchoredAttempts := (← get).anchoredAttempts + cfg.maxAnchoredAttempts } body
+      if cfg.pointwiseFrames then
+        frameClauses { cfg with
+          maxNodes := (← get).nodes + cfg.maxAnchoredNodes
+          maxAnchoredAttempts := (← get).anchoredAttempts + cfg.maxAnchoredAttempts } body
+          (pointwise := true)
 
 /-- Interleave ordinary sources; observations fill the remaining slots. -/
 private def finish (cfg : PAScrapeConfig) (s : ScrapeState) : PAScrapeResult := Id.run do

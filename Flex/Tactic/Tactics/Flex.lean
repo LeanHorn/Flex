@@ -279,12 +279,32 @@ private structure Candidate where
   validated : Bool
   remainingHeads : Option Nat
 
+private inductive PASearch where
+  | full | sources | functions
+  deriving BEq
+
 private def runPA (ctx : Context) (scrape : PAScrapeConfig)
-    (allowUnprovedHeads : Bool) : TacticM Candidate := do
+    (allowUnprovedHeads : Bool) (search : PASearch := .full) : TacticM Candidate := do
+  let directSources := search != .full
   let report ← IO.mkRef ({} : PACertificationReport)
-  fixImpl proveLeaf scrape (some (proofOracle ctx))
-    (synthOracle := some (synthOracle ctx)) (allowUnprovedHeads := allowUnprovedHeads)
-    (onCertification := fun result => report.set result)
+  let decision : PASynthOracle := fun queries => do
+    let options ← getOptions
+    let limit := min (if search == .sources then 5000 else 2000)
+      (flex.automation.proofHeartbeats.get options)
+    withOptions (fun opts => if directSources then
+        opts.set `flex.automation.proofHeartbeats limit else opts) <|
+      synthOracle ctx queries
+  let scrape := if search == .functions then
+      { scrape with
+        maxCompoundCandidatesPerKappa := max 24 scrape.maxCompoundCandidatesPerKappa
+        pointwiseFrames := true } else scrape
+  withOptions (fun opts =>
+      let opts := if search == .sources && !opts.contains `flex.automation.equationHeartbeats then
+        opts.set `flex.automation.equationHeartbeats (5000 : Nat) else opts
+      if search == .functions then opts.setBool `flex.automation.sourcePredicates true else opts) <|
+    fixImpl proveLeaf scrape (some (proofOracle ctx))
+      (synthOracle := some decision) (allowUnprovedHeads := allowUnprovedHeads)
+      (onCertification := fun result => report.set result) (directSources := directSources)
   let report ← report.get
   return {
     backend := .fix
@@ -302,6 +322,21 @@ private partial def largeTemplateSearch (type : Expr) (limits : PAScrapeLimits) 
   if permutations > limits.maxInstancesPerKappa then return true
   withLocalDeclD `κ domain fun κ =>
     largeTemplateSearch (type.appArg!.beta #[κ]) limits
+
+private def hasCompoundObservations (type : Expr) : MetaM Bool := do
+  let found ← IO.mkRef false
+  discard <| Meta.transform type (pre := fun e => do
+    if (← found.get) then return .done e
+    let .const name _ := e.getAppFn | return .continue
+    unless (← getConstInfo name) matches .defnInfo _ do return .continue
+    unless ← isProp e do return .continue
+    for arg in e.getAppArgs do
+      if !arg.hasFVar || arg.isFVar || arg.isProj then continue
+      if let .const name _ := arg.getAppFn then
+        if (← getProjectionFnInfo? name).isSome then continue
+      if (← whnf (← inferType arg)).isForall then found.set true
+    return .continue)
+  found.get
 
 private def runBackend (ctx : Context) (backend : Backend) : TacticM Candidate := do
   match backend with
@@ -330,6 +365,21 @@ private def runBackend (ctx : Context) (backend : Backend) : TacticM Candidate :
       if let .ok candidate := result then
         trace[flex] "fix: source candidates certified"
         return candidate
+    if ctx.setup.scrape.mode == .deep && ctx.setup.scrape.maxStatefulCandidatesPerKappa > 0 &&
+        (← withMainContext do Flex.Automation.Equations.hasStatefulRecursion (← getMainTarget)) then
+      let result ← guarded <| runPA paCtx
+        { ctx.setup.scrape with maxCandidatesPerKappa := 0 } true .sources
+      if let .ok candidate := result then
+        trace[flex] "fix: stateful source candidates validated"
+        return candidate
+      if let .error message := result then trace[flex] "fix stateful sources: {message}"
+    if ctx.setup.scrape.mode == .deep && ctx.setup.scrape.maxCandidatesPerKappa > 0 &&
+        (← withMainContext do hasCompoundObservations (← getMainTarget)) then
+      let result ← guarded <| runPA paCtx ctx.setup.scrape true .functions
+      if let .ok candidate := result then
+        trace[flex] "fix: direct source candidates validated"
+        return candidate
+      if let .error message := result then trace[flex] "fix direct sources: {message}"
     runPA paCtx ctx.setup.scrape true
   | .spacer | .eldarica =>
     let name := if backend == .spacer then flex.spacer.executable else flex.eldarica.executable

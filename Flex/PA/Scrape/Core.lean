@@ -89,6 +89,7 @@ structure ScrapeState where
   anchored : Array PAAnchoredQualifier := #[]
   anchoredAttempts : Nat := 0
   anchoredSeen : Std.HashSet (Expr × Expr) := {}
+  stableSlots : Std.HashMap MVarId (Array Bool) := {}
 
 abbrev ScrapeM := StateRefT ScrapeState MetaM
 

@@ -238,9 +238,7 @@ private def compoundVariants (property : Expr) (arguments : Array Expr) (limit :
         let base := mkAppN fn (args.set! i slot)
         bases ← appendCandidate bases base
         if bases.size >= 4 then break
-  if bases.isEmpty then
-    if positions.isEmpty then return #[]
-    bases := #[property]
+  if bases.isEmpty then return #[]
   let mut result := bases.filter (· != property)
   for base in bases do
     let baseArgs := base.getAppArgs

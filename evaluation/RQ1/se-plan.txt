@@ -164,7 +164,7 @@ F. Bounded work and rollback.
    separate. Failed speculative stages restore caller state. Limits must yield
    explicit conservative failure/omission, never invented facts. No PA sweep.
 
-REMAINING EIGHT: EVIDENCE AND OPEN REPRESENTATION CHOICES
+ORIGINAL EIGHT-CASE S/E ASSESSMENT: EVIDENCE AND OPEN REPRESENTATION CHOICES
 
   SortPartition
     No useful semantic model from the 5s screen. Needs partition prefix/order,
@@ -218,3 +218,18 @@ DECISION GATES BEFORE THE COMBINED IMPLEMENTATION
    treatment of all acyclic joins. Complete residual proofs and audit axioms.
 5. Check strict scalar CHC regressions and focused prior RQ1 successes once the
    integration works. Count gains only from these public-pipeline runs.
+
+FIX FOLLOW-UP — 2026-11-01
+
+MoveElementsFromList now has a complete proof using plain flex, without supplied
+invariants, qualifiers, or semantic lemmas. Its completion invariant relates the
+current state and remaining input to the original state and original input.
+Evidence: results/fix-buckets-20261101/MoveElementsFromList.lean.
+
+MoveElements remains deferred: Zap removes one of its three predicates; two
+still need inference. Prefix/suffix candidates were generated, but the bounded
+validation failed on list updates and the outer fold step. The experimental
+prefix search and automatically derived fold laws were removed from active code.
+Saved probes and the shelved implementation remain under the ignored directory
+results/fix-buckets-20261101/. Resume with the saved preservation obligation
+before changing scraping or increasing solver budgets.

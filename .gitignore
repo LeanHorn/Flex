@@ -38,6 +38,8 @@ lean-noquals/
 /evaluation/CHC-COMP/
 /evaluation/RQ1/results/
 /evaluation/Imp/results/
+/evaluation/original-chcs/
+/evaluation/LiquidHaskell/
 
 # Local scraping specification and PDF
 /Flex/PA/Notes/

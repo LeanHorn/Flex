@@ -44,13 +44,16 @@ inductive GoalResult where
   | failed (failure : Failure)
 
 private def measure (phase : IO.Ref Stage) (timings : IO.Ref (Array PhaseTiming))
+    (notify : Stage → Option Nat → IO Unit)
     (stage : Stage) (action : TermElabM α) : TermElabM α := do
   phase.set stage
   let start ← IO.monoNanosNow
+  notify stage none
   try action
   finally
     let stop ← IO.monoNanosNow
     timings.modify (·.push { stage, elapsedNs := stop - start })
+    notify stage (some ((stop - start) / 1000000))
 
 private def requireModel (result : SolverResult) : TermElabM Unit := do
   match result.outcome with
@@ -106,6 +109,7 @@ Callers configure oracle budgets and install residual goals. -/
 def solveGoal (goal : MVarId) (config : Config := {})
     (oracle : ProofOracle := defaultProofOracle) (maxClauses : Nat := 1024)
     (headsOnly : Bool := false)
+    (onPhase : Stage → Option Nat → IO Unit := fun _ _ => pure ())
     : TermElabM GoalResult := do
   let saved ← Term.saveState
   let committed ← IO.mkRef false
@@ -115,20 +119,20 @@ def solveGoal (goal : MVarId) (config : Config := {})
   let size ← IO.mkRef (0, 0)
   try
     goal.withContext do
-      let prepared ← measure phase timings .prepare <| prepareGoal goal maxClauses headsOnly
-      let problem ← measure phase timings .exporting do
+      let prepared ← measure phase timings onPhase .prepare <| prepareGoal goal maxClauses headsOnly
+      let problem ← measure phase timings onPhase .exporting do
         let body ← prepared.exportGoal.getType
         exportConstraints prepared.kvars body
       size.set (problem.relations.size, problem.clauseCount)
-      let solver ← measure phase timings .solver do
+      let solver ← measure phase timings onPhase .solver do
         let result ← run problem config
         Core.checkInterrupted
         transcript.set (some result)
         requireModel result
         return result
-      let witnesses ← measure phase timings .importing do
+      let witnesses ← measure phase timings onPhase .importing do
         importWitnesses problem solver
-      let certificate ← measure phase timings .certificate do
+      let certificate ← measure phase timings onPhase .certificate do
         certifyWitnesses problem witnesses prepared.bodyGoal oracle headsOnly
       let report : GoalReport := {
         problem, solver, witnesses, certificate, timings := ← timings.get }

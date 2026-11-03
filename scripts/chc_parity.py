@@ -127,6 +127,15 @@ def case_source(case: dict, header: str) -> tuple[str, str]:
     """Copy statements only; template theorems containing sorry are never loaded."""
     if case["inventory_status"] != "translated":
         return header + "\nrun_elab FlexParity.run\n", case["inventory_status"]
+    if case.get("format") == "lean_statement":
+        path = Path(case["generated"])
+        if digest(path) != case["generated_sha256"]:
+            raise ValueError(f"{case['case']}: statement changed since inventory")
+        statements = path.read_text()
+        header = with_imports(header, re.findall(r"^import (.*)$", statements, re.MULTILINE))
+        statements = re.sub(r"^import .*\n", "", statements, flags=re.MULTILINE)
+        return (header + "\n" + statements +
+                f"\nrun_elab FlexParity.run (some ``{case['declaration']})\n", "")
     queries = case["queries"]
     if len(queries) != 1:
         return header + "\nrun_elab FlexParity.run\n", "unsupported_query_count"

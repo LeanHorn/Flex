@@ -98,12 +98,14 @@ manual work remains. Failed phases preserve earlier progress.
 flex
 flex (backends := [fix]) (scrape := basic)
 flex (backends := []) (config := { nesting := true }) -- Zap only
+flex (config := { totalTimeout := 30 }) -- shared budget; also the default
 ```
 
 Use `proof := ...` for certification and `closer := ...` for residual proofs.
-The configuration controls phases and budgets (60 seconds for PA and each CHC
-solver; a cooperative 180-second total deadline). `report := true` enables progress
-messages; `set_option trace.flex true` exposes failed attempts. Unvalidated solver
+The whole tactic shares a 30-second budget, including cleanup. Expiry requests
+cancellation and preserves the latest checkpoint; calls that do not respond to
+cancellation can overrun. `trace.flex.timing` shows phase times, `report := true`
+enables progress messages, and `trace.flex` exposes failed attempts. Unvalidated solver
 candidates require the explicit `keepCandidates := true` exploratory option;
 refuted candidates are discarded and every unproved obligation remains a goal.
 See [Demo/Flex.lean](Demo/Flex.lean) for complete and partial proofs.

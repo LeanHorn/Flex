@@ -4,12 +4,19 @@ import Flex.Tactic.Tactics.Eldarica
 import Flex.Preprocess.Cleanup
 import Flex.Preprocess.Nesting
 import Flex.Tactic.Residual
+import Flex.Tactic.Timeout
 
 open Lean Meta Elab Tactic
 
 namespace Flex.Portfolio
 
 initialize registerTraceClass `flex
+initialize registerTraceClass `flex.timing
+
+structure PhaseEvent where
+  phase : String
+  status : String
+  elapsedMs : Nat := 0
 
 inductive Backend where
   | fix | spacer | eldarica
@@ -23,7 +30,7 @@ instance : ToString Backend where
 
 def Backend.all : List Backend := [.fix, .spacer, .eldarica]
 
-/-- Phase limits remain subject to the caller's heartbeat limit. Times are seconds. -/
+/-- Pipeline switches, heartbeat limits, and a shared deadline in seconds. -/
 structure Config where
   preprocess : Bool := true
   nesting : Bool := false
@@ -40,10 +47,8 @@ structure Config where
   paHeartbeats : Nat := 1500000
   solverHeartbeats : Nat := 500000
   dischargeHeartbeats : Nat := 500000
-  paTimeout : Nat := 60
-  solverTimeout : Nat := 30
-  /-- Cooperative overall deadline; zero disables it. -/
-  totalTimeout : Nat := 180
+  /-- Shared wall-clock budget for the whole tactic; zero disables the deadline. -/
+  totalTimeout : Nat := 30
   scrapeLimits : PAScrapeLimits := {}
 
 structure Setup where
@@ -53,6 +58,8 @@ structure Setup where
   synth : Option (TSyntax `tactic) := none
   proof : Option (TSyntax `tactic) := none
   closer : Option (TSyntax `tactic) := none
+  /-- Optional live timing events, including interrupted phases. -/
+  onPhase : PhaseEvent → IO Unit := fun _ => pure ()
 
 private structure Context where
   setup : Setup
@@ -84,6 +91,16 @@ private def checkTime (ctx : Context) : TermElabM Unit := do
   if let some deadline := ctx.deadline then
     if (← IO.monoMsNow) >= deadline then throwError "flex: time budget exhausted"
 
+private def withRemainingTime (ctx : Context) (action : TermElabM α) : TermElabM α := do
+  checkTime ctx
+  let some deadline := ctx.deadline | return ← action
+  let seconds := max 1 ((deadline - (← IO.monoMsNow) + 999) / 1000)
+  withOptions (fun opts =>
+    let opts := if flex.automation.smtTimeout.get opts == 0 then opts else
+      flex.automation.smtTimeout.set opts seconds
+    if flex.automation.synthTimeout.get opts == 0 then opts else
+      flex.automation.synthTimeout.set opts seconds) action
+
 private def withBudget (ctx : Context) (heartbeats : Nat) (act : TacticM α) : TacticM α := do
   let configured := if ctx.setup.config.heartbeats == 0 then heartbeats
     else ctx.setup.config.heartbeats
@@ -98,11 +115,19 @@ private def withBudget (ctx : Context) (heartbeats : Nat) (act : TacticM α) : T
 
 private def phase (ctx : Context) (name : String) (heartbeats : Nat)
     (act : TacticM α) : TacticM (Except MessageData α) := do
-  let result ← guarded <| withBudget ctx heartbeats do
-    checkTime ctx
-    act
-  if let .error message := result then trace[flex] "{name}: {message}"
-  return result
+  let start ← IO.monoMsNow
+  ctx.setup.onPhase { phase := name, status := "start" }
+  let status ← IO.mkRef "interrupted"
+  try
+    let result ← guarded <| withBudget ctx heartbeats do
+      checkTime ctx
+      act
+    status.set (match result with | .ok _ => "ok" | .error _ => "failed")
+    if let .error message := result then trace[flex] "{name}: {message}"
+    return result
+  finally
+    let elapsedMs := (← IO.monoMsNow) - start
+    ctx.setup.onPhase { phase := name, status := ← status.get, elapsedMs }
 
 /-- Save the full frontier, including siblings hidden by the current local operation. -/
 private def checkpoint (ctx : Context) (siblings : List MVarId) : TacticM Unit := do
@@ -221,20 +246,18 @@ private def separateFree (goal : MVarId) : MetaM (Option (MVarId × MVarId)) :=
 
 /-- Bundle privately introduced binders and obligations into one visible VC. -/
 private def tidy (ctx : Context) (parent : MVarId) : TacticM Unit := do
-  discard <| guarded do
+  discard <| phase ctx "cleanup" ctx.setup.config.zapHeartbeats do
     let goals ← Flex.Residual.bundle parent (← getUnsolvedGoals)
     let goals ← if ctx.setup.config.postprocess then
       goals.mapM fun goal => Flex.Preprocess.cleanupGoal goal else pure goals
     setGoals (← goals.filterM fun goal => return !(← goal.isAssignedOrDelayedAssigned))
 
-private def proofOracle (ctx : Context) : PAOracle := fun target => do
-  checkTime ctx
+private def proofOracle (ctx : Context) : PAOracle := fun target => withRemainingTime ctx do
   if let some tactic := ctx.setup.proof then
     if let some proof ← Flex.Automation.proveWith tactic target then return some proof
   Flex.Automation.proofOracle target
 
-private def synthOracle (ctx : Context) : PASynthOracle := fun targets => do
-  checkTime ctx
+private def synthOracle (ctx : Context) : PASynthOracle := fun targets => withRemainingTime ctx do
   let result ← match ctx.setup.synth with
     | none => Flex.Automation.synthOracle (checkTime ctx) targets
     | some tactic => (withPAPriority tactic).toSynth targets
@@ -340,21 +363,13 @@ private def hasCompoundObservations (type : Expr) : MetaM Bool := do
 private def runBackend (ctx : Context) (backend : Backend) : TacticM Candidate := do
   match backend with
   | .fix =>
-    let now ← IO.monoMsNow
-    let deadline := now + ctx.setup.config.paTimeout * 1000
-    let paCtx := if ctx.setup.config.paTimeout == 0 then ctx else
-      { ctx with deadline := some (ctx.deadline.map (min deadline) |>.getD deadline) }
     -- Try source instances before enumerating templates. A failed attempt rolls back;
     -- only certified heads and validated safety clauses can commit the smaller pool.
     if (ctx.setup.scrape.mode == .standard || ctx.setup.scrape.mode == .deep) &&
         ctx.setup.scrape.maxCandidatesPerKappa > 0 &&
         (← withMainContext do largeTemplateSearch (← getMainTarget) ctx.setup.scrape.toPAScrapeLimits) then
-      let seconds := if ctx.setup.config.paTimeout == 0 then 20 else
-        min 20 (max 1 (ctx.setup.config.paTimeout / 3))
-      let deadline := now + seconds * 1000
-      let sourceCtx := { paCtx with
-        setup := { ctx.setup with config := { ctx.setup.config with heartbeats := 0 } }
-        deadline := some (paCtx.deadline.map (min deadline) |>.getD deadline) }
+      let sourceCtx := { ctx with
+        setup := { ctx.setup with config := { ctx.setup.config with heartbeats := 0 } } }
       let budget := if ctx.setup.config.paHeartbeats == 0 then 500000 else
         max 1 (ctx.setup.config.paHeartbeats / 3)
       let budget ← if (← getMaxHeartbeats) == 0 then pure budget else do
@@ -366,7 +381,7 @@ private def runBackend (ctx : Context) (backend : Backend) : TacticM Candidate :
         return candidate
     if ctx.setup.scrape.mode == .deep && ctx.setup.scrape.maxStatefulCandidatesPerKappa > 0 &&
         (← withMainContext do Flex.Automation.Equations.hasStatefulRecursion (← getMainTarget)) then
-      let result ← guarded <| runPA paCtx
+      let result ← guarded <| runPA ctx
         { ctx.setup.scrape with maxCandidatesPerKappa := 0 } true .sources
       if let .ok candidate := result then
         trace[flex] "fix: stateful source candidates validated"
@@ -374,23 +389,30 @@ private def runBackend (ctx : Context) (backend : Backend) : TacticM Candidate :
       if let .error message := result then trace[flex] "fix stateful sources: {message}"
     if ctx.setup.scrape.mode == .deep && ctx.setup.scrape.maxCandidatesPerKappa > 0 &&
         (← withMainContext do hasCompoundObservations (← getMainTarget)) then
-      let result ← guarded <| runPA paCtx ctx.setup.scrape true .functions
+      let result ← guarded <| runPA ctx ctx.setup.scrape true .functions
       if let .ok candidate := result then
         trace[flex] "fix: direct source candidates validated"
         return candidate
       if let .error message := result then trace[flex] "fix direct sources: {message}"
-    runPA paCtx ctx.setup.scrape true
+    runPA ctx ctx.setup.scrape true
   | .spacer | .eldarica =>
     let name := if backend == .spacer then flex.spacer.executable else flex.eldarica.executable
-    let mut timeout := ctx.setup.config.solverTimeout * 1000
-    if timeout == 0 then throwError "flex: CHC solvers disabled by timeout"
-    if let some deadline := ctx.deadline then
-      timeout := min timeout (deadline - (← IO.monoMsNow))
-      if timeout == 0 then throwError "flex: time budget exhausted"
+    checkTime ctx
+    let timeout ← match ctx.deadline with
+      | some deadline => pure (max 1 (deadline - (← IO.monoMsNow)))
+      | none => pure (UInt64.size - 1)
     let result ← Flex.CHC.solveGoal (← getMainGoal) {
       backend := if backend == .spacer then .spacer else .eldarica
       executable := some (name.get (← getOptions))
       timeoutMs := timeout } (proofOracle ctx) (headsOnly := true)
+      (onPhase := fun stage elapsed => do
+        let name := match stage with
+          | .prepare => "prepare" | .exporting => "export" | .solver => "solver"
+          | .importing => "import" | .certificate => "certificate"
+        ctx.setup.onPhase {
+          phase := s!"{backend}/{name}"
+          status := if elapsed.isSome then "end" else "start"
+          elapsedMs := elapsed.getD 0 })
     let report ← match result with
       | .failed failure => throwError "{failure.message}"
       | .solved report | .partial report => pure report
@@ -408,10 +430,16 @@ private def better (candidate best : Candidate) : Bool :=
     | _, _ => false
 
 /-- All alternatives start before predicate assignment. Only accepted branches survive. -/
-private def solveKGoal (ctx : Context) (goal : MVarId) : TacticM Unit := do
+private def solveKGoal (ctx : Context) (goal : MVarId) (siblings : List MVarId) : TacticM Unit := do
   setGoals [goal]
   let entry ← Tactic.saveState
   let best ← IO.mkRef (none : Option (Candidate × Tactic.SavedState))
+  let retain (candidate : Candidate) : TacticM Unit := do
+    if (← best.get).all (fun (previous, _) => better candidate previous ||
+        (candidate.backend == previous.backend && candidate.validated == previous.validated &&
+          candidate.remainingHeads == previous.remainingHeads)) then
+      best.set (some (candidate, ← Tactic.saveState))
+      checkpoint ctx siblings
   let search : TacticM Bool := do
     for backend in ctx.setup.backends do
       restore entry
@@ -419,10 +447,12 @@ private def solveKGoal (ctx : Context) (goal : MVarId) : TacticM Unit := do
         else ctx.setup.config.solverHeartbeats
       let result ← phase ctx s!"{backend}" budget (runBackend ctx backend)
       let .ok candidate := result | continue
+      if candidate.validated then retain candidate
       -- Closing is separate: a failed proof search cannot undo synthesis.
       discard <| guarded (close ctx)
       let goals ← getUnsolvedGoals
       if goals.isEmpty then
+        checkpoint ctx siblings
         if ctx.setup.config.report then logInfo m!"flex: {backend} completed the predicate goal"
         return true
       let mut valid := candidate.validated
@@ -441,10 +471,10 @@ private def solveKGoal (ctx : Context) (goal : MVarId) : TacticM Unit := do
       if refuted || (!valid && !ctx.setup.config.keepCandidates) then
         trace[flex] "{backend}: candidate {if refuted then "refuted" else "unvalidated"}"
         continue
-      tidy ctx goal
       let candidate := { candidate with validated := valid }
-      if (← best.get).all (fun (previous, _) => better candidate previous) then
-        best.set (some (candidate, ← Tactic.saveState))
+      retain candidate
+      tidy ctx goal
+      retain candidate
       -- Inference is finished; the remaining work is an ordinary proof obligation.
       if candidate.validated && candidate.remainingHeads == some 0 then break
     return false
@@ -470,6 +500,7 @@ private def transform (ctx : Context) (name : String) (siblings : List MVarId)
   checkpoint ctx siblings
 
 private def cleanup (ctx : Context) (parent : MVarId) (siblings : List MVarId) : TacticM Unit := do
+  checkpoint ctx siblings
   tidy ctx parent
   checkpoint ctx siblings
 
@@ -484,7 +515,7 @@ private def solveResidual (ctx : Context) (goal : MVarId) (siblings : List MVarI
     | _ => (goal, [])
   setGoals [predicate]
   checkpoint ctx (free ++ siblings)
-  discard <| guarded (solveKGoal ctx predicate) (quiet := false)
+  discard <| guarded (solveKGoal ctx predicate (free ++ siblings)) (quiet := false)
   let residual ← getUnsolvedGoals
   setGoals free
   close ctx
@@ -554,6 +585,12 @@ private partial def walk (ctx : Context) (goal : MVarId) (siblings : List MVarId
 
 /-- Preserve the latest committed frontier even when a later traversal reaches a limit. -/
 def flexImpl (setup : Setup) : TacticM Unit := focus do
+  let timingEnabled ← isTracingEnabledFor `flex.timing
+  let events ← IO.mkRef (#[] : Array PhaseEvent)
+  let notify := setup.onPhase
+  let setup := { setup with onPhase := fun event => do
+    if timingEnabled then events.modify (·.push event)
+    notify event }
   let parent ← getMainGoal
   let initial ← Tactic.saveState
   let saved ← IO.mkRef initial
@@ -562,15 +599,23 @@ def flexImpl (setup : Setup) : TacticM Unit := focus do
   let reserve ← if (← getMaxHeartbeats) == 0 then pure 0 else
     pure (min 20000000 ((← getRemainingHeartbeats) / 20))
   let ctx : Context := { setup, deadline, reserve, checkpoint := saved }
-  tryCatchRuntimeEx
-    (discard <| walk ctx parent [])
-    (fun error => do
-      restore (← saved.get)
-      if error.isInterrupt then throw error
-      Core.checkInterrupted
-      trace[flex] "stopped at checkpoint: {error.toMessageData}")
-  -- Reserved resources are for presenting the retained obligations, even after timeout.
-  tidy ctx parent
+  let result ← Flex.Timeout.run deadline do
+    tryCatchRuntimeEx
+      (discard <| walk ctx parent [])
+      (fun error => do
+        restore (← saved.get)
+        if error.isInterrupt then throw error
+        Core.checkInterrupted
+        trace[flex] "stopped at checkpoint: {error.toMessageData}")
+    discard <| phase ctx "bundle residual" setup.config.zapHeartbeats do
+      setGoals (← Flex.Residual.bundle parent (← getUnsolvedGoals))
+  if result.isNone then
+    restore (← saved.get)
+    setup.onPhase { phase := "search", status := "timeout" }
+    trace[flex] "time budget exhausted; retained the last checkpoint"
+  for event in ← events.get do
+    if event.status != "start" then
+      trace[flex.timing] "{event.phase}: {event.status}, {event.elapsedMs} ms"
 
 end Flex.Portfolio
 
@@ -581,11 +626,8 @@ syntax "fix" : flexBackend
 syntax "spacer" : flexBackend
 syntax "eldarica" : flexBackend
 
-/-- Preprocess, eliminate predicates, and discharge what can be proved.
-Deep scraping is the default. Unproved obligations remain as one structured VC.
-For large template searches, Fix tries source instances before the full qualifier pool.
-`proof` customizes certification; `closer` customizes residual proof search.
-`config` controls preparation, nesting, phases, budgets, and optional reporting. -/
+/-- Eliminate predicates and prove what can be discharged, leaving ordinary Lean goals.
+Uses deep scraping by default. `proof` certifies candidates; `closer` proves residuals. -/
 syntax "flex" (atomic("(" &"backends" ":=") "[" flexBackend,* "]" ")")?
   (atomic("(" &"scrape" ":=") ident ")")?
   (atomic("(" &"defs" ":=") "[" ident,* "]" ")")?

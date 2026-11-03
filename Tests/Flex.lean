@@ -169,3 +169,97 @@ example : ∃ k : Prop → Prop → Prop,
   flex
 
 end StatefulFoldTests
+
+namespace TimeoutTests
+
+-- A cancellable closer simulates expensive proof search without calling a solver.
+private def waitForCancellation : TacticM Unit := do
+  repeat
+    Core.checkInterrupted
+    IO.sleep 1
+
+elab "wait_for_flex_timeout" : tactic => waitForCancellation
+
+example : True := by
+  run_tac do
+    let events ← IO.mkRef (#[] : Array Flex.Portfolio.PhaseEvent)
+    Flex.Portfolio.flexImpl { backends := [], onPhase := fun e => events.modify (·.push e) }
+    let events ← events.get
+    unless events.any (·.status == "ok") && events.all (·.status != "interrupted") do
+      throwError "successful phases were not reported correctly"
+
+-- A timeout during discharge must preserve Zap's witness and keep caller siblings.
+example (p : Prop) (hp : p) : (∃ k : Int → Prop, k 0 ∧ (∀ i, k i → p)) ∧ p := by
+  constructor
+  · flex (backends := []) (closer := wait_for_flex_timeout)
+      (config := { totalTimeout := 1 })
+    run_tac do
+      unless !(← getMainTarget).isAppOfArity ``Exists 2 do
+        throwError "timeout lost Zap's elimination"
+    grind
+  · exact hp
+
+-- Expiring during PA must not discard an acyclic predicate already eliminated.
+example : ∃ loop seed : Int → Prop,
+    seed 0 ∧ (∀ i, seed i → loop i) ∧
+    (∀ i, loop i → loop (i + 1)) ∧ (∀ i, loop i → 0 ≤ i) := by
+  flex (backends := [fix]) (synth := wait_for_flex_timeout)
+    (config := { totalTimeout := 1, closeLeaves := false })
+  run_tac do
+    let target ← getMainTarget
+    unless target.isAppOfArity ``Exists 2 do throwError "lost the cyclic predicate"
+    withLocalDeclD `k (target.getArg! 0) fun k => do
+      if (target.appArg!.beta #[k]).isAppOfArity ``Exists 2 then
+        throwError "timeout restored the eliminated acyclic predicate"
+  refine ⟨fun i : Int => 0 ≤ i, ?_⟩
+  grind
+
+-- A validated Fix candidate also survives a timeout in the remaining proof.
+example (p : Prop) (hp : p) : ∃ k : Int → Prop,
+    k 0 ∧ (∀ i, k i → k (i + 1)) ∧ (∀ i, k i → 0 ≤ i) ∧ p := by
+  flex (backends := [fix]) (closer := wait_for_flex_timeout)
+    (config := { zap := false, totalTimeout := 3 })
+  run_tac do
+    if (← getMainTarget).isAppOfArity ``Exists 2 then
+      throwError "timeout lost the validated Fix invariant"
+  all_goals grind
+
+open Lean Elab Term in
+run_elab do
+  -- A timed-out computation cannot commit assignments, even if it made progress.
+  let goal ← mkFreshExprMVar (some (mkConst ``True)) (kind := .syntheticOpaque)
+  let remaining ← Tactic.run goal.mvarId! do
+    let result ← Flex.Timeout.run (some ((← IO.monoMsNow) + 50)) do
+      evalTactic (← `(tactic| trivial))
+      waitForCancellation
+    unless result.isNone do throwError "deadline was not enforced"
+    unless !(← goal.mvarId!.isAssigned) do throwError "timed-out assignment escaped"
+  unless remaining == [goal.mvarId!] do throwError "timeout changed the caller's goals"
+  -- A caller's interrupt must propagate, rather than looking like a local timeout.
+  let token ← IO.CancelToken.new
+  let signal ← (do IO.sleep 20; token.set : BaseIO Unit).asTask (prio := .dedicated)
+  let action : TermElabM Unit := do
+    discard <| Tactic.run goal.mvarId! do
+      discard <| Flex.Timeout.run (some ((← IO.monoMsNow) + 1000)) waitForCancellation
+  let action := (action.run (← readThe Term.Context) (← getThe Term.State)).run
+    (← readThe Meta.Context) (← getThe Meta.State)
+  let result ← (action.run' { (← readThe Core.Context) with cancelTk? := some token }
+    (← getThe Core.State)).toBaseIO
+  unless result matches .error (.internal _ _) do throwError "caller cancellation was swallowed"
+  if let .error error := result then
+    unless error.isInterrupt do throwError "caller cancellation changed exception kind"
+  discard <| IO.wait signal
+  -- Native process cancellation must complete before the timeout returns.
+  unless System.Platform.isWindows do
+    let stopped ← IO.mkRef false
+    let start ← IO.monoMsNow
+    discard <| Tactic.run goal.mvarId! do
+      let result ← Flex.Timeout.run (some (start + 100)) do
+        discard <| Flex.CHC.Process.run {
+          executable := "/bin/sh", args := #["-c", "exec sleep 10"], timeoutMs := 5000 } ""
+        stopped.set true
+      unless result.isNone do throwError "native call ignored the deadline"
+    unless (← stopped.get) && (← IO.monoMsNow) - start < 2000 do
+      throwError "native cancellation did not finish promptly"
+
+end TimeoutTests

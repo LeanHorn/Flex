@@ -1,0 +1,44 @@
+Flex evaluation plan — 2026-11-03
+
+RQ3a — Coverage on verifier-generated CHCs
+  Corpora: FluxRS and the frozen 320-query LiquidHaskell suite.
+  Configurations of the same flex tactic:
+    * Zap + Fix: backends [fix]
+    * S/E only: backends [spacer, eldarica], zap false
+    * Zap + Fix + S/E: backends [fix, spacer, eldarica]
+  Keep preprocessing, postprocessing, discharge automation, and budgets equal.
+  Use deep scraping for Fix. Report predicate elimination and full proofs separately.
+  LiquidHaskell is curated: 268 earlier successes + 26 partial cases + 26 timeouts.
+  Its later 30s run proved 255/320 and instantiated every predicate in 282/320.
+  Corpus/tooling PR: https://github.com/LeanHorn/flex-benchmarks/pull/4
+
+RQ3b — S/E coverage on CHC-COMP
+  Use direct export, Spacer/Eldarica, and Lean proof automation; disable Zap/Fix.
+  Primary outcome: obtain solver predicates and import them into Lean.
+  Record separately: raw model returned, typed predicates imported, all heads
+  eliminated, and the whole original VC proved. Partial proofs are not full proofs.
+  Join against native original-SMT results by task ID and source hash.
+  Native baselines give each solver 30s; a shared 30s Flex budget is different.
+  Preserve translation/export/import failures and unsupported cases in the totals.
+  Backend contract and limitations: evaluation/CHC-backend.txt.
+
+BUDGET LIMITATION TO FIX
+  totalTimeout requests cancellation and restores a committed checkpoint.
+  Some calls do not respond promptly; the current CHC-COMP run still reaches
+  its 360s external safety cap in some cases. Do not claim a hard 30s bound.
+  Loading, residual formatting, and final kernel checking are outside Flex's timer.
+
+CURRENT DATA (frozen runs; do not edit their inputs or configuration)
+  LiquidHaskell/curated320-20261103/: completed 320-case full-Flex run.
+  LiquidHaskell/timeouts-shared30-20261103/: completed 129-case timeout retry.
+  CHC-COMP/results/comparison500-20261103/: 500 queries x four configurations;
+    exploratory comparison predating the revised RQ3b scope. Check progress.py.
+  CHC-COMP/results/se-30s-20261101/native/: completed original-SMT baselines.
+  Paths above are relative to evaluation/. Concurrent timings share the machine.
+
+OTHER STUDIES
+  RQ1: invariant inference, manual/AI residual proofs, and proof effort.
+  RQ2: Zap versus automation-based certification of the same elimination steps.
+  Foundational verifiers: Imp/STLC generation soundness and source examples.
+  Keep scraping ablations separate from backend coverage comparisons.
+  Historical discussion: CHC-COMP/provenance/evaluation-plan-20261101.txt.

@@ -42,3 +42,7 @@ jobs:
         run: .lake/build/bin/flex
       - name: Check flex checkpoints
         run: lake --log-level=error lean Tests/Flex.lean -- --error=hasSorry
+      - name: Check RQ2 tooling
+        run: |
+          lake --log-level=error lean evaluation/RQ2/RQ2.lean -- --error=hasSorry
+          python3 -B evaluation/RQ2/benchmark_rq2.py --help

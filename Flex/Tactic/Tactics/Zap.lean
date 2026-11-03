@@ -95,7 +95,8 @@ structure LeafStrategy where
 def emitStrategy : LeafStrategy := { label := "zap", mkHandler := emitLeaf }
 
 /-- The `zap` pipeline, parameterised by what happens at each κ-head leaf. -/
-def zapImpl (s : LeafStrategy) (preprocess : Bool := true) : TacticM Unit := focus <| withMainContext do
+def zapImpl (s : LeafStrategy) (preprocess : Bool := true)
+    (postprocess : Bool := true) : TacticM Unit := focus <| withMainContext do
   if preprocess then
     liftMetaTactic fun goal => do
       let goal ← Flex.Preprocess.prepareGoal goal
@@ -203,6 +204,11 @@ def zapImpl (s : LeafStrategy) (preprocess : Bool := true) : TacticM Unit := foc
   bridgeMvar.mvarId!.assign bridge
 
   let residuals := (← residualOut.get).toList
+  if flex.benchPhases.get (← getOptions) then
+    IO.println s!"ZAP_RESULT eliminated={elimVars.length} cut={cutVars.length} head_goals={residuals.length}"
+  unless postprocess do
+    replaceMainGoal (newGoalM.mvarId! :: residuals)
+    return
   -- Hand the closer a CLEAN residual. The structure-preserving σ̂ leaves
   -- inert `False ∨`/`True ∧`/dead-`∃` noise — required for the bridge's
   -- And/Or mirror, but it overflows simp/grind on deep VCs (e.g. Quicksort).

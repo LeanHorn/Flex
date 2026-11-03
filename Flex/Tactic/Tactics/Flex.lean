@@ -1,4 +1,4 @@
-import Flex.Tactic.Tactics.Zap
+import Flex.Tactic.Tactics.ZapWith
 import Flex.Tactic.Tactics.Fix
 import Flex.Tactic.Tactics.Eldarica
 import Flex.Preprocess.Cleanup
@@ -30,11 +30,17 @@ instance : ToString Backend where
 
 def Backend.all : List Backend := [.fix, .spacer, .eldarica]
 
+/-- How Zap proves predicate heads; all choices use the same strongest solutions. -/
+inductive ZapCertificate where
+  | constructive | grind | aesop
+  deriving BEq, Repr
+
 /-- Pipeline switches, heartbeat limits, and a shared deadline in seconds. -/
 structure Config where
   preprocess : Bool := true
   nesting : Bool := false
   zap : Bool := true
+  zapCertificate : ZapCertificate := .constructive
   postprocess : Bool := true
   closeLeaves : Bool := true
   splitFree : Bool := true
@@ -543,7 +549,12 @@ private partial def walk (ctx : Context) (goal : MVarId) (siblings : List MVarId
         current.assign (← mkAppM ``Iff.mpr #[result.proof, next])
         setGoals [next.mvarId!]
     if ctx.setup.config.zap then
-      transform ctx "zap" siblings (zapImpl emitStrategy (preprocess := false))
+      let strategy ← match ctx.setup.config.zapCertificate with
+        | .constructive => pure emitStrategy
+        | .grind => pure (searchStrategy (← `(tactic| grind)) "zap_grind")
+        | .aesop => pure (searchStrategy (← `(tactic| aesop)) "zap_aesop")
+      transform ctx "zap" siblings (zapImpl strategy (preprocess := false)
+        (postprocess := ctx.setup.config.postprocess))
     if ctx.setup.config.postprocess then
       transform ctx "postprocess" siblings do
         setGoals (← (← getUnsolvedGoals).mapM fun goal => Flex.Preprocess.cleanupGoal goal)

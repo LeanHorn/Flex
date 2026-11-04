@@ -228,7 +228,7 @@ def main() -> int:
         "git_head": common.capture(["git", "rev-parse", "HEAD"]),
         "arguments": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
         "configurations": {name: CONFIGURATIONS[name] for name in configurations},
-        "pipeline": "main flex; common preprocessing, postprocessing and residual automation; no nesting",
+        "pipeline": "main flex; True/False preprocessing and residual automation; no nesting or postprocessing",
         "scrape": "deep when Fix is enabled",
         "candidate_policy": "Unvalidated candidates rejected by the actual flex defaults.",
         "metrics_note": "Predicate counts describe the retained frontier, including Zap. "

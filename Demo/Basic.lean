@@ -489,7 +489,7 @@ def ex_stress : Prop :=
 
 theorem ex_stressProof' : ex_stress := by
   unfold ex_stress
-  zap
+  flex (backends := []) (config := { postprocess := true, closeLeaves := false })
   all_goals grind
 
 theorem ex_stressProof : ex_stress := by

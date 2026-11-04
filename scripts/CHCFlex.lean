@@ -177,6 +177,7 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
             ("scrape", if full then toJson "deep" else Json.null),
             ("preprocess", toJson config.preprocess), ("zap", toJson config.zap),
             ("postprocess", toJson config.postprocess), ("nesting", toJson config.nesting),
+            ("split_free", toJson config.splitFree),
             ("keep_candidates", toJson config.keepCandidates),
             ("total_timeout_seconds", toJson config.totalTimeout),
             ("solver_timeout_seconds", toJson config.solverTimeout),

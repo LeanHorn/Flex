@@ -228,7 +228,7 @@ private def ablation (ctx : Context) : TacticM Unit := do
   if ctx.variant.startsWith "ab_nest_post_" || ctx.variant == "ab_zap_post_solver" then
     discard <| attempt ctx "postprocess" do
       let goals ← getUnsolvedGoals
-      setGoals (← goals.mapM fun goal => compactGoal goal [])
+      setGoals (← goals.mapM fun goal => Flex.Preprocess.compactGoal goal [])
     saveGoals ctx "after-postprocess"
   if (← getUnsolvedGoals).isEmpty then return
   if ctx.variant.endsWith "basic" || ctx.variant.endsWith "standard" || ctx.variant.endsWith "deep" then

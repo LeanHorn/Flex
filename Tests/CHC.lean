@@ -1,4 +1,5 @@
 import Flex.CHC.Goal
+import Flex.Preprocess.Witnesses
 
 /-! Small checks for model import and certification; solver coverage lives in the benchmarks. -/
 
@@ -43,7 +44,11 @@ run_elab do
     k 0 ∧ (∀ x : Int, (∃ y : Int, (k y ∨ y = 0) ∧ y = x) → k x) ∧
     (∀ x : Int, k x → 0 ≤ x)))
   let goal ← mkFreshExprMVar target
-  let cleaned ← compactGoal goal.mvarId! []
+  let cleaned ← Flex.Preprocess.compactGoal goal.mvarId! []
+  let expected ← elaborate (← `(∃ k : Int → Prop,
+    k 0 ∧ (∀ x : Int, (k x ∨ x = 0) → k x) ∧ (∀ x : Int, k x → 0 ≤ x)))
+  unless ← isDefEq (← cleaned.getType) expected do
+    throwError "witness compaction did not remove the equality-bound witness"
   let prepared ← prepareGoal cleaned
   let problem ← exportConstraints prepared.kvars (← prepared.exportGoal.getType)
   let witnesses ← importWitnesses problem

@@ -98,8 +98,14 @@ manual work remains. Failed phases preserve earlier progress.
 flex
 flex (backends := [fix]) (scrape := basic)
 flex (backends := []) (config := { nesting := true }) -- Zap only
+flex (config := { postprocess := true }) -- optional witness simplification
 flex (config := { totalTimeout := 30 }) -- shared budget; also the default
 ```
+
+Only True/False preprocessing is enabled by default. Nesting, postprocessing, and
+separating κ-free clauses (`splitFree := true`) are opt-in. Postprocessing runs once
+after Zap makes progress and skips expensive or growing witness rewrites.
+Use `preprocess := false` to disable preprocessing.
 
 Use `proof := ...` for certification and `closer := ...` for residual proofs.
 The whole tactic shares a 30-second budget, including cleanup. Expiry requests

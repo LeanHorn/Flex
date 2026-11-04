@@ -8,6 +8,50 @@ set_option linter.unreachableTactic false
 
 namespace FlexTests
 
+-- Check the structural rewrite proofs, including quantifiers over empty types.
+open Lean Elab Term in
+run_elab do
+  for (source, expected) in #[
+      (← `(∀ p : Prop, True ∧ p), ← `(∀ p : Prop, p)),
+      (← `(∀ p : Prop, False ∨ (p ∧ True)), ← `(∀ p : Prop, p)),
+      (← `(∀ p : Prop, (True ∨ p) ∧ (p ∨ True)), ← `(True)),
+      (← `(∀ p : Prop, (False ∧ p) ∨ (p ∧ False)), ← `(∀ p : Prop, False)),
+      (← `(∀ p : Prop, True → (False → p)), ← `(True)),
+      (← `(¬(True ∧ False)), ← `(True)),
+      (← `(∃ x : Int, False ∨ False), ← `(False)),
+      (← `(∀ _ : Empty, True ∧ True), ← `(True)),
+      (← `(∀ _ : Empty, False), ← `(∀ _ : Empty, False)),
+      (← `(∃ _ : Empty, True), ← `(∃ _ : Empty, True)),
+      (← `(∀ h : True, h = h), ← `(∀ h : True, h = h))] do
+    let source ← elabTerm source none
+    let expected ← elabTerm expected none
+    synthesizeSyntheticMVarsNoPostponing
+    let source ← instantiateMVars source
+    let expected ← instantiateMVars expected
+    let (result, proof) ← Flex.Preprocess.simplifyTrueFalse source
+    unless ← isDefEq result expected do throwError "unexpected True/False simplification: {result}"
+    checkWithKernel proof
+    unless ← isDefEq (← inferType proof) (mkApp2 (mkConst ``Iff) source result) do
+      throwError "incorrect True/False equivalence"
+
+-- Default preparation does not eliminate equality-bound witnesses.
+example : ∀ x : Int, (∃ y : Int, y = x ∧ 0 ≤ y) → 0 ≤ x := by
+  flex (backends := []) (config := { zap := false, closeLeaves := false })
+  guard_target =~ (∀ x : Int, (∃ y : Int, y = x ∧ 0 ≤ y) → 0 ≤ x)
+  grind
+
+-- Enabling cleanup must not invoke it when Zap has no eliminable predicate.
+example : ∃ k : Int → Prop, (∀ x, k x → k x) := by
+  run_tac do
+    let events ← IO.mkRef (#[] : Array Flex.Portfolio.PhaseEvent)
+    Flex.Portfolio.flexImpl {
+      backends := []
+      config := { postprocess := true, closeLeaves := false }
+      onPhase := fun e => events.modify (·.push e) }
+    if (← events.get).any (·.phase == "postprocess") then
+      throwError "postprocessing ran after a no-op Zap"
+  exact ⟨fun _ => True, fun _ h => h⟩
+
 /-- info: flex: fix completed the predicate goal -/
 #guard_msgs in
 example : ∃ k : Int → Prop,

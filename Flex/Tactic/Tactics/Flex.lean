@@ -41,9 +41,11 @@ structure Config where
   nesting : Bool := false
   zap : Bool := true
   zapCertificate : ZapCertificate := .constructive
-  postprocess : Bool := true
+  /-- Simplify equality-bound witnesses once after Zap; disabled by default. -/
+  postprocess : Bool := false
   closeLeaves : Bool := true
-  splitFree : Bool := true
+  /-- Separate κ-free clauses before synthesis; disabled by default. -/
+  splitFree : Bool := false
   /-- Expose unvalidated solver candidates for manual exploration. Refuted ones are rejected. -/
   keepCandidates : Bool := false
   report : Bool := false
@@ -258,8 +260,6 @@ private def separateFree (goal : MVarId) : MetaM (Option (MVarId × MVarId)) :=
 private def tidy (ctx : Context) (parent : MVarId) : TacticM Unit := do
   discard <| phase ctx "cleanup" ctx.setup.config.zapHeartbeats do
     let goals ← Flex.Residual.bundle parent (← getUnsolvedGoals)
-    let goals ← if ctx.setup.config.postprocess then
-      goals.mapM fun goal => Flex.Preprocess.cleanupGoal goal else pure goals
     setGoals (← goals.filterM fun goal => return !(← goal.isAssignedOrDelayedAssigned))
 
 private def proofOracle (ctx : Context) : PAOracle := fun target => withRemainingTime ctx do
@@ -596,12 +596,15 @@ private def solveResidual (ctx : Context) (goal : MVarId) (siblings : List MVarI
 
 /-- Discover predicate goals under positive quantifiers and conjunctions. -/
 private partial def walk (ctx : Context) (goal : MVarId) (siblings : List MVarId)
-    : TacticM (List MVarId) := do
+    (prepared : Bool := false) : TacticM (List MVarId) := do
   setGoals [goal]
+  let mut prepared := prepared
   if ctx.setup.config.preprocess then
-    transform ctx "preprocess" siblings do
-      let next ← Flex.Preprocess.prepareGoal goal
+    let result ← phase ctx "preprocess" ctx.setup.config.zapHeartbeats do
+      let next ← Flex.Preprocess.prepareGoal goal (simplify := !prepared)
       setGoals (if ← next.isAssignedOrDelayedAssigned then [] else [next])
+    if result matches .ok _ then prepared := true
+    checkpoint ctx siblings
   if (← getGoals).isEmpty then return []
   let current ← getMainGoal
   if ← isKGoal current then
@@ -617,11 +620,11 @@ private partial def walk (ctx : Context) (goal : MVarId) (siblings : List MVarId
         | .constructive => pure emitStrategy
         | .grind => pure (searchStrategy (← `(tactic| grind)) "zap_grind")
         | .aesop => pure (searchStrategy (← `(tactic| aesop)) "zap_aesop")
-      transform ctx "zap" siblings (zapImpl strategy (preprocess := false)
-        (postprocess := ctx.setup.config.postprocess))
-    if ctx.setup.config.zap && ctx.setup.config.postprocess then
-      transform ctx "postprocess" siblings do
-        setGoals (← (← getUnsolvedGoals).mapM fun goal => Flex.Preprocess.cleanupGoal goal)
+      let before ← getGoals
+      transform ctx "zap" siblings (zapImpl strategy (preprocess := false) (postprocess := false))
+      if ctx.setup.config.postprocess && (← getGoals) != before then
+        transform ctx "postprocess" siblings do
+          setGoals (← (← getUnsolvedGoals).mapM fun goal => do Flex.Preprocess.cleanupGoal goal)
     let mut outputs := []
     let mut pending ← getUnsolvedGoals
     while let next :: rest := pending do
@@ -651,7 +654,7 @@ private partial def walk (ctx : Context) (goal : MVarId) (siblings : List MVarId
         let mut pending := children
         while let child :: rest := pending do
           pending := rest
-          outputs := outputs ++ (← walk ctx child (outputs ++ pending ++ siblings))
+          outputs := outputs ++ (← walk ctx child (outputs ++ pending ++ siblings) prepared)
         setGoals outputs
       else close ctx
     else close ctx

@@ -96,7 +96,7 @@ def emitStrategy : LeafStrategy := { label := "zap", mkHandler := emitLeaf }
 
 /-- The `zap` pipeline, parameterised by what happens at each κ-head leaf. -/
 def zapImpl (s : LeafStrategy) (preprocess : Bool := true)
-    (postprocess : Bool := true) : TacticM Unit := focus <| withMainContext do
+    (postprocess : Bool := false) : TacticM Unit := focus <| withMainContext do
   if preprocess then
     liftMetaTactic fun goal => do
       let goal ← Flex.Preprocess.prepareGoal goal
@@ -209,21 +209,8 @@ def zapImpl (s : LeafStrategy) (preprocess : Bool := true)
   unless postprocess do
     replaceMainGoal (newGoalM.mvarId! :: residuals)
     return
-  -- Hand the closer a CLEAN residual. The structure-preserving σ̂ leaves
-  -- inert `False ∨`/`True ∧`/dead-`∃` noise — required for the bridge's
-  -- And/Or mirror, but it overflows simp/grind on deep VCs (e.g. Quicksort).
-  -- `collapseInert` peels it in one structural pass (`iff : e ↔ clean`) and
-  -- discharges the noisy goal via `iff.mpr`, leaving the user the clean goal.
-  let cleanGoals ← benchPhase s.label "clean" <| goal.withContext do
-    (newGoalM.mvarId! :: residuals).mapM fun m => do
-      let ty ← m.getType
-      let (clean, iff) ← collapseInert ty
-      if clean == ty then
-        return m
-      else
-        let cleanM ← mkFreshExprMVar (some clean) (kind := .syntheticOpaque)
-        m.assign (← mkAppM ``Iff.mpr #[iff, cleanM])
-        return cleanM.mvarId!
+  let cleanGoals ← benchPhase s.label "clean" do
+    (newGoalM.mvarId! :: residuals).mapM fun goal => do Flex.Preprocess.cleanupGoal goal
   trace[Zap.debug] m!"zap: eliminated {elimVars.length} κ \
             {elimVars.map (·.name)}; new goal is ∃ \
             {cutVars.length} retained cut κ + body; \

@@ -21,9 +21,9 @@ private partial def forcedFalseProof? (p type proof : Expr) : MetaM (Option Expr
   if type.isForall && type.bindingDomain! == p && type.bindingBody!.isConstOf ``False then
     return some proof
   if let some (left, right) := type.and? then
-    if let some found ← forcedFalseProof? p left (← mkAppM ``And.left #[proof]) then
+    if let some found ← forcedFalseProof? p left (mkApp3 (mkConst ``And.left) left right proof) then
       return some found
-    return ← forcedFalseProof? p right (← mkAppM ``And.right #[proof])
+    return ← forcedFalseProof? p right (mkApp3 (mkConst ``And.right) left right proof)
   if type.isAppOfArity ``Exists 2 then
     let domain := type.getArg! 0
     let predicate := type.getArg! 1

@@ -161,6 +161,7 @@ end PAScrape.Internal
 
 /-- Candidate templates may capture the caller's context, never temporary scraping binders. -/
 def scrapePAQualifiersWithReport (body : Expr) (cfg : PAScrapeConfig) : MetaM PAScrapeResult := do
+  if cfg.mode == .auto then throwError "automatic scraping must be staged by fix"
   let fixed := FVarIdSet.ofArray (← getLCtx).getFVarIds
   let (_, state) ← (PAScrape.Internal.collect cfg (← instantiateMVars body)).run { fixed }
   let result := PAScrape.Internal.finish cfg state

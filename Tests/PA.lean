@@ -29,6 +29,29 @@ example : counter := by
 
 end PADischargeTests
 
+open Lean Meta Elab Term Tactic in
+run_elab do
+  -- A valid bank stops escalation; a missing constant requires Basic's new qualifier.
+  for (source, expected) in #[
+      (← `(∃ k : Int → Prop, k 0 ∧ (∀ n, k n → k (n + 1)) ∧ (∀ n, k n → 0 ≤ n)),
+        #[PAScrapeMode.no]),
+      (← `(∃ k : Int → Prop, k 7 ∧ (∀ n, k n → k n) ∧ (∀ n, k n → n = 7)),
+        #[PAScrapeMode.no, .basic])] do
+    let target ← elabTerm source none
+    synthesizeSyntheticMVarsNoPostponing
+    let target ← instantiateMVars target
+    let goal ← mkFreshExprMVar (some target) (kind := .syntheticOpaque)
+    let stages ← IO.mkRef #[]
+    let remaining ← Tactic.run goal.mvarId! do
+      fixImpl (observe := fun event => match event with
+          | .stageStarted mode => stages.modify (·.push mode)
+          | _ => pure ())
+        (synthOracle := some Flex.Automation.synthOracle)
+      evalTactic (← `(tactic| all_goals grind))
+    unless (← stages.get) == expected do throwError "incorrect PA escalation: {repr (← stages.get)}"
+    unless remaining.isEmpty do throwError "escalated invariant left an unprovable residual"
+    checkWithKernel (← instantiateMVars goal)
+
 namespace PABatchTests
 
 open Lean Meta Elab Term
@@ -491,7 +514,8 @@ run_elab do
         fun targets => pure (targets.map fun _ => .unknown "test"),
         fun _ => pure #[]] do
       let rejected ← try
-        fixImpl (proofOracle := some (fun _ => pure none)) (synthOracle := some oracle)
+        fixImpl (scrape := { mode := .no })
+          (proofOracle := some (fun _ => pure none)) (synthOracle := some oracle)
         pure false
       catch _ => pure true
       unless rejected do throwError "kept an invalid or unvalidated predicate"

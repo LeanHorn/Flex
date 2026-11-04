@@ -32,6 +32,24 @@ private def emitPhase (output : System.FilePath) (event : Flex.Portfolio.PhaseEv
       ("phase", toJson event.phase), ("status", toJson event.status),
       ("elapsed_ms", toJson event.elapsedMs), ("mono_ms", toJson (← IO.monoMsNow))]).compress
 
+private def recordPA (output : System.FilePath) : PAObserver := fun event => do
+  let record (status : String) (fields : List (String × Json)) := do
+    emit output "fix/pa" status (("mono_ms", toJson (← IO.monoMsNow)) :: fields)
+  match event with
+  | .stageStarted mode => record "stage_start" [("mode", toJson (toString mode))]
+  | .stageFinished mode accepted => record "stage_end" [
+      ("mode", toJson (toString mode)), ("accepted", toJson accepted)]
+  | .setup scraped standard tagged candidates =>
+    record "setup" [
+      ("scraped_templates", toJson scraped), ("bank_templates", toJson standard),
+      ("tagged_templates", toJson tagged),
+      ("candidates", Json.arr (candidates.map fun (name, count) => Json.mkObj [
+        ("name", toJson name.toString), ("count", toJson count)]))]
+  | .roundStarted count => record "round_start" [("candidates", toJson count)]
+  | .roundFinished before after => record "round_end" [
+      ("before", toJson before), ("after", toJson after)]
+  | .converged count => record "converged" [("candidates", toJson count)]
+
 private def recordCHC (output : System.FilePath) (attempt : IO.Ref Nat)
     (backend : Flex.Portfolio.Backend) (event : Flex.CHC.Event) : TermElabM Unit := do
   if event matches .exported _ then attempt.modify (· + 1)
@@ -146,10 +164,17 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
       let heartbeats ← envNat "FLEX_PARITY_HEARTBEATS" 2000000
       let proofHeartbeats ← envNat "FLEX_PARITY_PROOF_HEARTBEATS" 20000
       let caseSeconds ← envNat "FLEX_PARITY_CASE_SECONDS" 120
-      let totalSeconds ← envNat "FLEX_PARITY_FLEX_SECONDS" 30
+      let totalSeconds ← envNat "FLEX_PARITY_FLEX_SECONDS" 60
       let solverSeconds ← envNat "FLEX_PARITY_SOLVER_SECONDS" 30
       let zap := (← IO.getEnv "FLEX_PARITY_ZAP").getD "1" != "0"
       let full := (← IO.getEnv "FLEX_PARITY_FULL").getD "0" == "1"
+      let scrapeName := (← IO.getEnv "FLEX_PARITY_SCRAPE").getD "auto"
+      let scrapeMode : PAScrapeMode ← match scrapeName with
+        | "no" => pure .no | "basic" => pure .basic
+        | "standard" => pure .standard | "deep" => pure .deep
+        | "auto" => pure .auto
+        | _ => throwError "invalid FLEX_PARITY_SCRAPE: {scrapeName}"
+      let profilePA := (← IO.getEnv "FLEX_PARITY_PROFILE_PA").getD "0" == "1"
       let solvers := (← IO.getEnv "FLEX_PARITY_SE").getD "1" != "0"
       let backends : List Flex.Portfolio.Backend :=
         (if full then [.fix] else []) ++ (if solvers then [.spacer, .eldarica] else [])
@@ -158,7 +183,9 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
       let eldaricaExe ← IO.getEnv "FLEX_PARITY_ELDARICA_EXECUTABLE"
       let currentOptions ← getOptions
       let options := Id.run do
-        let opts := flex.automation.proofHeartbeats.set currentOptions proofHeartbeats
+        let opts := flex.benchOracles.set currentOptions profilePA
+        let opts := opts.setBool `trace.flex.synthesis profilePA
+        let opts := flex.automation.proofHeartbeats.set opts proofHeartbeats
         let opts := match spacerExe with
           | some executable => flex.spacer.executable.set opts executable
           | none => opts
@@ -174,7 +201,8 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
           IO.FS.writeFile (output / "invocation.json") (Json.mkObj [
             ("entry_point", toJson "Flex.Portfolio.flexImpl"),
             ("backends", toJson (backends.map toString)),
-            ("scrape", if full then toJson "deep" else Json.null),
+            ("scrape", if full then toJson scrapeName else Json.null),
+            ("profile_pa", toJson profilePA),
             ("preprocess", toJson config.preprocess), ("zap", toJson config.zap),
             ("postprocess", toJson config.postprocess), ("nesting", toJson config.nesting),
             ("split_free", toJson config.splitFree),
@@ -194,7 +222,8 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
           emit output "flex" "running" [("original_predicates", toJson before)]
           let attempt ← IO.mkRef 0
           let goals ← Tactic.run original.mvarId! <| Flex.Portfolio.flexImpl {
-            config, backends, scrape := { mode := .deep }, onPhase := emitPhase output
+            config, backends, scrape := { mode := scrapeMode }, onPhase := emitPhase output
+            onPA := if profilePA then recordPA output else fun _ => pure ()
             onCHC := recordCHC output attempt }
           let flexMs := (← IO.monoMsNow) - start
           emit output "flex" "ok" [("elapsed_ms", toJson flexMs)]

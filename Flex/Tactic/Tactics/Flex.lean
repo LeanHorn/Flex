@@ -56,7 +56,7 @@ structure Config where
   solverHeartbeats : Nat := 500000
   dischargeHeartbeats : Nat := 500000
   /-- Shared wall-clock budget for the whole tactic; zero disables the deadline. -/
-  totalTimeout : Nat := 30
+  totalTimeout : Nat := 60
   /-- Maximum seconds for one CHC solver, within the shared deadline. Zero removes this cap. -/
   solverTimeout : Nat := 30
   scrapeLimits : PAScrapeLimits := {}
@@ -64,12 +64,14 @@ structure Config where
 structure Setup where
   config : Config := {}
   backends : List Backend := Backend.all
-  scrape : PAScrapeConfig := { mode := .deep }
+  scrape : PAScrapeConfig := { mode := .auto }
   synth : Option (TSyntax `tactic) := none
   proof : Option (TSyntax `tactic) := none
   closer : Option (TSyntax `tactic) := none
   /-- Optional live timing events, including interrupted phases. -/
   onPhase : PhaseEvent → IO Unit := fun _ => pure ()
+  /-- Observe PA candidate counts and weakening rounds, including speculative attempts. -/
+  onPA : PAObserver := fun _ => pure ()
   /-- Observe CHC artifacts independently of candidate acceptance and proof search. -/
   onCHC : Backend → Flex.CHC.Event → TermElabM Unit := fun _ _ => pure ()
 
@@ -341,7 +343,7 @@ private def runPA (ctx : Context) (scrape : PAScrapeConfig)
       let opts := if search == .sources && !opts.contains `flex.automation.equationHeartbeats then
         opts.set `flex.automation.equationHeartbeats (5000 : Nat) else opts
       if search == .functions then opts.setBool `flex.automation.sourcePredicates true else opts) <|
-    fixImpl proveLeaf scrape (some (proofOracle ctx))
+    fixImpl proveLeaf scrape (some (proofOracle ctx)) (observe := ctx.setup.onPA)
       (synthOracle := some decision) (allowUnprovedHeads := allowUnprovedHeads)
       (onCertification := fun result => report.set result) (directSources := directSources)
   let report ← report.get
@@ -705,7 +707,7 @@ syntax "spacer" : flexBackend
 syntax "eldarica" : flexBackend
 
 /-- Eliminate predicates and prove what can be discharged, leaving ordinary Lean goals.
-Uses deep scraping by default. `proof` certifies candidates; `closer` proves residuals. -/
+PA escalates scraping by default. `proof` certifies candidates; `closer` proves residuals. -/
 syntax "flex" (atomic("(" &"backends" ":=") "[" flexBackend,* "]" ")")?
   (atomic("(" &"scrape" ":=") ident ")")?
   (atomic("(" &"defs" ":=") "[" ident,* "]" ")")?
@@ -734,7 +736,7 @@ elab_rules : tactic
       | some value => do
         let stx ← `(Lean.Parser.Term.optConfig| (config := $value))
         elabFlexConfig stx (logExceptions := false)
-    let mode ← if mode.isNone then pure PAScrapeMode.deep else parseScrapeMode "flex" mode
+    let mode ← parseScrapeMode "flex" mode
     let tactic := fun (stx : Option (TSyntax ``Lean.Parser.Tactic.tacticSeq)) =>
       stx.mapM fun tac => `(tactic| ($tac:tacticSeq))
     Flex.Portfolio.flexImpl {

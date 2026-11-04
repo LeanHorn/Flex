@@ -166,6 +166,9 @@ private def runFix (ctx : Context) : TacticM Unit := do
     if (← IO.monoMsNow) - start >= ctx.paSeconds * 1000 then
       throwError "RQ1 PA budget exhausted"
   let observe : PAObserver := fun event => match event with
+    | .stageStarted mode => emit ctx "fix_stage" "start" [("mode", toJson (toString mode))]
+    | .stageFinished mode accepted => emit ctx "fix_stage" "end" [
+        ("mode", toJson (toString mode)), ("accepted", toJson accepted)]
     | .setup scraped standard tagged candidates => emit ctx "fix_setup" "prepared" [
         ("scraped_templates", toJson scraped), ("standard_templates", toJson standard),
         ("tagged_templates", toJson tagged),

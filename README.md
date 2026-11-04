@@ -40,8 +40,9 @@ example : ∃ k : Int → Prop,
   fix
 ```
 
-By default, `fix` uses a [standard qualifier bank](Flex/PA/Qualifier.lean) for
+By default, `fix` starts with a [qualifier bank](Flex/PA/Qualifier.lean) for
 `Int`, `Nat`, and `Bool`, together with definitions tagged `@[qualif]`.
+If synthesis fails, it grows the bank through Basic, Standard, then Deep scraping.
 
 ## Scraping and SMT Oracles
 
@@ -49,11 +50,15 @@ Scraping adds qualifier candidates from the goal and definitions:
 
 | Option | Candidates collected |
 | --- | --- |
+| `fix (scrape := auto)` | Incremental escalation; the default. |
+| `fix (scrape := no)` | Bank and tagged qualifiers only. |
 | `fix (scrape := basic)` | Clause conclusions and explicitly selected definitions. |
 | `fix (scrape := standard)` | Also premises, bounded guarded arithmetic qualifiers, Boolean observations, and relevant definitions. |
 | `fix (scrape := deep)` | Also explores helper definitions and generalizes numeric templates, within search limits. |
 
-Scraping is off by default. Add `(defs := [fib])` to select definitions explicitly.
+Explicit levels run once. All synthesis stages share a 60-second budget,
+set by `flex.fixpointTimeout`; certification follows a successful search.
+Add `(defs := [fib])` to select definitions explicitly.
 Use `set_option flex.reportQualifiers true` to inspect scraped candidates in the Infoview.
 Disable guarded templates with `(scrapeConfig := { maxGuardedQualifiers := 0 })`.
 By default, `fix` batches integer/Boolean SMT checks in short-lived Z3 processes,
@@ -90,7 +95,7 @@ abstraction.
 ## `flex`
 
 `import Flex` provides `flex`: preprocessing, optional nesting, Zap, then Fix
-(with deep scraping) and Spacer/Eldarica. It uses checked SMT and Lean automation
+(with incremental scraping) and Spacer/Eldarica. It uses checked SMT and Lean automation
 for proofs, retaining validated invariants and a structured residual VC when
 manual work remains. Failed phases preserve earlier progress.
 
@@ -99,7 +104,7 @@ flex
 flex (backends := [fix]) (scrape := basic)
 flex (backends := []) (config := { nesting := true }) -- Zap only
 flex (config := { postprocess := true }) -- optional witness simplification
-flex (config := { totalTimeout := 30 }) -- shared budget; also the default
+flex (config := { totalTimeout := 60 }) -- shared pipeline budget; also the default
 ```
 
 Only True/False preprocessing is enabled by default. Nesting, postprocessing, and

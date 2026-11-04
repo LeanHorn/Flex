@@ -5,8 +5,13 @@ import Lean
 open Lean Meta
 
 inductive PAScrapeMode where
-  | no | basic | standard | deep
-  deriving BEq, Inhabited
+  | no | basic | standard | deep | auto
+  deriving BEq, Inhabited, Repr
+
+instance : ToString PAScrapeMode where
+  toString
+    | .no => "bank" | .basic => "basic" | .standard => "standard"
+    | .deep => "deep" | .auto => "auto"
 
 /-- Limits apply per invocation, except guard atoms per clause and candidates per κ. -/
 structure PAScrapeLimits where

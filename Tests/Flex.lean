@@ -258,6 +258,23 @@ example : ∃ loop seed : Int → Prop,
   refine ⟨fun i : Int => 0 ≤ i, ?_⟩
   grind
 
+-- The synthesis deadline preserves Zap's progress independently of the pipeline cap.
+set_option flex.fixpointTimeout 1 in
+example : ∃ loop seed : Int → Prop,
+    seed 0 ∧ (∀ i, seed i → loop i) ∧
+    (∀ i, loop i → loop (i + 1)) ∧ (∀ i, loop i → 0 ≤ i) := by
+  -- The PA deadline applies even without a whole-pipeline deadline.
+  flex (backends := [fix]) (synth := wait_for_flex_timeout)
+    (config := { totalTimeout := 0, closeLeaves := false })
+  run_tac do
+    let target ← getMainTarget
+    unless target.isAppOfArity ``Exists 2 do throwError "lost the cyclic predicate"
+    withLocalDeclD `k (target.getArg! 0) fun k => do
+      if (target.appArg!.beta #[k]).isAppOfArity ``Exists 2 then
+        throwError "PA timeout lost Zap's checkpoint"
+  refine ⟨fun i : Int => 0 ≤ i, ?_⟩
+  grind
+
 -- A validated Fix candidate also survives a timeout in the remaining proof.
 example (p : Prop) (hp : p) : ∃ k : Int → Prop,
     k 0 ∧ (∀ i, k i → k (i + 1)) ∧ (∀ i, k i → 0 ≤ i) ∧ p := by

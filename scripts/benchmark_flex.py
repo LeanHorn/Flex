@@ -157,12 +157,14 @@ def main() -> int:
                         help="Use the supplied case order for targeted diagnostics")
     parser.add_argument("--no-zap", action="store_true", help="disable only Zap; keep all other phases")
     parser.add_argument("--full-flex", action="store_true",
-                        help="enable Fix with deep scraping before Spacer/Eldarica")
+                        help="enable Fix before Spacer/Eldarica; select scraping with --scrape")
     parser.add_argument("--configurations", nargs="+", choices=CONFIGURATIONS,
                         help="Interleave these configurations on the same selected inputs")
+    parser.add_argument("--scrape", choices=("auto", "no", "basic", "standard", "deep"), default="auto")
+    parser.add_argument("--profile-pa", action="store_true", help="Record scraping and candidate-search statistics")
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--case-timeout", type=int, default=120)
-    parser.add_argument("--flex-timeout", type=int, default=30,
+    parser.add_argument("--flex-timeout", type=int, default=60,
                         help="Shared internal Flex budget in seconds (default: 30)")
     parser.add_argument("--solver-timeout", type=int, default=30,
                         help="CHC solver cap within the shared Flex budget (default: 30)")
@@ -229,7 +231,7 @@ def main() -> int:
         "arguments": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
         "configurations": {name: CONFIGURATIONS[name] for name in configurations},
         "pipeline": "main flex; True/False preprocessing and residual automation; no nesting or postprocessing",
-        "scrape": "deep when Fix is enabled",
+        "scrape": args.scrape + " when Fix is enabled",
         "candidate_policy": "Unvalidated candidates rejected by the actual flex defaults.",
         "metrics_note": "Predicate counts describe the retained frontier, including Zap. "
                         "Import and head-elimination events describe individual attempts, which "
@@ -253,6 +255,8 @@ def main() -> int:
     environment["FLEX_PARITY_CASE_SECONDS"] = str(args.case_timeout)
     environment["FLEX_PARITY_FLEX_SECONDS"] = str(args.flex_timeout)
     environment["FLEX_PARITY_SOLVER_SECONDS"] = str(args.solver_timeout)
+    environment["FLEX_PARITY_SCRAPE"] = args.scrape
+    environment["FLEX_PARITY_PROFILE_PA"] = "1" if args.profile_pa else "0"
     metadata["lean_command"] = command
     metadata["lean_version"] = common.capture([command[0], "--version"])
     common.write_json(args.output / "metadata.json", metadata)

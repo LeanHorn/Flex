@@ -128,6 +128,9 @@ private def runPA (ctx : Context) (close : Bool := true) : TacticM Unit := do
   let rounds ← IO.mkRef 0
   let observe : PAObserver := fun event => do
     match event with
+    | .stageStarted mode => emit ctx "fix_stage" "start" [("mode", toJson (toString mode))]
+    | .stageFinished mode accepted => emit ctx "fix_stage" "end" [
+        ("mode", toJson (toString mode)), ("accepted", toJson accepted)]
     | .setup scraped standard tagged candidates =>
       emit ctx "fix_setup" "prepared" [
         ("scraped_templates", toJson scraped), ("standard_templates", toJson standard),

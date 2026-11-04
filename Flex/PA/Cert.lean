@@ -63,6 +63,25 @@ private def mentionsPredicates (assign : List (KVar × List (Expr × List Nat)))
     (e : Expr) : Bool :=
   (e.find? fun e => e.isMVar && assign.any (fun (κ, _) => κ.mvarId == e.mvarId!)).isSome
 
+/-- Validate predicate-dependent safety clauses before committing to a PA stage. -/
+partial def checkPASafety
+    (assign : List (KVar × List (Expr × List Nat))) (goal : Expr)
+    (validate : PAOracle) (dependent : Bool := false) : TermElabM Unit := do
+  if (paHead? assign goal).isSome then return
+  if goal.isForall then
+    let dependent := dependent || mentionsPredicates assign goal.bindingDomain!
+    let domain ← instantiateMVars goal.bindingDomain!
+    return ← withLocalDecl goal.bindingName! goal.bindingInfo! domain fun x =>
+      checkPASafety assign (goal.bindingBody!.instantiate1 x) validate dependent
+  if let some (left, right) := goal.and? then
+    checkPASafety assign left validate dependent
+    checkPASafety assign right validate dependent
+    return
+  let contextDepends := (← getLCtx).any fun decl =>
+    mentionsPredicates assign decl.type || decl.value?.any (mentionsPredicates assign)
+  if dependent || contextDepends || mentionsPredicates assign goal then
+    discard <| validate (← instantiateMVars goal)
+
 /-- Certify heads and validate predicate-dependent safety leaves before keeping residuals. -/
 partial def walkPAProof
     (assign : List (KVar × List (Expr × List Nat)))

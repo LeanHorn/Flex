@@ -9,6 +9,8 @@ import Flex.PA.Scrape
 open Lean Meta Elab Term Tactic
 
 inductive PAProgress where
+  | stageStarted (mode : PAScrapeMode)
+  | stageFinished (mode : PAScrapeMode) (accepted : Bool)
   | setup (scraped standard tagged : Nat) (candidates : Array (Name × Nat))
   | roundStarted (candidates : Nat)
   | roundFinished (before after : Nat)
@@ -39,11 +41,20 @@ private def candidateKey? (body : Expr) : Option Expr :=
 def buildInitialAssignment (cutVars : List KVar) (extraQualifiers : Array Expr := #[])
     (maxCandidates : Option Nat := none)
     (maxInstances : Option Nat := none) (anchored : Array PAAnchoredQualifier := #[])
+    (previous : List (KVar × List (Expr × List Nat)) := [])
+    (includeTagged : Bool := true)
     : MetaM (List (KVar × List (Expr × List Nat))) := do
-  let qs := (← getQualifiers) ++ extraQualifiers
+  let tagged ← if includeTagged then getQualifiers else pure #[]
+  let qs := tagged ++ extraQualifiers
   cutVars.mapM fun κ => do
     let params := (κ.params.map fun n => Expr.fvar (FVarId.mk n)).toArray
     let mut state : InitialCandidates := {}
+    -- Extend the original pool, not its weakened survivors: new candidates can
+    -- make previously rejected candidates inductive.
+    for (q, slots) in (previous.find? (·.1 == κ)).map (·.2) |>.getD [] do
+      let body ← Expr.instQualifier q (slots.toArray.map (params[·]!))
+      if let some key := candidateKey? body then
+        state := { state with entries := state.entries.push (q, slots), seen := state.seen.insert key }
     for q in qs do
       state ← foldQualifierInstances q κ.paramTypes state fun state slots => do
         if maxInstances.any (state.instances >= ·) then

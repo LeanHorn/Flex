@@ -33,25 +33,55 @@ structure ExportedProblem where
   relations : Array Relation
   commands : List Smt.Translate.Command
   clauseCount : Nat
+  /-- Alternate SMT presentation; the Lean clauses and relation slots are unchanged. -/
+  canonicalClauses : Bool := false
   deriving Inhabited
 
+private partial def flattenBool : Sexp → Sexp
+  | .atom text => .atom text
+  | .expr items =>
+    let items := items.map flattenBool
+    match items with
+    | .atom op :: args =>
+      if op == "and" || op == "or" then
+        .expr (.atom op :: args.flatMap fun arg => match arg with
+          | .expr (.atom nested :: children) => if nested == op then children else [arg]
+          | _ => [arg])
+      else .expr items
+    | _ => .expr items
+
+/-- `p → q → r` becomes `(p ∧ q) → r`; only Boolean associations change. -/
+private def canonicalClause (body : Sexp) : Sexp := go body []
+where
+  go : Sexp → List Sexp → Sexp
+    | .expr [.atom "=>", guard, rest], guards => go rest (guard :: guards)
+    | head, guards =>
+      let body := match guards.reverse with
+        | [] => .atom "true"
+        | [guard] => guard
+        | guards => .expr (.atom "and" :: guards)
+      .expr [.atom "=>", flattenBool body, flattenBool head]
+
 /-- Group universal binders: Spacer rejects some nested Bool/Int prefixes. -/
-private def clauseSexp (term : Smt.Term) : Sexp :=
+private def clauseSexp (canonical : Bool) (term : Smt.Term) : Sexp :=
   go term []
 where
+  bodySexp (body : Smt.Term) : Sexp :=
+    let body := ToSexp.toSexp body
+    if canonical then canonicalClause body else body
   go : Smt.Term → List Sexp → Sexp
     | .forallT name sort body, binders =>
       go body (.expr [.atom (Smt.Term.quoteSymbol name), ToSexp.toSexp sort] :: binders)
-    | body, [] => ToSexp.toSexp body
-    | body, binders => .expr [.atom "forall", .expr binders.reverse, ToSexp.toSexp body]
+    | body, [] => bodySexp body
+    | body, binders => .expr [.atom "forall", .expr binders.reverse, bodySexp body]
 
-private def commandSexp : Smt.Translate.Command → Sexp
-  | .assert term => .expr [.atom "assert", clauseSexp term]
+private def commandSexp (canonical : Bool) : Smt.Translate.Command → Sexp
+  | .assert term => .expr [.atom "assert", clauseSexp canonical term]
   | command => ToSexp.toSexp command
 
 /-- Serialize the script with grouped universal binders. -/
 def ExportedProblem.toSMTLib (problem : ExportedProblem) : String :=
-  Sexp.serializeMany (problem.commands.map commandSexp) ++ "\n"
+  Sexp.serializeMany (problem.commands.map (commandSexp problem.canonicalClauses)) ++ "\n"
 
 namespace Fragment
 
@@ -212,10 +242,20 @@ private def checkIntegerInstance (e : Expr) : MetaM Unit := do
           q($a ≤ $b), q($a < $b), q($a ≥ $b), q($a > $b)][i]!
         canonical e expected
 
+/-- Smt2Lean keeps n-ary distinct as a transparent, namespaced operator helper.
+Unfold its actual definition rather than assigning semantics from the name. -/
+private def unfoldDistinct? (e : Expr) : MetaM (Option Expr) := do
+  let .const (.str (.str _ "SMT") suffix) _ := e.getAppFn | return none
+  unless suffix.startsWith "distinct" do return none
+  let some arity := (suffix.drop 8).toString.toNat? | return none
+  unless arity >= 2 && e.getAppNumArgs == arity + 1 && (← isProp e) do return none
+  unfoldDefinition? e
+
 /-- Normalize checked theory terms. PA can also enable first-order Int/Bool/Prop
 quantifiers; CHC export keeps them restricted to clause prefixes. -/
 partial def atom (input : Expr) (allowQuantifiers : Bool := false) : MetaM Expr := do
   let e ← expose input
+  if let some body ← unfoldDistinct? e then return ← atom body allowQuantifiers
   -- lean-smt recognizes the notation's typeclass applications, not these direct functions.
   let e ← if e.isAppOfArity ``Int.ediv 2 || e.isAppOfArity ``Int.emod 2 then do
       let a : Q(Int) := e.getArg! 0
@@ -314,6 +354,12 @@ private def validate (problem : ExportedProblem) : MetaM Unit := do
         unless (match expectedSort with | .int => actualSort.isInteger | .bool => actualSort.isBoolean) do
           throw (.error s!"CHC export: wrong argument sort for '{expected.symbol}'")
   ).runIO
+
+/-- Check an equivalent Horn presentation before a solver retry. -/
+def ExportedProblem.withCanonicalClauses (problem : ExportedProblem) : MetaM ExportedProblem := do
+  let problem := { problem with canonicalClauses := true }
+  validate problem
+  return problem
 
 /-- Export Bool/Int arithmetic, positive-literal div/mod, and local lets.
 The body must be closed except for its unassigned κs. No witnesses are assigned. -/

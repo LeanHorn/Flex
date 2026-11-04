@@ -32,6 +32,52 @@ private def emitPhase (output : System.FilePath) (event : Flex.Portfolio.PhaseEv
       ("phase", toJson event.phase), ("status", toJson event.status),
       ("elapsed_ms", toJson event.elapsedMs), ("mono_ms", toJson (← IO.monoMsNow))]).compress
 
+private def recordCHC (output : System.FilePath) (attempt : IO.Ref Nat)
+    (backend : Flex.Portfolio.Backend) (event : Flex.CHC.Event) : TermElabM Unit := do
+  if event matches .exported _ then attempt.modify (· + 1)
+  let index ← attempt.get
+  let directory := output / "attempts" / s!"{index}-{backend}"
+  IO.FS.createDirAll directory
+  let record (stage status : String) (fields : List (String × Json) := []) :=
+    emit output s!"chc/{stage}" status
+      ([("solver_backend", toJson (toString backend)), ("attempt", toJson index)] ++ fields)
+  match event with
+  | .exported problem =>
+    IO.FS.writeFile (directory / "exported.smt2") problem.toSMTLib
+    let relations ← problem.relations.mapM fun relation => do
+      return Json.mkObj [("symbol", toJson relation.symbol),
+        ("name", toJson relation.kvar.name.toString),
+        ("type", toJson (← Meta.ppExpr relation.leanType).pretty)]
+    IO.FS.writeFile (directory / "relations.json") (toJson relations).pretty
+    record "export" "ok" [("predicates", toJson relations.size),
+      ("canonical_clauses", toJson problem.canonicalClauses),
+      ("clauses", toJson problem.clauseCount)]
+  | .solverReturned config result =>
+    IO.FS.writeFile (directory / "stdout.txt") result.process.stdout
+    IO.FS.writeFile (directory / "stderr.txt") result.process.stderr
+    let process := config.toProcessConfig
+    IO.FS.writeFile (directory / "invocation.json") (Json.mkObj [
+      ("executable", toJson process.executable), ("args", toJson process.args),
+      ("timeout_ms", toJson process.timeoutMs)]).pretty
+    let status := match result.outcome with
+      | .sat _ => "sat" | .unsat => "unsat" | .unknown _ => "unknown"
+      | .timedOut => "timeout" | .error _ => "error"
+    record "solver" status [("elapsed_ms", toJson result.process.elapsedMs)]
+  | .imported witnesses =>
+    let values ← witnesses.mapM fun witness => do
+      return Json.mkObj [("symbol", toJson witness.symbol),
+        ("predicate", toJson (← Meta.ppExpr witness.value).pretty),
+        ("defaulted", toJson witness.defaulted)]
+    IO.FS.writeFile (directory / "witnesses.json") (toJson values).pretty
+    record "import" "ok" [("predicates", toJson values.size)]
+  | .importFailed message =>
+    IO.FS.writeFile (directory / "import-error.txt") message
+    record "import" "failed" [("error", toJson message)]
+  | .certified certificate =>
+    record "certificate" "ok" [("proved_heads", toJson certificate.provedHeads),
+      ("remaining_heads", toJson certificate.remainingHeads),
+      ("goals", toJson certificate.goals.size)]
+
 private def measure (output : System.FilePath) (name : String)
     (action : Unit → TermElabM α) : TermElabM α := do
   let start ← IO.monoMsNow
@@ -101,6 +147,7 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
       let proofHeartbeats ← envNat "FLEX_PARITY_PROOF_HEARTBEATS" 20000
       let caseSeconds ← envNat "FLEX_PARITY_CASE_SECONDS" 120
       let totalSeconds ← envNat "FLEX_PARITY_FLEX_SECONDS" 30
+      let solverSeconds ← envNat "FLEX_PARITY_SOLVER_SECONDS" 30
       let zap := (← IO.getEnv "FLEX_PARITY_ZAP").getD "1" != "0"
       let full := (← IO.getEnv "FLEX_PARITY_FULL").getD "0" == "1"
       let solvers := (← IO.getEnv "FLEX_PARITY_SE").getD "1" != "0"
@@ -123,7 +170,7 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
         withTheReader Core.Context (fun ctx => { ctx with maxRecDepth := recursionLimit }) do
           let config : Flex.Portfolio.Config := {
             nesting := false, zap
-            heartbeats, totalTimeout := totalSeconds }
+            heartbeats, totalTimeout := totalSeconds, solverTimeout := solverSeconds }
           IO.FS.writeFile (output / "invocation.json") (Json.mkObj [
             ("entry_point", toJson "Flex.Portfolio.flexImpl"),
             ("backends", toJson (backends.map toString)),
@@ -132,6 +179,7 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
             ("postprocess", toJson config.postprocess), ("nesting", toJson config.nesting),
             ("keep_candidates", toJson config.keepCandidates),
             ("total_timeout_seconds", toJson config.totalTimeout),
+            ("solver_timeout_seconds", toJson config.solverTimeout),
             ("oracle_timeout_policy", toJson "remaining shared budget"),
             ("case_timeout_seconds", toJson caseSeconds),
             ("phase_heartbeats", toJson heartbeats),
@@ -143,8 +191,10 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
           let original ← mkFreshExprMVar (some target) (kind := .syntheticOpaque)
           stage.set "flex"
           emit output "flex" "running" [("original_predicates", toJson before)]
+          let attempt ← IO.mkRef 0
           let goals ← Tactic.run original.mvarId! <| Flex.Portfolio.flexImpl {
-            config, backends, scrape := { mode := .deep }, onPhase := emitPhase output }
+            config, backends, scrape := { mode := .deep }, onPhase := emitPhase output
+            onCHC := recordCHC output attempt }
           let flexMs := (← IO.monoMsNow) - start
           emit output "flex" "ok" [("elapsed_ms", toJson flexMs)]
           let after ← measure output "checkpoint/format" fun _ => do

@@ -248,11 +248,12 @@ private def attempt (tactic : TSyntax `tactic) (target : Expr)
           Flex.CHC.restoreTermState saved
           let some proof := candidate | return none
           let proof ← Meta.unfoldDeclsFrom oracleEnvironment proof
+          let proof := ShareCommon.shareCommon' proof
           if proof.hasMVar || proof.hasLevelMVar || proof.hasLooseBVars || proof.hasSorry then
             return none
           -- PA hypotheses may still mention assigned predicate metavariables.
           let closed ← mkLambdaFVars (← getLCtx).getFVars proof (usedOnly := true)
-          checkWithKernel (← instantiateMVars closed)
+          Flex.CHC.checkProofWithKernel (← instantiateMVars closed)
           unless ← isDefEq (← inferType proof) target do return none
           for name in proof.getUsedConstants do
             for axiomName in ← collectAxioms name do

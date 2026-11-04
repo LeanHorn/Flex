@@ -52,14 +52,16 @@ namespace Spacer
 structure Config where
   executable : String := "z3"
   timeoutMs : Nat := 30000
+  inlining : Bool := false
   deriving Inhabited
 
-/-- Request models directly; disable inlining whose reconstruction can lose invariants. -/
+/-- Keep predicate interpretations compact; normal inlining is available on retry. -/
 def Config.toProcessConfig (config : Config) : Process.Config :=
   {
     executable := config.executable
-    args := #["-in", "-smt2", "-model", "fp.engine=spacer",
-      "fp.xform.inline_eager=false", "fp.xform.inline_linear=false"]
+    args := #["-in", "-smt2", "-model", "fp.engine=spacer"] ++
+      (if config.inlining then #[] else
+        #["fp.xform.inline_eager=false", "fp.xform.inline_linear=false"])
     timeoutMs := config.timeoutMs }
 
 def runScript (input : String) (config : Config := {}) : IO SolverResult := do
@@ -77,13 +79,17 @@ namespace Eldarica
 structure Config where
   executable : String := "eld"
   timeoutMs : Nat := 30000
+  intervals : Bool := true
+  largeBlockEncoding : Bool := false
   deriving Inhabited
 
 /-- Use SMT-LIB Horn input and request predicate interpretations. -/
 def Config.toProcessConfig (config : Config) : Process.Config :=
   {
     executable := config.executable
-    args := #["-in", "-hsmt", "-ssol"]
+    args := #["-in", "-hsmt", "-ssol"] ++
+      (if config.intervals then #[] else #["-noIntervals"]) ++
+      (if config.largeBlockEncoding then #["-lbe"] else #[])
     timeoutMs := config.timeoutMs }
 
 def runScript (input : String) (config : Config := {}) : IO SolverResult := do
@@ -107,6 +113,13 @@ structure Config where
   backend : Backend := .spacer
   executable : Option String := none
   timeoutMs : Nat := 30000
+  /-- Retry timeout/unknown with equivalent Horn syntax when the caller has time. -/
+  retrySearch : Bool := true
+  spacerInlining : Bool := false
+  /-- Eldarica interval analysis can be disabled when retrying an unimportable model. -/
+  eldaricaIntervals : Bool := true
+  /-- Alternate preprocessing for models rejected by the strict importer. -/
+  eldaricaLargeBlockEncoding : Bool := false
   deriving Inhabited, Repr
 
 /-- The same invocation is used for original and Flex-exported benchmark queries. -/
@@ -114,10 +127,24 @@ def Config.toProcessConfig (config : Config) : Process.Config :=
   match config.backend with
   | .spacer => Spacer.Config.toProcessConfig {
       executable := config.executable.getD ({} : Spacer.Config).executable
-      timeoutMs := config.timeoutMs }
+      timeoutMs := config.timeoutMs
+      inlining := config.spacerInlining }
   | .eldarica => Eldarica.Config.toProcessConfig {
       executable := config.executable.getD ({} : Eldarica.Config).executable
-      timeoutMs := config.timeoutMs }
+      timeoutMs := config.timeoutMs
+      intervals := config.eldaricaIntervals
+      largeBlockEncoding := config.eldaricaLargeBlockEncoding }
+
+/-- Alternate model-producing settings for the same problem; the caller bounds retries. -/
+def Config.modelFallback? (config : Config) : Option Config :=
+  match config.backend with
+  | .spacer => if config.spacerInlining then some { config with spacerInlining := false } else none
+  | .eldarica =>
+    if config.eldaricaIntervals && !config.eldaricaLargeBlockEncoding then
+      some { config with eldaricaLargeBlockEncoding := true }
+    else if config.eldaricaIntervals then
+      some { config with eldaricaIntervals := false, eldaricaLargeBlockEncoding := false }
+    else none
 
 /-- Run a script without assigning Lean witnesses or trusting the solver's answer. -/
 def runScript (input : String) (config : Config := {}) : IO SolverResult := do

@@ -32,7 +32,11 @@ private def tryProof (config : ProofConfig) (tactic : TSyntax `tactic)
         let result ← proveLeafWith tactic goal
         if result.isNone then saved.restore
         return result)
-    (fun _ => do saved.restore; return none)
+    (fun error => do
+      saved.restore
+      if error.isInterrupt then throw error
+      Core.checkInterrupted
+      return none)
 
 /-- Try bounded Lean automation, then lean-smt with proof reconstruction. -/
 def proofOracle (config : ProofConfig := {}) : ProofOracle := fun goal => do
@@ -89,10 +93,39 @@ def restoreTermState (saved : Term.SavedState) : TermElabM Unit := do
   set saved.elab
   restoreMetaState saved.meta
 
+/-- Check a closed temporary theorem synchronously, honoring the caller's resource
+limits and cancellation token. The checked environment is discarded. -/
+def checkProofWithKernel (proof : Expr) : TermElabM Unit := do
+  Core.checkSystem "CHC kernel check"
+  let proof := ShareCommon.shareCommon' (← instantiateMVars proof)
+  let proof ← if proof.hasFVar then
+    mkLambdaFVars (← getLCtx).getFVars proof (usedOnly := true)
+    else pure proof
+  let proof := ShareCommon.shareCommon' (← instantiateMVars proof)
+  if proof.hasMVar || proof.hasLevelMVar || proof.hasFVar ||
+      proof.hasLooseBVars || proof.hasSorry then
+    throwError "CHC certification: kernel evidence is unresolved or admitted"
+  let type ← inferType proof
+  let levels := (collectLevelParams (collectLevelParams {} proof) type).params.toList
+  let declaration := Declaration.thmDecl {
+    name := ← mkFreshUserName `_flexCertificateCheck, levelParams := levels, type, value := proof }
+  let context ← readThe Core.Context
+  let remaining ← getRemainingHeartbeats
+  if context.maxHeartbeats != 0 && remaining == 0 then
+    Core.throwMaxHeartbeat `CHC.kernel `maxHeartbeats context.maxHeartbeats
+  Core.checkInterrupted
+  match (← getEnv).unlockAsync.addDeclCore remaining.toUSize context.maxRecDepth.toUSize
+      declaration context.cancelTk? (doCheck := true) with
+  | .ok _ => Core.checkInterrupted
+  | .error .deterministicTimeout =>
+    Core.throwMaxHeartbeat `CHC.kernel `maxHeartbeats context.maxHeartbeats
+  | .error .deepRecursion => throwMaxRecDepthAt (← getRef)
+  | .error error => throwKernelException error
+
 private def checkEvidence (target proof : Expr) : TermElabM Unit := do
   if proof.hasMVar || proof.hasLevelMVar || proof.hasLooseBVars || proof.hasSorry then
     throwError "CHC certification: oracle returned unresolved or admitted evidence"
-  checkWithKernel proof
+  checkProofWithKernel proof
   unless ← isDefEq (← inferType proof) target do
     throwError "CHC certification: oracle returned evidence for a different proposition"
   -- Reject trusted SMT axioms hidden behind theorem constants as well.
@@ -119,10 +152,15 @@ private def tryOracle (oracle : ProofOracle) (target : Expr) : TermElabM (Option
         let some proof := candidate | return none
         -- Inline fresh helper theorems (e.g. from omega) before kernel checking.
         let proof ← Meta.unfoldDeclsFrom oracleEnvironment proof
+        let proof := ShareCommon.shareCommon' proof
         checkEvidence target proof
         return some proof
       finally restoreTermState saved)
-    (fun _ => do restoreTermState saved; return none)
+    (fun error => do
+      restoreTermState saved
+      if error.isInterrupt then throw error
+      Core.checkInterrupted
+      return none)
 
 /-- Isolate an oracle and inline its helper theorems before checking the evidence. -/
 def checkedOracle (oracle : ProofOracle) : ProofOracle := tryOracle oracle
@@ -179,6 +217,8 @@ private def cleanup (raw : Expr) : CertM (Expr × Expr) := do
             mkApp3 (mkConst ``Iff.of_eq) target result.expr (← result.getProof)))
       (fun error => do
         saved.restore
+        if error.isInterrupt then throw error
+        Core.checkInterrupted
         unless error.isRuntime do throw error
         return (raw, mkApp (mkConst ``Iff.refl) raw))
   let result ← liftM simplify
@@ -326,15 +366,42 @@ private def certifyHeads (relations : Array Relation) (oracle : ProofOracle)
       cleanupContext := context, result.remainingHeads := some 0 }
   let ((target, cleanup), _) ← (cleanup reduced).run state
   let equivalence ← instantiateMVars (← mkAppM ``Iff.trans #[equivalence, cleanup])
+  let equivalence := ShareCommon.shareCommon' equivalence
   if equivalence.hasMVar || equivalence.hasLevelMVar then
     throwError "CHC certification: residual equivalence contains unresolved variables"
-  checkWithKernel equivalence
+  checkProofWithKernel equivalence
   if target.isConstOf ``True then
     return (← mkAppM ``Iff.mpr #[equivalence, mkConst ``True.intro], state.result)
   let residual ← mkFreshExprMVar (some target) (kind := .syntheticOpaque)
     (userName := tag ++ `vc)
   return (← mkAppM ``Iff.mpr #[equivalence, residual],
     { state.result with residualVC := some residual.mvarId! })
+
+/-- Check the scaffold as a function of its exact residual obligations. Temporary
+closure is rolled back, so checking neither solves nor changes those goals. -/
+private def checkCertificate (proof : Expr) (goals : Array MVarId) : TermElabM Unit := do
+  if goals.isEmpty then
+    checkProofWithKernel proof
+    return
+  let saved ← Term.saveState
+  try
+    let closed ← goals.mapM fun goal => goal.revertAll
+    let types ← closed.mapM fun goal => do instantiateMVars (← goal.getType)
+    for type in types do
+      if type.hasMVar || type.hasFVar || type.hasLooseBVars then
+        throwError "CHC certification: residual contains unresolved variables"
+    let names := Array.ofFn (n := types.size) fun ⟨i, _⟩ => Name.mkSimple s!"residual{i}"
+    withLocalDeclsDND (names.zip types) fun hypotheses => do
+      for goal in closed, hypothesis in hypotheses do goal.assign hypothesis
+      let evidence ← mkLambdaFVars hypotheses (← instantiateMVars proof)
+      -- Local hypothesis types can still contain assigned predicate metavariables.
+      let evidence ← mkLambdaFVars (← getLCtx).getFVars evidence (usedOnly := true)
+      let evidence ← instantiateMVars evidence
+      if evidence.hasMVar || evidence.hasLevelMVar || evidence.hasFVar ||
+          evidence.hasLooseBVars || evidence.hasSorry then
+        throwError "CHC certification: residual scaffold contains unresolved or admitted evidence"
+      checkProofWithKernel evidence
+  finally restoreTermState saved
 
 /-- Assign candidates and certify the original body, leaving unproved clauses as
 Lean goals. Partial results retain assignments and the proof scaffold; errors
@@ -370,10 +437,10 @@ def certifyWitnesses (problem : ExportedProblem) (witnesses : Array Witness)
               throwError "CHC certification: body and exported clause count disagree"
             pure (proof, state.result)
         let proof ← instantiateMVars proof
+        let proof := ShareCommon.shareCommon' proof
         if result.goals.isEmpty && (proof.hasMVar || proof.hasLevelMVar) then
           throwError "CHC certification: completed certificate contains unresolved variables"
-        -- Partial scaffolds contain goals, so only completed proofs use the kernel.
-        if result.goals.isEmpty then checkWithKernel proof else check proof
+        checkCertificate proof result.goals
         unless ← isDefEq (← inferType proof) (← bodyGoal.getType) do
           throwError "CHC certification: certificate does not prove the original body"
         bodyGoal.assign proof
@@ -385,6 +452,8 @@ def certifyWitnesses (problem : ExportedProblem) (witnesses : Array Witness)
         (withTheReader Core.Context (fun ctx => { ctx with maxHeartbeats := limit - reserved })
           detailed)
         (fun error => do
+          if error.isInterrupt then throw error
+          Core.checkInterrupted
           unless error.isRuntime do throw error
           restoreTermState assigned
           let remaining ← getRemainingHeartbeats
@@ -394,6 +463,8 @@ def certifyWitnesses (problem : ExportedProblem) (witnesses : Array Witness)
             (withTheReader Core.Context (fun ctx => { ctx with maxHeartbeats := cleanupLimit }) <|
               Core.withCurrHeartbeats <| normalize instantiated)
             (fun error => do
+              if error.isInterrupt then throw error
+              Core.checkInterrupted
               unless error.isRuntime do throw error
               pure instantiated)
           let residual ← mkFreshExprMVar target (kind := .syntheticOpaque)

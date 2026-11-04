@@ -38,6 +38,13 @@ def result_row(record: dict) -> dict:
                   "predicate_count_reduction", "goals", "all_predicates_instantiated",
                   "kernel_checked", "fully_proved", "recursion_limit", "peak_recursion_depth"):
         row[field] = terminal.get(field)
+    events = record["events"]
+    imports = [e for e in events if e["stage"] == "chc/import" and e["status"] == "ok"]
+    certificates = [e for e in events if e["stage"] == "chc/certificate" and e["status"] == "ok"]
+    row["model_obtained"] = any(e["stage"] == "chc/solver" and e["status"] == "sat" for e in events)
+    row["invariants_imported"] = bool(imports)
+    row["max_imported_predicates"] = max((e["predicates"] for e in imports), default=0)
+    row["attempt_heads_eliminated"] = any(e.get("remaining_heads") == 0 for e in certificates)
     return row
 
 
@@ -64,6 +71,8 @@ def save(output: Path, cases: list[dict], records: list[dict],
             "outcomes": dict(Counter(r["status"] for r in group)),
             "fully_proved": sum(r["fully_proved"] is True for r in group),
             "all_predicates_instantiated": sum(r["all_predicates_instantiated"] is True for r in group),
+            "invariants_imported": sum(r["invariants_imported"] for r in group),
+            "attempt_heads_eliminated": sum(r["attempt_heads_eliminated"] for r in group),
         } for name, group in groups.items()},
         "outcomes": dict(Counter(row["status"] for row in rows)),
         "fully_proved": sum(row["fully_proved"] is True for row in rows),
@@ -144,6 +153,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--progress", type=Path)
     parser.add_argument("--cases", nargs="+")
+    parser.add_argument("--preserve-case-order", action="store_true",
+                        help="Use the supplied case order for targeted diagnostics")
     parser.add_argument("--no-zap", action="store_true", help="disable only Zap; keep all other phases")
     parser.add_argument("--full-flex", action="store_true",
                         help="enable Fix with deep scraping before Spacer/Eldarica")
@@ -153,6 +164,8 @@ def main() -> int:
     parser.add_argument("--case-timeout", type=int, default=120)
     parser.add_argument("--flex-timeout", type=int, default=30,
                         help="Shared internal Flex budget in seconds (default: 30)")
+    parser.add_argument("--solver-timeout", type=int, default=30,
+                        help="CHC solver cap within the shared Flex budget (default: 30)")
     parser.add_argument("--heartbeats", type=int, default=2000000)
     parser.add_argument("--proof-heartbeats", type=int, default=20000)
     parser.add_argument("--seed", type=int, default=20261101)
@@ -166,7 +179,7 @@ def main() -> int:
     if not args.output:
         parser.error("--output is required")
     if min(args.workers, args.case_timeout, args.heartbeats,
-           args.proof_heartbeats, args.flex_timeout) <= 0:
+           args.flex_timeout, args.solver_timeout) <= 0 or args.proof_heartbeats < 0:
         parser.error("budgets and workers must be positive")
     if args.flex_timeout > args.case_timeout:
         parser.error("--flex-timeout must not exceed --case-timeout")
@@ -199,11 +212,17 @@ def main() -> int:
         if unknown:
             parser.error("unknown cases: " + ", ".join(sorted(unknown)))
         cases = [case for case in cases if case["case"] in args.cases]
-    random.Random(args.seed).shuffle(cases)
+    if args.preserve_case_order:
+        if not args.cases:
+            parser.error("--preserve-case-order requires --cases")
+        position = {name: i for i, name in enumerate(args.cases)}
+        cases.sort(key=lambda case: position[case["case"]])
+    else:
+        random.Random(args.seed).shuffle(cases)
     args.output.mkdir(parents=True, exist_ok=True)
     args.mode, args.proof_timeout = "flex", 0
     # Common process-runner fields; Flex itself passes the remaining shared budget.
-    args.solver_timeout = args.smt_timeout = args.flex_timeout
+    args.smt_timeout = args.flex_timeout
     metadata = {
         "started_at": datetime.now(timezone.utc).isoformat(), "complete": False,
         "git_head": common.capture(["git", "rev-parse", "HEAD"]),
@@ -212,8 +231,9 @@ def main() -> int:
         "pipeline": "main flex; common preprocessing, postprocessing and residual automation; no nesting",
         "scrape": "deep when Fix is enabled",
         "candidate_policy": "Unvalidated candidates rejected by the actual flex defaults.",
-        "metrics_note": "Predicate counts describe the retained frontier, including Zap. Internal "
-                        "backend imports and head-elimination attempts are not instrumented.",
+        "metrics_note": "Predicate counts describe the retained frontier, including Zap. "
+                        "Import and head-elimination events describe individual attempts, which "
+                        "may later be rejected; only final kernel-checked results count as proofs.",
         "comparison_note": "Compare matched inputs, compiled artifacts, budgets and automation. "
                            "Concurrent timings are contended.",
     }
@@ -232,6 +252,7 @@ def main() -> int:
     command, environment = freeze(args.output, command, environment)
     environment["FLEX_PARITY_CASE_SECONDS"] = str(args.case_timeout)
     environment["FLEX_PARITY_FLEX_SECONDS"] = str(args.flex_timeout)
+    environment["FLEX_PARITY_SOLVER_SECONDS"] = str(args.solver_timeout)
     metadata["lean_command"] = command
     metadata["lean_version"] = common.capture([command[0], "--version"])
     common.write_json(args.output / "metadata.json", metadata)

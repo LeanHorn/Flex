@@ -1,23 +1,10 @@
-import Flex.VCG.STLC.VCGen
-import Flex.VCG.STLC.Declarative
-import Flex.Tactic
-import Flex.VCG.STLC.Soundness
-import Flex.VCG.STLC.MakeHornUnderK
+import Flex
+
+/-! STLC programs, refinement inference, and declarative typing examples. -/
+
+namespace STLCExamples
 
 open STLC
-
-/-! # Examples — full port of pre-refactor suite, LN + deep Formula + κ
-
-  All examples re-stated under:
-  - LN binders (`Exp.lam (.bvar 0)` etc.)
-  - Deep `Formula` refinements
-  - κ-aware judgements (`topVC κ`, `Check κ`, `Hastype κ`)
-
-  Proofs preserve the *spirit* of the original tactics:
-  `simp + solve_fixpoint`, `make_horn_under_k + solve_fixpoint`,
-  `topVC_decl_sound + simp + intros`.
-
--/
 
 /-! ## Refinement helpers -/
 
@@ -95,13 +82,11 @@ example (κ : KEnv) : topVC κ [] ex3Exp ex3Ty := by
   Here the κ surfaces from `Refinement.interp`'s `.kapp` case (post-stratification)
   and is discharged via the now fully-proven `check_sound` + `solve_fixpoint`. -/
 
-attribute [simp] check synth sub EVar.fresh implyBindCstr prim self Refinement.interp Formula.interp TEnv.dom
-attribute [simp] Cstr.interp Cstr.triv Refinement.openBVar Formula.openBVar Term.openBVar REnv.update REnv.write
-attribute [simp] Term.interp REnv.get Exp.openVar Ty.openVar Exp.fv Refinement.fv Formula.fv Term.fv Ty.fv
-attribute [simp] Refinement.openBVar Formula.openBVar Term.openBVar String.length EVar.maxLen
-attribute [simp] List.lookup TEnv.tyFv
-
-macro "generate" : tactic => `(tactic| (vc_generate ; vc_reify))
+attribute [local simp] check synth sub EVar.fresh implyBindCstr prim self Refinement.interp Formula.interp TEnv.dom
+attribute [local simp] Cstr.interp Cstr.triv Refinement.openBVar Formula.openBVar Term.openBVar REnv.update REnv.write
+attribute [local simp] Term.interp REnv.get Exp.openVar Ty.openVar Exp.fv Refinement.fv Formula.fv Term.fv Ty.fv
+attribute [local simp] Refinement.openBVar Formula.openBVar Term.openBVar String.length EVar.maxLen
+attribute [local simp] List.lookup TEnv.tyFv
 
 @[qualif]
 def Ge1 (i : Int) : Prop := 1 ≤ i
@@ -111,7 +96,8 @@ example :
       Check κ []
         (.letin (.iconst 99) (.app (.ann exId (ty_k "k")) (.bvar 0)))
         Pos := by
-  generate
+  vc_generate
+  vc_reify
   zap
   grind
 
@@ -123,7 +109,8 @@ example :
         (.letin (.iconst 99) (.app (.ann exId (ty_xk "k")) (.bvar 0)))
         (IntN 99) := by
   simp only [IntN, ToTerm.toTerm]
-  generate
+  vc_generate
+  vc_reify
   zap
   grind
 
@@ -194,7 +181,7 @@ abbrev exMax : Exp :=
 
 /-! ## κ flagship: `let a = 99 in let b = 100 in exMax a b ⇐ {ν | ν = 100 ∨ ν = 99}` -/
 
-example :
+theorem max_inferred :
     ∃ κ : KEnv,
       Check κ []
         (.letin (.iconst 99)
@@ -206,7 +193,8 @@ example :
         (.refine .int (.fmla (.or
           (.eq .int (.bvar .int 0) (.const .int 100))
           (.eq .int (.bvar .int 0) (.const .int  99))))) := by
-  generate
+  vc_generate
+  vc_reify
   zap
   grind
 
@@ -290,3 +278,40 @@ example (κ : KEnv) (Γ : TEnv) (x y : EVar) (r₁ r₂ : Refinement)
       (.refine .int (.fmla (.eq .int (.bvar .int 0)
                           (.add (.fvar .int x) (.fvar .int y))))) := by
   apply Hastype.add_var <;> assumption
+
+/-! ## Surface-syntax examples -/
+
+/-! ## κ-example with `ty_k`: `let z = 99 in (λx. x : IntK k → IntK k) z ⇐ Pos` -/
+
+example :
+    ∃ κ : KEnv,
+      topVC κ []
+      <| let z = 99 in ((λ x, x) : (Int{v : κ v} -> Int{v : κ v})) z |>
+      <ty| Int{ v : 1 ≤ v } |> := by
+  simp [topVC]
+  intro_kenv
+  simp [mkKEnv, liftKPred]
+  solve_fixpoint
+  exact ⟨REnv.empty⟩
+
+/-! ## κ-example with `ty_xk`: same shape, output type `IntN 99` -/
+
+example :
+    ∃ κ : KEnv,
+      topVC κ []
+      <| let z = 99 in ((λ x, x) : (x : Int {v : ⊤}) -> Int {v : κ x v}) z |>
+      <ty| Int{ v : v = 99 } |> := by
+  simp [topVC]
+  intro_kenv
+  simp [mkKEnv, List.lookup, liftKPred]
+  solve_fixpoint
+  exact ⟨REnv.empty⟩
+
+/-! ## Example 3: `let z = 5 in z ⇐ Pos` -/
+
+example (κ : KEnv) : topVC κ [] (<| let z = 5 in z |>) Pos := by
+  simp [topVC, check, synth, sub, implyBindCstr, Pos, prim, self,
+        Refinement.interp, Formula.interp, Term.interp, REnv.get,
+        Exp.openVar]
+
+end STLCExamples

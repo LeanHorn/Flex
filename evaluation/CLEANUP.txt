@@ -11,7 +11,7 @@ RQ1
   These are historical checks, not validation against today's Flex defaults.
 
 Imp
-  Programs: ../Benchmarks/Imp.lean and ../Demo/Imp.lean.
+  Programs: ../Demo/Imp.lean.
   results/20261031-corpus/: original 50-program inventory.
   results/20261031-full-audit/: baseline used by the final coverage comparison.
   results/20261031-eight-steps-final/: final coverage, source snapshots and raw data.

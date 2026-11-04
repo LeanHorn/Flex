@@ -37,6 +37,7 @@ lean-noquals/
 # Frozen CHC evaluation inputs, translations, and results
 /evaluation/CHC-COMP/
 /evaluation/RQ1/results/
+/evaluation/RQ1/proofs/
 /evaluation/RQ2/results/
 /evaluation/Imp/results/
 /evaluation/original-chcs/
@@ -46,6 +47,7 @@ lean-noquals/
 /evaluation/SE-investigation.txt
 /evaluation/CHC-backend.txt
 /evaluation/PLAN.txt
+/evaluation/.cleanup/
 
 # Local scraping specification and PDF
 /Flex/PA/Notes/

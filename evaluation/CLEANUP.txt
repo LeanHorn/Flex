@@ -1,0 +1,54 @@
+Evaluation archive — consolidated 2026-11-04
+
+RQ1
+  proofs/manifest.json: 24 Fix-dependent completed proof sources and prior checks.
+  proofs/pattern/: string-search bridges, residual proofs and imported helpers.
+  results/synthesis-baseline-20261026-final/: specification snapshots and baseline.
+  results/remaining-audit-20261031/: remaining-case diagnostics (historical).
+  results/ai-25-20261030/ and ai-pilot5-20261030-run2/: AI trials and reports.
+  results/ai-setup-20261030/: their prepared projects and environment.
+  pr-migration-20261029/: original/migrated proof sources, size/time data and PDFs.
+  These are historical checks, not validation against today's Flex defaults.
+
+Imp
+  Programs: ../Benchmarks/Imp.lean and ../Demo/Imp.lean.
+  results/20261031-corpus/: original 50-program inventory.
+  results/20261031-full-audit/: baseline used by the final coverage comparison.
+  results/20261031-eight-steps-final/: final coverage, source snapshots and raw data.
+  results/20261031-scrape-audit/: per-program scraping comparisons.
+
+Original Flux CHCs
+  original-chcs/source-corpus/: original query sources.
+  original-chcs/results/{se-flex,full-flex}-180s-20261102/: both 420-case comparisons.
+  Original inventories and final preprocessing checks remain.
+
+LiquidHaskell
+  corpus/manifest.json: all 495 inputs, including 486 compiled translations and
+    9 unsupported cases. corpus/manifest320.json: the earlier selected 320.
+  corpus/{fq,haskell,smt,lean,metadata,helpers}/: final artifacts and provenance.
+  corpus/groups/: evaluation manifests grouped by their required Lean helper.
+  capture/: all 694 source modules, extraction records and raw queries.tar.gz.
+  full-flex-20261102/: full-corpus proof results, including failures/timeouts.
+  curated320-20261103/: selected-suite results and explicit selection policy.
+  timeouts-shared30-20261103/: 129-case retry records.
+  timeout25-scraping-20261104/: recent scraping comparisons and escalation evidence.
+  Maintained tooling: ../flex-benchmarks/tooling/liquid-haskell/ (from Flex root).
+  One frozen converter toolset and the installed Haskell tools remain available.
+  Historical records retain original paths; corpus/provenance/relocations.json
+    maps moved artifacts. Use the new corpus manifests for future runs.
+
+CHC-COMP and RQ2
+  CHC-COMP/{sources,generated,provenance}/: original SMT and generated Lean corpus.
+  CHC-COMP/results/se-30s-20261101/: original-SMT native baselines and portfolio.
+  CHC-COMP/results/se-investigation-20261103/: current recovery ledger, campaign
+    stages, continuations and referenced evidence; discarded prototypes removed.
+  CHC-COMP/results/: measured pilot, mixed25, matched S/E/Zap, comparison500 and
+    later Fix-retry data. Their settings differ; do not silently pool outcomes.
+  CHC-COMP/pilot-report/: report PDFs and their figure-generation sources/data.
+  RQ2/: maintained Zap ablation harness and its 100-case pilot.
+
+Removed: repair workspaces, superseded probes, failed launches, obsolete one-off
+ drivers, duplicate build snapshots, normalization caches and layout drafts.
+The deletion/copy audit is in .cleanup/2026-11-04.json.gz (gitignored).
+Retained corpus bytes and measurement records were hash-checked. Cleanup did
+not rerun proof benchmarks or change Flex library code.

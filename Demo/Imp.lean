@@ -3,6 +3,8 @@ import Benchmarks.Imp
 
 /-! All 15 successful Imp cases: generated VCs, automatic scraping, no supplied invariants. -/
 
+-- Run deadline-limited synthesis serially, including on small CI runners.
+set_option Elab.async false
 set_option maxHeartbeats 8000000
 set_option maxRecDepth 16384
 

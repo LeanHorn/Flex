@@ -3,9 +3,12 @@ import Flex.Tactic.Tactics.Flex
 /-! `flex` prepares constraints, runs Zap and the invariant backends, and keeps
 validated progress when proof obligations still need manual work. -/
 
+-- Avoid competing synthesis jobs consuming each other's wall-clock budgets.
+set_option Elab.async false
+
 namespace FlexDemo
 
--- The default portfolio starts with Fix and deep qualifier scraping.
+-- The default portfolio starts with Fix and incremental qualifier scraping.
 theorem countdown :
     ∃ k : Int → Prop,
       k 5 ∧ (∀ i, k i → 1 ≤ i → k (i - 1)) ∧ (∀ i, k i → 0 ≤ i) := by

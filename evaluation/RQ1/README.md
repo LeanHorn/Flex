@@ -1,5 +1,16 @@
 # RQ1 invariant-synthesis baseline
 
+The latest proof refresh is [flex-benchmarks PR #5](https://github.com/LeanHorn/flex-benchmarks/pull/5).
+All 61 predicate-bearing case-study proofs check against Flex `e170a04b`, including
+manual residuals: **214/227 predicates inferred**, with complete inference in
+**52/61 VCs**. These are explicit per-VC settings, including cleanup and larger
+synthesis budgets, not a validation of plain defaults or a new timing run.
+The PR includes the exact scope, source hashes and remaining manual predicates.
+Local final sources, logs and verification records are consolidated in
+`results/current-flex-20261104/`; the older [saved proof collection](proofs/README.txt)
+remains historical evidence. See [the archive index](../CLEANUP.txt) for other
+retained results and corpus locations.
+
 The local `flex-benchmarks` corpus contains 131 case-study VCs excluding Wave
 and `flux-medium`. This runner selects only the **61 with unknown predicates**:
 27 acyclic-only, 18 cyclic-only, and 16 mixed. The 70 κ-free VCs are inventoried

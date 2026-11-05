@@ -18,10 +18,14 @@ register_option flex.benchPhases : Bool := {
     [Monad m] [MonadLiftT IO m] [MonadOptions m]
     (tac phase : String) (act : m α) : m α := do
   if flex.benchPhases.get (← getOptions) then
+    let start ← (IO.monoNanosNow : IO Nat)
     let h0 ← (IO.getNumHeartbeats : IO Nat)
+    (IO.println s!"[phase_start] {tac}:{phase}" : IO Unit)
     let r ← act
     let h1 ← (IO.getNumHeartbeats : IO Nat)
+    let stop ← (IO.monoNanosNow : IO Nat)
     (IO.println s!"[phase] {tac}:{phase}={(h1 - h0) / 1000}" : IO Unit)
+    (IO.println s!"[phase_time] {tac}:{phase}={stop - start}" : IO Unit)
     pure r
   else
     act

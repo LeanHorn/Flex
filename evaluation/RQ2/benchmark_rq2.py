@@ -63,7 +63,8 @@ def read_cases(args):
             for key in ("generated", "source"):
                 if case.get(key) and not Path(case[key]).is_absolute():
                     case[key] = str((path.parent / case[key]).resolve())
-            case.setdefault("format", "lean_statement")
+            if "queries" not in case:
+                case.setdefault("format", "lean_statement")
             case.setdefault("inventory_status", "translated")
             case.setdefault("generated_sha256", common.digest(Path(case["generated"])))
             case.setdefault("suite", case["case"].split("/")[0])
@@ -87,27 +88,24 @@ def read_cases(args):
 def classify(args, cases, command, env, header):
     directory = args.output / "classification"
     directory.mkdir()
-    # Statement manifests (e.g. flattened Flux VCs) share declaration names, so they cannot share a file.
-    size = args.classify_batch or (1 if args.manifest else 16)
-    batches = [cases[i:i + size] for i in range(0, len(cases), size)]
 
-    def batch(task):
-        i, group = task
-        path = directory / f"batch-{i:04}.lean"
-        sources = [lean_source(case, header) for case in group]
-        imports = list(dict.fromkeys(m for s in sources for m in re.findall(r"^import (.*)$", s, re.M)))
-        helper = re.sub(r"^import .*\n", "", header, flags=re.M)
-        bodies = [re.sub(r"^import .*\n", "", s, flags=re.M).replace(helper, "", 1) for s in sources]
-        path.write_text("".join(f"import {m}\n" for m in imports) + helper + "\n" + "\n".join(bodies))
-        code, rows, _, _ = invoke(command, {**env, "RQ2_MODE": "classify"}, path, 180)
-        indexed = {r["case"]: r for r in rows}
-        return [indexed.get(c["case"], {"case": c["case"], "status": "classification_failed",
-                                       "exit": code, "log": str(path.with_suffix('.log'))}) for c in group]
+    def one(task):
+        i, case = task
+        path = directory / f"case-{i:04}.lean"
+        path.write_text(lean_source(case, header))
+        invocation = {**env, "RQ2_MODE": "classify",
+                      "RQ2_PREPARE_HEARTBEATS": str(args.prepare_heartbeats),
+                      "RQ2_PREPARE_TIMEOUT": str(args.prepare_timeout),
+                      "RQ2_RECURSION": str(args.recursion)}
+        code, rows, _, process_ms = invoke(command, invocation, path, args.process_timeout)
+        row = next((r for r in reversed(rows) if r["case"] == case["case"]),
+                   {"case": case["case"], "status": "classification_failed"})
+        return {**row, "exit": code, "process_ms": process_ms, "log": str(path.with_suffix('.log'))}
 
     rows = []
     with ThreadPoolExecutor(max_workers=args.classify_workers) as pool:
-        for group in pool.map(batch, enumerate(batches)):
-            rows.extend(group)
+        for row in pool.map(one, enumerate(cases)):
+            rows.append(row)
             common.write_json(args.output / "classification.json", rows)
             print(f"Classified {len(rows)}/{len(cases)}", flush=True)
     return select_cases(args, cases, rows)
@@ -118,7 +116,11 @@ def select_cases(args, cases, rows):
     eligible = []
     for row in rows:
         if row.get("classification", {}).get("eligible"):
-            eligible.append({**by_id[row["case"]], "classification": row["classification"]})
+            eligible.append({**by_id[row["case"]], "classification": row["classification"],
+                             "prepared_hash": row.get("prepared_hash")})
+        elif args.include_unclassified and row["status"] != "classified":
+            eligible.append({**by_id[row["case"]], "classification": {"kind": "unclassified"},
+                             "classification_failure": row})
     # Equal acyclic/mixed quotas, spread across source suites. No outcome is consulted.
     rng = random.Random(args.seed)
     groups = defaultdict(lambda: defaultdict(list))
@@ -141,12 +143,13 @@ def select_cases(args, cases, rows):
         raise ValueError(f"only {len(eligible)} eligible cases for requested {count}")
     chosen = []
     while len(chosen) < count:
-        for kind in ("acyclic_only", "mixed"):
+        for kind in ("acyclic_only", "mixed", "unclassified"):
             if ordered.get(kind) and len(chosen) < count:
                 chosen.append(ordered[kind].pop(0))
     selection = {"seed": args.seed, "eligible": len(eligible),
                  "classification_counts": dict(Counter(r.get("classification", {}).get("kind", r["status"]) for r in rows)),
                  "method": "source-deduplicated; balanced acyclic/mixed; round-robin suites, seeded order within suites; no success filtering",
+                 "includes_unclassified": args.include_unclassified,
                  "cases": chosen}
     common.write_json(args.output / "selection.json", selection)
     return chosen
@@ -159,41 +162,50 @@ def geomean(values):
 def summarize(output):
     path = output / "results.jsonl"
     rows = [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+    selected = json.loads((output / "settings.json").read_text()).get("variants", VARIANTS)
+    metrics = ("ms", "heartbeats", "depth", "constants", "kernel_us", "nodes",
+               "auxiliary_declarations", "prepare_ms", "sol_ms", "build_ms")
     summaries = {}
-    for variant in VARIANTS:
+    for variant in selected:
         subset = [r for r in rows if r["variant"] == variant]
         good = [r for r in subset if r["status"] == "reduced"]
         summaries[variant] = {"completed": len(subset), "reduced": len(good),
             "outcomes": dict(Counter(r["status"] for r in subset))}
-        for key in ("ms", "heartbeats", "depth", "constants", "kernel_us"):
-            values = [r[key] for r in good]
+        for key in metrics:
+            values = [r[key] for r in good if r.get(key) is not None]
             summaries[variant][f"mean_{key}"] = statistics.mean(values) if values else None
             summaries[variant][f"geomean_{key}"] = geomean(values)
     pairs = {}
     baseline = {(r["case"], r["repeat"]): r for r in rows if r["variant"] == "zap" and r["status"] == "reduced"}
-    for variant in VARIANTS[1:]:
+    for variant in selected:
+        if variant == "zap":
+            continue
         joint = [(baseline[(r["case"], r["repeat"])], r) for r in rows
                  if r["variant"] == variant and r["status"] == "reduced" and (r["case"], r["repeat"]) in baseline]
         pairs[variant] = {"jointly_reduced": len(joint)}
-        for key in ("ms", "heartbeats", "depth", "constants", "kernel_us"):
-            ratios = [b[key] / a[key] for a, b in joint if a[key] > 0]
+        for key in metrics:
+            ratios = [b[key] / a[key] for a, b in joint
+                      if a.get(key) is not None and a[key] > 0 and b.get(key) is not None]
             pairs[variant][f"mean_ratio_{key}"] = statistics.mean(ratios) if ratios else None
             pairs[variant][f"geomean_ratio_{key}"] = geomean(ratios)
     groups = []
     for dimension in ("suite", "kind"):
         for group in sorted({r[dimension] for r in rows}):
-            for variant in VARIANTS:
+            for variant in selected:
                 subset = [r for r in rows if r[dimension] == group and r["variant"] == variant]
                 good = [r for r in subset if r["status"] == "reduced"]
                 groups.append({"dimension": dimension, "group": group, "variant": variant,
                     "completed": len(subset), "reduced": len(good),
-                    **{f"mean_{k}": statistics.mean(r[k] for r in good) if good else None
-                       for k in ("ms", "heartbeats", "depth", "constants", "kernel_us")}})
+                    **{f"mean_{k}": statistics.mean(values) if (values :=
+                        [r[k] for r in good if r.get(k) is not None]) else None for k in metrics}})
     data = {"completed": len(rows), "variants": summaries, "paired": pairs, "groups": groups}
     common.write_json(output / "summary.json", data)
     fields = ["case", "suite", "kind", "variant", "repeat", "status", "ms", "heartbeats", "depth",
               "constants", "kernel_us", "eliminated", "cut", "head_goals", "process_ms",
-              "flex_ms", "flex_heartbeats", "approx_depth"]
+              "flex_ms", "flex_heartbeats", "approx_depth", "prepare_ms", "prepare_heartbeats",
+              "prepared_hash", "sol_ms", "build_ms", "last_started_subphase", "nodes",
+              "auxiliary_declarations", "direct_depth", "direct_nodes", "direct_constants",
+              "metrics_version"]
     with (output / "results.csv").open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fields, extrasaction="ignore")
         writer.writeheader()
@@ -208,7 +220,7 @@ def run(args, cases, command, env, header):
     records = args.output / "results.jsonl"
     if records.exists():
         completed = {(r["case"], r["variant"], r["repeat"]) for r in map(json.loads, records.read_text().splitlines())}
-    tasks = [(c, v, repeat) for repeat in range(1, args.repeats + 1) for c in cases for v in VARIANTS]
+    tasks = [(c, v, repeat) for repeat in range(1, args.repeats + 1) for c in cases for v in args.variants]
     random.Random(args.seed).shuffle(tasks)
     for index, (case, variant, repeat) in enumerate(tasks):
         if (case["case"], variant, repeat) in completed:
@@ -222,6 +234,8 @@ def run(args, cases, command, env, header):
         path.write_text(lean_source(case, header))
         invocation = {**env, "RQ2_MODE": "run", "RQ2_VARIANT": variant,
                       "RQ2_HEARTBEATS": str(args.heartbeats), "RQ2_TIMEOUT": str(args.timeout),
+                      "RQ2_PREPARE_HEARTBEATS": str(args.prepare_heartbeats),
+                      "RQ2_PREPARE_TIMEOUT": str(args.prepare_timeout),
                       "RQ2_RECURSION": str(args.recursion)}
         code, parsed, log, process_ms = invoke(command, invocation, path, args.process_timeout)
         row = parsed[-1] if parsed else {"status": "process_timeout" if code == "process_timeout" else "lean_error"}
@@ -232,6 +246,13 @@ def run(args, cases, command, env, header):
                    flex_ms=row.get("tactic_ns", 0) / 1e6,
                    flex_heartbeats=row.get("heartbeats"),
                    heartbeats=row.get("zap_heartbeats_raw", 0) / 1000)
+        row["prepare_ms"] = row.get("prepare_ns", 0) / 1e6
+        row["prepare_heartbeats"] = row.get("prepare_heartbeats_raw", 0) / 1000
+        starts = re.findall(r"\[phase_start\]\s+(\S+)", log)
+        row["last_started_subphase"] = starts[-1] if starts else None
+        for label, ns in re.findall(r"\[phase_time\]\s+\S+:(sol|build)=(\d+)", log):
+            key = f"{label}_ms"
+            row[key] = row.get(key, 0) + int(ns) / 1e6
         row.update(metrics)
         if row["status"] == "constructed":
             row["status"] = "measurement_timeout" if code == "process_timeout" else "measurement_error"
@@ -244,9 +265,14 @@ def run(args, cases, command, env, header):
                            (sum(int(c[i]) for c in counts) for i in range(3))))
         if row["status"] == "certified":
             expected = case["classification"]
-            row["status"] = ("reduced" if code == 0 and row.get("head_goals") == 0
-                             and row.get("eliminated") == expected["eliminable"]
-                             and row.get("cut") == expected["cut"] else "incomplete_reduction")
+            if expected["kind"] == "unclassified":
+                row["status"] = "unclassified_reduction"
+            elif case.get("prepared_hash") != row.get("prepared_hash"):
+                row["status"] = "preparation_mismatch"
+            else:
+                row["status"] = ("reduced" if code == 0 and row.get("head_goals") == 0
+                                 and row.get("eliminated") == expected["eliminable"]
+                                 and row.get("cut") == expected["cut"] else "incomplete_reduction")
         with records.open("a") as handle:
             handle.write(json.dumps(row) + "\n")
         print(f"{len(completed) + 1}/{len(tasks)} {variant} {row['status']} {case['case']} {row['ms']:.1f} ms", flush=True)
@@ -264,11 +290,14 @@ def main():
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--seed", type=int, default=20261103)
     parser.add_argument("--heartbeats", type=int, default=200000)
+    parser.add_argument("--prepare-heartbeats", type=int, default=2000000)
+    parser.add_argument("--prepare-timeout", type=int, default=120)
     parser.add_argument("--recursion", type=int, default=4096)
-    parser.add_argument("--timeout", type=int, default=60, help="shared internal flex deadline in seconds")
-    parser.add_argument("--process-timeout", type=int, default=120)
+    parser.add_argument("--timeout", type=int, default=60, help="internal flex deadline AFTER successful preparation")
+    parser.add_argument("--process-timeout", type=int, help="whole-process safeguard; defaults to preparation + flex + 120 seconds")
+    parser.add_argument("--variants", nargs="+", choices=VARIANTS, default=list(VARIANTS))
+    parser.add_argument("--include-unclassified", action="store_true", help="retain classification failures for targeted diagnostic retries")
     parser.add_argument("--classify-workers", type=int, default=2)
-    parser.add_argument("--classify-batch", type=int, help="cases per classification file (default: 16, or 1 with --manifest)")
     parser.add_argument("--classify-only", action="store_true")
     parser.add_argument("--run-only", action="store_true", help="resume frozen selection and settings")
     parser.add_argument("--progress", action="store_true")
@@ -279,7 +308,8 @@ def main():
         return
     if args.run_only:
         saved = json.loads((args.output / "settings.json").read_text())
-        for key in ("heartbeats", "timeout", "process_timeout", "recursion", "repeats", "seed"):
+        for key in ("heartbeats", "timeout", "process_timeout", "recursion", "repeats", "seed",
+                    "prepare_heartbeats", "prepare_timeout", "variants", "include_unclassified"):
             setattr(args, key, saved[key])
         cases = json.loads((args.output / "selection.json").read_text())["cases"]
         command = json.loads((args.output / "frozen-command.json").read_text())
@@ -297,13 +327,24 @@ def main():
     else:
         if args.output.exists() and any(args.output.iterdir()):
             parser.error("output must be empty; use --run-only to resume")
-        if min(args.repeats, args.timeout, args.heartbeats, args.classify_workers) < 1 or args.count < 0:
+        if min(args.repeats, args.timeout, args.heartbeats, args.prepare_timeout,
+               args.prepare_heartbeats, args.classify_workers) < 1 or args.count < 0:
             parser.error("invalid count or budget")
+        if args.process_timeout is None:
+            args.process_timeout = args.prepare_timeout + args.timeout + 120
+        if args.process_timeout <= args.prepare_timeout + args.timeout:
+            parser.error("process timeout must leave time after preparation and flex for kernel measurement")
+        if len(args.variants) != len(set(args.variants)):
+            parser.error("variants must be distinct")
+        cases, metadata = read_cases(args)
         args.output.mkdir(parents=True, exist_ok=True)
         subprocess.run(["lake", "build", "Flex"], cwd=ROOT, check=True,
                        stdout=(args.output / "build.log").open("w"), stderr=subprocess.STDOUT)
         header = HELPER.read_text()
-        command, env = common.lean_setup(args.output, True, header)
+        # Freeze imports used by statements as well as the measurement harness.
+        imports = [module for case in cases for module in
+                   re.findall(r"^import (.*)$", Path(case["generated"]).read_text(), re.MULTILINE)]
+        command, env = common.lean_setup(args.output, True, common.with_imports(header, imports))
         command, env = freeze(args.output, command, env)
         for source in HARNESS:
             target = args.output / "source" / source.relative_to(ROOT)
@@ -314,12 +355,13 @@ def main():
             for source in (*HARNESS, *SHARED)})
         common.write_json(args.output / "settings.json", {
             **{k: v for k, v in vars(args).items() if isinstance(v, (str, int, bool))},
+            "variants": args.variants,
             "platform": platform.platform(), "timing_workers": 1,
             "git_head": common.capture(["git", "rev-parse", "HEAD"]),
             "git_diff_sha256": hashlib.sha256(common.capture(["git", "diff"]).encode()).hexdigest(),
             "postprocess": False, "nesting": False, "backends": [], "closeLeaves": False,
-            "preprocess": True, "splitFree": False})
-        cases, metadata = read_cases(args)
+            "preprocess": "separate, identical limits for classification and trials", "splitFree": False,
+            "metrics_version": 2})
         common.write_json(args.output / "inventory.json", {**metadata, "cases": cases})
         cases = classify(args, cases, command, env, header)
     print(f"Selected {len(cases)}: {dict(Counter(c['classification']['kind'] for c in cases))}", flush=True)

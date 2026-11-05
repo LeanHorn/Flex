@@ -51,6 +51,7 @@ structure Config where
   report : Bool := false
   /-- Optional common override; zero uses the individual phase limits. -/
   heartbeats : Nat := 0
+  preprocessHeartbeats : Nat := 2000000
   zapHeartbeats : Nat := 200000
   paHeartbeats : Nat := 1500000
   solverHeartbeats : Nat := 500000
@@ -609,12 +610,15 @@ private partial def walk (ctx : Context) (goal : MVarId) (siblings : List MVarId
     (prepared : Bool := false) : TacticM (List MVarId) := do
   setGoals [goal]
   let mut prepared := prepared
+  let mut zapPrepared := !ctx.setup.config.preprocess
   if ctx.setup.config.preprocess then
-    let result ← phase ctx "preprocess" ctx.setup.config.zapHeartbeats do
+    let result ← phase ctx "preprocess" ctx.setup.config.preprocessHeartbeats do
       let next ← Flex.Preprocess.prepareGoal goal (simplify := !prepared)
       setGoals (if ← next.isAssignedOrDelayedAssigned then [] else [next])
-    if result matches .ok _ then prepared := true
     checkpoint ctx siblings
+    if result matches .ok _ then
+      prepared := true
+      zapPrepared := true
   if (← getGoals).isEmpty then return []
   let current ← getMainGoal
   if ← isKGoal current then
@@ -625,7 +629,8 @@ private partial def walk (ctx : Context) (goal : MVarId) (siblings : List MVarId
         let next ← current.withContext do mkFreshExprSyntheticOpaqueMVar result.expr
         current.assign (← mkAppM ``Iff.mpr #[result.proof, next])
         setGoals [next.mvarId!]
-    if ctx.setup.config.zap then
+    -- Other backends may still run if preparation failed, but Zap must not.
+    if ctx.setup.config.zap && zapPrepared then
       let strategy ← match ctx.setup.config.zapCertificate with
         | .constructive => pure emitStrategy
         | .grind => pure (searchStrategy (← `(tactic| grind)) "zap_grind")

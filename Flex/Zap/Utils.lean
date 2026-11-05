@@ -18,15 +18,13 @@ partial def isLogicallyFalse (e : Expr) : Bool :=
     | _            => false
   else false
 
-/-- Simplify `True`/`False` conjunctions and false existential bodies.
-Preserve disjunction nodes so certification retains the original branch positions. -/
+/-- Prune impossible solution branches, preserving live guards and branch positions
+for certification. General simplification belongs after the certificate is built. -/
 partial def simplifyAndExists (e : Expr) : Expr :=
   if e.isAppOfArity ``And 2 then
-    let l := simplifyAndExists (e.appFn!.appArg!)
+    let l := e.appFn!.appArg!
     let r := simplifyAndExists (e.appArg!)
     if isLogicallyFalse l || isLogicallyFalse r then mkConst ``False
-    else if l.isConstOf ``True then r
-    else if r.isConstOf ``True then l
     else mkApp2 (mkConst ``And) l r
   else if e.isAppOfArity ``Or 2 then
     -- Keep branch positions aligned with the certificate traversal.
@@ -42,13 +40,6 @@ partial def simplifyAndExists (e : Expr) : Expr :=
       let b' := simplifyAndExists b
       if isLogicallyFalse b' then mkConst ``False
       else mkApp2 (mkConst ``Exists univrs) ty (.lam n t b' bi)
-    | _ => e
-  else if e.isForall then
-    match e with
-    | .forallE n t b bi =>
-      let t' := simplifyAndExists t
-      let b' := simplifyAndExists b
-      .forallE n t' b' bi
     | _ => e
   else e
 

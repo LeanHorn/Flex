@@ -116,13 +116,19 @@ partial def simplifyTrueFalse (input : Expr) : MetaM (Expr × Expr) := withIncRe
       return (middle, congr)
   return unchanged input
 
+/-- Transport a goal directly along a proved equivalence. -/
+def replaceGoalIff (goal : MVarId) (target proof : Expr) : MetaM MVarId := goal.withContext do
+  let original ← goal.getType
+  let next ← mkFreshExprSyntheticOpaqueMVar target (← goal.getTag)
+  goal.assign (mkApp4 (mkConst ``Iff.mpr) original target proof next)
+  return next.mvarId!
+
 /-- Replace the target using the structural equivalence, closing `True` immediately. -/
 def simplifyGoal (goal : MVarId) : MetaM MVarId := goal.withContext do
   if ← goal.isAssignedOrDelayedAssigned then return goal
   let target ← instantiateMVars (← goal.getType)
   let (result, proof) ← simplifyTrueFalse target
-  let goal ← if result == target then pure goal else
-    goal.replaceTargetEq result (mkApp3 (mkConst ``propext) target result proof)
+  let goal ← if result == target then pure goal else replaceGoalIff goal result proof
   if result.isConstOf ``True then goal.assign (mkConst ``True.intro)
   return goal
 

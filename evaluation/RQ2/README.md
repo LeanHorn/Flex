@@ -65,6 +65,19 @@ For example:
   "format": "lean_statement"}]}
 ```
 
+`make_manifests.py` builds such manifests from Flux projects and the
+LiquidHaskell corpus. Each Flux `Flux/VC/*.lean` file is flattened with its
+project-local imports, so only Flex and its dependencies remain; the projects'
+own toolchain and Flex pins are not used. Uninterpreted `def f : T := sorry`
+becomes `opaque f : T` in the copies. LiquidHaskell files get `FixpointImport`
+inlined. Statement-manifest cases are classified one per file, since flattened
+cases share declaration names.
+
+```sh
+python3 -B evaluation/RQ2/make_manifests.py flux PROJECT... --output DIR
+python3 -B evaluation/RQ2/make_manifests.py liquidhaskell path/to/liquid-haskell --output DIR
+```
+
 Timing trials run **serially**, in a recorded seeded order. Stop competing builds
 and evaluations. On macOS, prefix the command with `caffeinate -is` and leave the
 lid open. Compilation and module loading happen outside the tactic timer.
@@ -78,7 +91,8 @@ stops between trials; remove it before resuming. Completed trials are preserved.
 
 Only **acyclic-only or mixed graphs with an eliminable predicate**, after common
 preprocessing, qualify. Purely cyclic graphs are excluded even when cutting a
-cycle would leave removable vertices. Graph membership and Zap's elimination/cut
+cycle would leave removable vertices. As in `flex`, classification descends
+positive `∀` and `∧` to every predicate (∃) goal and sums over them. Graph membership and Zap's elimination/cut
 partition are recorded separately. Source duplicates are removed before selection.
 The 100-case pilot balances acyclic/mixed cases and spreads them across suites,
 using a fixed seed and **no success-based filtering**. `--count 0` uses every

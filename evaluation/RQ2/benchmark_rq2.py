@@ -87,7 +87,9 @@ def read_cases(args):
 def classify(args, cases, command, env, header):
     directory = args.output / "classification"
     directory.mkdir()
-    batches = [cases[i:i + 16] for i in range(0, len(cases), 16)]
+    # Statement manifests (e.g. flattened Flux VCs) share declaration names, so they cannot share a file.
+    size = args.classify_batch or (1 if args.manifest else 16)
+    batches = [cases[i:i + size] for i in range(0, len(cases), size)]
 
     def batch(task):
         i, group = task
@@ -237,7 +239,9 @@ def run(args, cases, command, env, header):
             row["kernel_us"] = row["kernel_ns"] / 1000
         counts = re.findall(r"ZAP_RESULT eliminated=(\d+) cut=(\d+) head_goals=(\d+)", log)
         if counts:
-            row.update(zip(("eliminated", "cut", "head_goals"), map(int, counts[-1])))
+            # One Zap run per predicate goal; compare totals with the classification.
+            row.update(zip(("eliminated", "cut", "head_goals"),
+                           (sum(int(c[i]) for c in counts) for i in range(3))))
         if row["status"] == "certified":
             expected = case["classification"]
             row["status"] = ("reduced" if code == 0 and row.get("head_goals") == 0
@@ -264,6 +268,7 @@ def main():
     parser.add_argument("--timeout", type=int, default=60, help="shared internal flex deadline in seconds")
     parser.add_argument("--process-timeout", type=int, default=120)
     parser.add_argument("--classify-workers", type=int, default=2)
+    parser.add_argument("--classify-batch", type=int, help="cases per classification file (default: 16, or 1 with --manifest)")
     parser.add_argument("--classify-only", action="store_true")
     parser.add_argument("--run-only", action="store_true", help="resume frozen selection and settings")
     parser.add_argument("--progress", action="store_true")

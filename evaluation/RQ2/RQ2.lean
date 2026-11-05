@@ -28,42 +28,61 @@ private def expressionDepth (root : Expr) : Nat := Id.run do
       pending := (children e).map (·, false) ++ (e, true) :: pending
   return depths[root]!
 
-/-- Use the same dependency graph and feedback cut as Zap, before any search. -/
+/-- Reach the predicate goals as `flex` does: preprocess, then descend positive ∀ and ∧.
+LiquidHaskell goals, for example, quantify background interpretations outside the ∃. -/
+private partial def kGoals (goal : MVarId) : MetaM (List MVarId) := do
+  let goal ← Flex.Preprocess.prepareGoal goal
+  if ← goal.isAssignedOrDelayedAssigned then return []
+  goal.withContext do
+    let type ← whnf (← instantiateMVars (← goal.getType))
+    if let .app (.app (.const ``Exists _) domain) _ := type then
+      if ← forallTelescopeReducing domain fun _ body => return body.isProp then
+        return [goal]
+    if type.isForall then
+      let (_, child) ← goal.intro1
+      kGoals child
+    else if type.isAppOfArity ``And 2 then
+      (← goal.apply (mkConst ``And.intro)).foldlM (fun acc g => return acc ++ (← kGoals g)) []
+    else return []
+
+/-- Use the same dependency graph and feedback cut as Zap, before any search.
+Counts are summed over every predicate goal, matching one Zap run per goal. -/
 private def classify (target : Expr) : TacticM Json := do
   let original ← mkFreshExprMVar target (kind := .syntheticOpaque)
-  let goal ← Flex.Preprocess.prepareGoal original.mvarId!
-  if ← goal.isAssignedOrDelayedAssigned then
-    return Json.mkObj [("kind", toJson "none"), ("eligible", toJson false)]
-  let result ← IO.mkRef Json.null
-  withPeeledExists (← goal.getType) #[] fun binders body => do
-    let mut body := body
-    let mut vars : Array KVar := #[]
-    for (name, ty, fv) in binders do
-      let types ← collectArrowTypes ty
-      let mv ← mkFreshExprMVar ty (kind := .syntheticOpaque)
-      vars := vars.push {
-        name := name
-        paramTypes := types
-        params := (List.range types.length).map (fun i => Name.mkSimple s!"x{i}")
-        mvarId := mv.mvarId! }
-      body := body.replaceFVar fv mv
-    let ctx : KContext := { kvars := vars.foldl (fun m k => m.insert k.mvarId k) {} }
-    let deps ← (exprDeps body).run ctx
-    let (elim, cut) ← (exprPartitionKVars body).run ctx
-    let cyclic := (tarjanSCC vars.toList deps).filter fun scc =>
-      scc.length > 1 || scc.any (fun k => hasSelfLoop k deps)
-    let ncyclic := cyclic.flatten.length
-    let acyclic := vars.size - ncyclic
-    let kind := if vars.isEmpty then "none" else if ncyclic == 0 then "acyclic_only"
-      else if acyclic == 0 then "cyclic_only" else "mixed"
-    result.set (Json.mkObj [
-      ("kind", toJson kind), ("predicates", toJson vars.size),
-      ("acyclic", toJson acyclic), ("cyclic", toJson ncyclic),
-      ("eliminable", toJson elim.length), ("cut", toJson cut.length),
-      ("eligible", toJson (acyclic > 0 && !elim.isEmpty)),
-      ("elimination_names", toJson (elim.map (toString ∘ KVar.name))),
-      ("cut_names", toJson (cut.map (toString ∘ KVar.name)))])
-  result.get
+  let goals ← kGoals original.mvarId!
+  let (predicates, ncyclic, elim, cut) ← goals.foldlM (init := (0, 0, [], [])) fun acc goal =>
+      goal.withContext do
+    let result ← IO.mkRef acc
+    withPeeledExists (← goal.getType) #[] fun binders body => do
+      let mut body := body
+      let mut vars : Array KVar := #[]
+      for (name, ty, fv) in binders do
+        let types ← collectArrowTypes ty
+        let mv ← mkFreshExprMVar ty (kind := .syntheticOpaque)
+        vars := vars.push {
+          name := name
+          paramTypes := types
+          params := (List.range types.length).map (fun i => Name.mkSimple s!"x{i}")
+          mvarId := mv.mvarId! }
+        body := body.replaceFVar fv mv
+      let ctx : KContext := { kvars := vars.foldl (fun m k => m.insert k.mvarId k) {} }
+      let deps ← (exprDeps body).run ctx
+      let (e, c) ← (exprPartitionKVars body).run ctx
+      let cyclic := (tarjanSCC vars.toList deps).filter fun scc =>
+        scc.length > 1 || scc.any (fun k => hasSelfLoop k deps)
+      let (p, n, es, cs) := acc
+      result.set (p + vars.size, n + cyclic.flatten.length, es ++ e, cs ++ c)
+    result.get
+  let acyclic := predicates - ncyclic
+  let kind := if predicates == 0 then "none" else if ncyclic == 0 then "acyclic_only"
+    else if acyclic == 0 then "cyclic_only" else "mixed"
+  return Json.mkObj [
+    ("kind", toJson kind), ("predicates", toJson predicates), ("predicate_goals", toJson goals.length),
+    ("acyclic", toJson acyclic), ("cyclic", toJson ncyclic),
+    ("eliminable", toJson elim.length), ("cut", toJson cut.length),
+    ("eligible", toJson (acyclic > 0 && !elim.isEmpty)),
+    ("elimination_names", toJson (elim.map (toString ∘ KVar.name))),
+    ("cut_names", toJson (cut.map (toString ∘ KVar.name)))]
 
 /-- Measure a closed proof of residuals → original, without admitting the residuals. -/
 private def certificate (original target : Expr) (goals : List MVarId) : TermElabM Json := do

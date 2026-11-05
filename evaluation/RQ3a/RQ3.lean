@@ -361,6 +361,7 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
         | "auto" => pure .auto
         | _ => throwError "invalid FLEX_PARITY_SCRAPE: {scrapeName}"
       let profilePA := (← IO.getEnv "FLEX_PARITY_PROFILE_PA").getD "0" == "1"
+      let diagnostic := (← IO.getEnv "RQ3_DIAGNOSTIC").getD "0" == "1"
       let backends : List Flex.Portfolio.Backend :=
         (if full then [.fix] else []) ++ (if solvers then [.spacer, .eldarica] else [])
       let recursionLimit ← envNat "FLEX_PARITY_RECURSION_LIMIT" 16384
@@ -369,6 +370,7 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
       let currentOptions ← getOptions
       let options := Id.run do
         let opts := flex.benchOracles.set currentOptions profilePA
+        let opts := opts.setBool `trace.flex diagnostic
         let opts := opts.setBool `trace.flex.synthesis profilePA
         let opts := flex.automation.proofHeartbeats.set opts proofHeartbeats
         let opts := flex.fixpointTimeout.set opts totalSeconds
@@ -389,6 +391,7 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
             ("backends", toJson (backends.map toString)),
             ("scrape", if full then toJson scrapeName else Json.null),
             ("profile_pa", toJson profilePA),
+            ("diagnostic", toJson diagnostic),
             ("preprocess", toJson config.preprocess), ("zap", toJson config.zap),
             ("postprocess", toJson config.postprocess), ("nesting", toJson config.nesting),
             ("split_free", toJson config.splitFree),

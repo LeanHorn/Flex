@@ -9,6 +9,10 @@ import random
 import re
 import subprocess
 import tarfile
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
+from rq1_corpus import imports, strip_comments
 
 
 def sha(path):
@@ -27,11 +31,11 @@ def flatten(path, repo):
         if p in seen:
             return
         seen.add(p)
-        text = p.read_text()
-        if re.search(r'\b(sorry|admit|axiom)\b', re.sub(r'--[^\n]*', '', text)):
+        text = strip_comments(p.read_text())
+        if re.search(r'\b(sorry|admit|axiom)\b', text):
             raise ValueError(f'unproved source specification: {p.relative_to(repo)}')
         dependencies.append({'path': str(p.relative_to(repo)), 'sha256': sha(p)})
-        for module in re.findall(r'^import\s+(\S+)\s*$', text, re.M):
+        for module in imports(text):
             relative = Path(*module.split('.')).with_suffix('.lean')
             local = next((parent / relative for parent in p.parents
                           if parent.is_relative_to(repo) and (parent / relative).is_file()), None)
@@ -71,18 +75,19 @@ def inventory_a(repo):
                       'source_sha256': sha(path), 'bytes': path.stat().st_size,
                       'predicates_static': predicates, 'declaration': 'F.' + names[0],
                       'format': 'lean_statement'})
-    lh = repo / 'liquid-haskell'
-    data = json.loads((lh / 'manifest.json').read_text())
+    lf = repo / 'liquid-fixpoint'
+    data = json.loads((lf / 'manifest.json').read_text())
     for item in data['cases']:
-        path = lh / item['lean']
-        if sha(path) != item['lean_sha256'] or sha(lh / item['fq']) != item['fq_sha256']:
-            raise ValueError(f'LiquidHaskell hash mismatch: {item["case"]}')
-        cases.append({'case': 'liquid-haskell/' + item['case'], 'suite': 'liquid-haskell',
-                      'family': item['features']['source_family'],
-                      'repo_path': str(path.relative_to(repo)), 'fq': 'liquid-haskell/' + item['fq'],
-                      'source_sha256': item['fq_sha256'], 'bytes': path.stat().st_size,
-                      'predicates_static': item['features']['active_kvars'],
-                      'declaration': 'FixpointGoal', 'format': 'lean_statement'})
+        path = lf / item['lean']
+        if sha(path) != item['lean_sha256'] or sha(lf / item['source']) != item['source_sha256']:
+            raise ValueError(f'Liquid Fixpoint hash mismatch: {item["case"]}')
+        cases.append({'case': 'liquid-fixpoint/' + item['case'] + '.lean', 'suite': 'liquid-fixpoint',
+                      'family': str(Path(item['case']).parent),
+                      'repo_path': str(path.relative_to(repo)),
+                      'upstream_source': 'liquid-fixpoint/' + item['source'],
+                      'source_sha256': item['source_sha256'], 'bytes': path.stat().st_size,
+                      'predicates_static': item['predicates'],
+                      'declaration': item['declaration'], 'format': 'lean_statement'})
     return cases
 
 
@@ -116,16 +121,13 @@ def inventory_b(repo, output):
         data = json.loads(path.read_text())
         for item in data['files']:
             translations[data['project'] + '/' + item['input']] = (data, item)
-    cases, seen = [], {}
+    cases = []
     for entry in selected:
         source = root / 'sources' / entry['source_relative_path']
         data, item = translations[entry['source_relative_path']]
         generated = root / 'generated' / Path(entry['source_relative_path']).with_suffix('.lean')
         if sha(source) != entry['sha256'] or sha(generated) != item['output_sha256']:
             raise ValueError(f'CHC-COMP hash mismatch: {source}')
-        if entry['sha256'] in seen:
-            seen[entry['sha256']]['aliases'].append(entry['source_relative_path'])
-            continue
         case = {'case': entry['source_relative_path'].removesuffix('.smt2') + '.lean',
                 'suite': entry['suite'], 'family': entry['source_relative_path'].split('/')[0],
                 'track': entry['track'], 'source': str(source), 'generated': str(generated),
@@ -134,7 +136,6 @@ def inventory_b(repo, output):
                 'queries': item['queries'], 'inventory_status': 'translated',
                 'aliases': [entry['source_relative_path']]}
         cases.append(case)
-        seen[entry['sha256']] = case
     return cases
 
 
@@ -145,7 +146,7 @@ def balanced(cases, count, seed):
     rng = random.Random(seed)
     families = defaultdict(list)
     for case in sorted(cases, key=lambda x: (x['bytes'], x['case'])):
-        families[case['suite'] if case['suite'] != 'liquid-haskell' else case['family']].append(case)
+        families[case['suite'] if case['suite'] != 'liquid-fixpoint' else case['family']].append(case)
     groups = {}
     for family, entries in families.items():
         buckets = defaultdict(list)
@@ -176,12 +177,12 @@ def select(cases, study, count, seed):
         return sorted(cases, key=lambda x: x['case'])
     if study == 'b':
         return balanced(cases, count, seed)
-    # Half LiquidHaskell; the other half includes all three Flux/Wave suites.
+    # Half Liquid Fixpoint; the other half includes all three Flux/Wave suites.
     lh = count // 2
     flux = count - lh
     quotas = {'flux_tests': round(flux * .60), 'flux-medium': round(flux * .24)}
     quotas['wave'] = flux - sum(quotas.values())
-    quotas['liquid-haskell'] = lh
+    quotas['liquid-fixpoint'] = lh
     result = []
     for i, (suite, n) in enumerate(quotas.items()):
         pool = [c for c in cases if c['suite'] == suite]
@@ -194,19 +195,13 @@ def select(cases, study, count, seed):
 def prepare_a(cases, repo, output):
     root = output / 'corpus' / 'statements'
     root.mkdir(parents=True, exist_ok=True)
-    helper = repo / 'tooling/liquid-haskell/FixpointImport.lean'
     for i, case in enumerate(cases):
         original = repo / case['repo_path']
         try:
-            if case['suite'] == 'liquid-haskell':
-                text = helper.read_text() + '\n' + original.read_text().replace('import FixpointImport\n', '')
-                dependencies = [{'path': str(helper.relative_to(repo)), 'sha256': sha(helper)},
-                                {'path': case['repo_path'], 'sha256': sha(original)}]
-            else:
-                text, dependencies = flatten(original, repo)
-            imports = list(dict.fromkeys(re.findall(r'^import\s+(.*)$', text, re.M)))
+            text, dependencies = flatten(original, repo)
+            modules = imports(text)
             body = re.sub(r'^import .*\n', '', text, flags=re.M)
-            text = ''.join(f'import {m}\n' for m in imports) + body
+            text = ''.join(f'import {m}\n' for m in modules) + body
             target = root / f'{i:03}.lean'
             target.write_text(text)
             case.update(generated=str(target), generated_sha256=sha(target),
@@ -217,15 +212,15 @@ def prepare_a(cases, repo, output):
     return cases
 
 
-def build(repo, output, count, seed):
-    a = inventory_a(repo)
-    b = inventory_b(repo, output)
-    chosen = {'a': select(a, 'a', count, seed), 'b': select(b, 'b', count, seed)}
+def build(repo, output, count, seed, study='both'):
+    a = inventory_a(repo) if study in ('a', 'both') else []
+    b = inventory_b(repo, output) if study in ('b', 'both') else []
+    chosen = {'a': select(a, 'a', count, seed) if a else [],
+              'b': select(b, 'b', count, seed) if b else []}
     prepare_a(chosen['a'], repo, output)
     return {'seed': seed, 'benchmarks_commit': subprocess.check_output(
                 ['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
             'pool_counts': {'a': dict(Counter(c['suite'] for c in a)),
-                            'b_tasks': sum(len(c['aliases']) for c in b), 'b_distinct': len(b)},
-            'method': 'Fixed 50/50 Flux-Wave/LiquidHaskell split; round-robin source suites/families and size quartiles; seeded sampling. No outcome filtering. Structural graph classification follows selection.',
-            'liquidhaskell_scope': 'Published outcome-selected 320-query development corpus.',
+                            'b_tasks': len(b)},
+            'method': 'Full published corpus when count=0; otherwise 50/50 Flux-Wave/Liquid Fixpoint pilot, balanced by suite/family and size. No outcome filtering or SMT-content deduplication.',
             'cases': chosen}

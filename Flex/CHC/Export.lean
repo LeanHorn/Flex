@@ -213,7 +213,8 @@ partial def expose (expression : Expr) : MetaM Expr := do
   match expression with
   | .letE _ _ value body _ => expose (body.instantiate1 value)
   | .const .. =>
-    if ← isProp expression then
+    let type ← whnf (← inferType expression)
+    if (← isProp expression) || type.isConstOf ``Int || type.isConstOf ``Bool then
       if let some value ← unfoldDefinition? expression then return ← expose value
     return expression
   | _ => return expression
@@ -251,11 +252,67 @@ private def unfoldDistinct? (e : Expr) : MetaM (Option Expr) := do
   unless arity >= 2 && e.getAppNumArgs == arity + 1 && (← isProp e) do return none
   unfoldDefinition? e
 
+private def recordEquality? (e : Expr) : MetaM (Option Expr) := do
+  let some (type, left, right) := e.eq? | return none
+  let type ← whnf type
+  let .const name _ := type.getAppFn | return none
+  let some ctor := getNonRecStructureCtor? (← getEnv) name | return none
+  let arity := ctor.numParams + ctor.numFields
+  unless left.isAppOfArity ctor.name arity && right.isAppOfArity ctor.name arity do
+    return none
+  let mut result := mkConst ``True
+  for a in left.getAppArgs[ctor.numParams:], b in right.getAppArgs[ctor.numParams:] do
+    unless ← isDefEq (← inferType a) (← inferType b) do return none
+    let eq ← mkEq a b
+    result := if result.isConstOf ``True then eq else mkApp2 (mkConst ``And) result eq
+  return some result
+
+/-- Evaluate closed Nat comparisons without identifying Nat subtraction with Int subtraction. -/
+private def closedNatComparison? (e : Expr) : MetaM (Option Expr) := do
+  let nat := mkConst ``Nat
+  let eq := match e.eq? with | some (type, a, b) => if type == nat then some (a, b) else none | _ => none
+  let ne := match e.ne? with | some (type, a, b) => if type == nat then some (a, b) else none | _ => none
+  let operators := #[e.leOf? nat, e.ltOf? nat, e.geOf? nat, e.gtOf? nat, eq, ne]
+  for arguments in operators, i in [:operators.size] do
+    if let some (a, b) := arguments then
+      let a : Q(Nat) := a
+      let b : Q(Nat) := b
+      canonical e (#[q($a ≤ $b), q($a < $b), q($a ≥ $b), q($a > $b), q($a = $b), q($a ≠ $b)][i]!)
+      let some n ← evalNat a | return none
+      let some m ← evalNat b | return none
+      let truth := #[decide (n ≤ m), decide (n < m), decide (n ≥ m), decide (n > m), n == m, n != m][i]!
+      return some (mkConst (if truth then ``True else ``False))
+  return none
+
+/-- Expose scalar computations over records before the SMT translator visits their fields. -/
+private def unfoldRecordCall? (e : Expr) : MetaM (Option Expr) := do
+  let .const name _ := e.getAppFn | return none
+  let env ← getEnv
+  unless env.find? name matches some (.defnInfo _) do return none
+  let type ← whnf (← inferType e)
+  unless type.isProp || type.isConstOf ``Int || type.isConstOf ``Bool do return none
+  for arg in e.getAppArgs do
+    let type ← whnf (← inferType arg)
+    if let .const recordName _ := type.getAppFn then
+      if !isClass env recordName && (getNonRecStructureCtor? env recordName).isSome then
+        if ← isRecursiveDefinition name then return none
+        return ← unfoldDefinition? e
+  return none
+
 /-- Normalize checked theory terms. PA can also enable first-order Int/Bool/Prop
 quantifiers; CHC export keeps them restricted to clause prefixes. -/
 partial def atom (input : Expr) (allowQuantifiers : Bool := false) : MetaM Expr := do
   let e ← expose input
+  if e.isAppOfArity ``Iff 2 then
+    return ← mkEq (← atom (e.getArg! 0) allowQuantifiers)
+      (← atom (e.getArg! 1) allowQuantifiers)
+  if e.isAppOfArity ``Decidable.decide 2 then
+    return ← atom (← mkAppOptM ``ite #[some (mkConst ``Bool), some (e.getArg! 0),
+      some (e.getArg! 1), some (mkConst ``Bool.true), some (mkConst ``Bool.false)])
+      allowQuantifiers
   if let some body ← unfoldDistinct? e then return ← atom body allowQuantifiers
+  if let some body ← recordEquality? e then return ← atom body allowQuantifiers
+  if let some body ← closedNatComparison? e then return body
   -- lean-smt recognizes the notation's typeclass applications, not these direct functions.
   let e ← if e.isAppOfArity ``Int.ediv 2 || e.isAppOfArity ``Int.emod 2 then do
       let a : Q(Int) := e.getArg! 0
@@ -292,11 +349,41 @@ partial def atom (input : Expr) (allowQuantifiers : Bool := false) : MetaM Expr 
         return mkApp2 e.getAppFn domain (← mkLambdaFVars #[input] body)
     let head := e.getAppFn
     let args ← e.getAppArgs.mapM fun arg => atom arg allowQuantifiers
-    return mkAppN head args
+    let applied := mkAppN head args
+    let env ← getEnv
+    if let some projected ← reduceProjOf? applied (fun name => !isClass env name) then
+      unless projected == applied do return ← atom projected allowQuantifiers
+    if let .const name _ := head then
+      if let some info := env.getProjectionFnInfo? name then
+        if !info.fromClass && args.size == info.numParams + 1 then
+          if let some projected ← unfoldDefinition? applied then
+            return ← atom projected allowQuantifiers
+    if let some body ← unfoldRecordCall? applied then return ← atom body allowQuantifiers
+    return applied
+  | .proj name index value =>
+    if let some projected ← reduceProj? e then return ← atom projected allowQuantifiers
+    if value.isAppOfArity ``ite 5 then
+      let yes := Expr.proj name index (value.getArg! 3)
+      let no := Expr.proj name index (value.getArg! 4)
+      let type ← inferType e
+      if (← isDefEq type (← inferType yes)) && (← isDefEq type (← inferType no)) then
+        return ← atom (← mkAppOptM ``ite #[some type, some (value.getArg! 1),
+          some (value.getArg! 2), some yes, some no]) allowQuantifiers
+    return e
   | .mvar .. => throwError "CHC export: unresolved metavariable {e}"
   | _ => return e
 
-/-- Move value binders before guards. Unused Int/Bool/Prop binders can be dropped: their types are inhabited. -/
+/-- Quantifying a nonrecursive record is equivalent to quantifying its constructor fields. -/
+private def recordBinder? (domain body : Expr) : MetaM (Option Expr) := do
+  let domain ← whnf domain
+  let .const name levels := domain.getAppFn | return none
+  let some ctor := getNonRecStructureCtor? (← getEnv) name | return none
+  let constructor := mkAppN (mkConst ctor.name levels) domain.getAppArgs
+  forallTelescopeReducing (← inferType constructor) fun fields result => do
+    unless ← isDefEq result domain do return none
+    return some (← mkForallFVars fields (body.instantiate1 (mkAppN constructor fields)))
+
+/-- Move value binders before guards and expose nonrecursive record binders. -/
 partial def clause (input : Expr) : MetaM Expr :=
   go input #[] #[]
 where
@@ -310,6 +397,8 @@ where
         withLocalDeclD `guard domain fun proof =>
           go (body.instantiate1 proof) variables (guards.push guard)
       else
+        if let some expanded ← recordBinder? domain body then
+          return ← go expanded variables guards
         discard <| Fragment.valueSort domain
         withLocalDeclD (Name.mkSimple s!"v_{variables.size}") domain fun binder =>
           go (body.instantiate1 binder) (variables.push binder) guards
@@ -361,6 +450,32 @@ def ExportedProblem.withCanonicalClauses (problem : ExportedProblem) : MetaM Exp
   validate problem
   return problem
 
+/-- Expand unsupported nonrecursive definitions, keeping recognized SMT operators intact. -/
+private partial def translateClause (input : Expr) (names : Std.HashMap FVarId String)
+    (symbols : Array String) : MetaM Smt.Term := do
+  let clause ← Prepare.clause input
+  let ((term, constants, freeVariables), _) ← (Smt.Translator.translateExpr clause).run {
+    uniqueFVarNames := names }
+  unless constants.isEmpty do
+    let changed ← IO.mkRef false
+    let expanded ← Meta.transform (m := MetaM) clause (pre := fun e => do
+      let .const name _ := e.getAppFn | return .continue
+      unless constants.contains name do return .continue
+      unless (← getEnv).find? name matches some (.defnInfo _) do return .continue
+      if ← isRecursiveDefinition name then return .continue
+      if let some body ← unfoldDefinition? e then
+        unless body == e do
+          changed.set true
+          return .visit body
+      return .continue)
+    unless ← changed.get do
+      throwError "unsupported constant dependencies: {constants.toArray}"
+    return ← translateClause expanded names symbols
+  unless freeVariables.toArray.all names.contains do
+    throwError "unexpected free variable in translation"
+  Fragment.checkTerm term symbols
+  return term
+
 /-- Export Bool/Int arithmetic, positive-literal div/mod, and local lets.
 The body must be closed except for its unassigned κs. No witnesses are assigned. -/
 def exportConstraints (kvars : List KVar) (body : Expr) : MetaM ExportedProblem := do
@@ -389,14 +504,7 @@ def exportConstraints (kvars : List KVar) (body : Expr) : MetaM ExportedProblem 
           try
             let input := original.replace fun e => if e.isMVar then replacements[e.mvarId!]? else none
             if input.hasMVar then throwError "unregistered or unresolved metavariable"
-            let clause ← Prepare.clause input
-            let ((term, constants, freeVariables), _) ← (Smt.Translator.translateExpr clause).run {
-              uniqueFVarNames := names }
-            unless constants.isEmpty do
-              throwError "unsupported constant dependencies: {constants.toArray}"
-            unless freeVariables.toArray.all names.contains do
-              throwError "unexpected free variable in translation"
-            Fragment.checkTerm term (relations.map (·.symbol))
+            let term ← translateClause input names (relations.map (·.symbol))
             return Smt.Translate.Command.assert term
           catch error => throwError "CHC export: clause {i + 1}: {error.toMessageData}"
         let declarations ← Smt.Translate.Query.generateQuery symbols.toList names

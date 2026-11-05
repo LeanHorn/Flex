@@ -74,6 +74,11 @@ structure Setup where
   onPA : PAObserver := fun _ => pure ()
   /-- Observe CHC artifacts independently of candidate acceptance and proof search. -/
   onCHC : Backend → Flex.CHC.Event → TermElabM Unit := fun _ _ => pure ()
+  /-- Observe a candidate in the state being saved; later alternatives may replace it. -/
+  onSynthesis : MVarId → Backend → Bool → Option Nat → Array MVarId → TermElabM Unit :=
+    fun _ _ _ _ _ => pure ()
+  /-- Remaining head obligations after a successful Zap reduction. -/
+  onZap : Array MVarId → TacticM Unit := fun _ => pure ()
 
 private structure Context where
   setup : Setup
@@ -470,6 +475,8 @@ private def solveKGoal (ctx : Context) (goal : MVarId) (siblings : List MVarId) 
     if (← best.get).all (fun (previous, _) => better candidate previous ||
         (candidate.backend == previous.backend && candidate.validated == previous.validated &&
           candidate.remainingHeads == previous.remainingHeads)) then
+      ctx.setup.onSynthesis goal candidate.backend candidate.validated candidate.remainingHeads
+        (← getGoals).toArray
       best.set (some (candidate, ← Tactic.saveState))
       checkpoint ctx siblings
   let search : TacticM Bool := do
@@ -493,6 +500,7 @@ private def solveKGoal (ctx : Context) (goal : MVarId) (siblings : List MVarId) 
             unless answer == .valid do return answer
             let candidate : Candidate := {
               backend, validated := true, remainingHeads := none }
+            ctx.setup.onSynthesis goal backend true none #[residual]
             let state : Tactic.SavedState := {
               term := ← Term.saveState, tactic := { tacticState with goals := [residual] } }
             pending.set (some (candidate, state))
@@ -623,7 +631,10 @@ private partial def walk (ctx : Context) (goal : MVarId) (siblings : List MVarId
         | .grind => pure (searchStrategy (← `(tactic| grind)) "zap_grind")
         | .aesop => pure (searchStrategy (← `(tactic| aesop)) "zap_aesop")
       let before ← getGoals
-      transform ctx "zap" siblings (zapImpl strategy (preprocess := false) (postprocess := false))
+      transform ctx "zap" siblings do
+        zapImpl strategy (preprocess := false) (postprocess := false)
+        let after ← getGoals
+        if after != before then ctx.setup.onZap after.tail.toArray
       if ctx.setup.config.postprocess && (← getGoals) != before then
         transform ctx "postprocess" siblings do
           setGoals (← (← getUnsolvedGoals).mapM fun goal => do Flex.Preprocess.cleanupGoal goal)

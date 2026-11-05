@@ -262,6 +262,7 @@ private def runFix (oracle : PAOracle) (scrape : PAScrapeConfig)
           match results[0]! with
           | .valid =>
             let residual ← mkFreshExprMVar (some target) (kind := .syntheticOpaque)
+              (userName := `flex_head)
             residualOut.modify (·.push residual.mvarId!)
             certification.modify fun r => { r with remainingHeads := r.remainingHeads + 1 }
             return residual

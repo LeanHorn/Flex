@@ -1,0 +1,231 @@
+"""Prepare statement-only inputs from a flex-benchmarks checkout."""
+from __future__ import annotations
+
+from collections import Counter, defaultdict
+import hashlib
+import json
+from pathlib import Path
+import random
+import re
+import subprocess
+import tarfile
+
+
+def sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def tracked(repo):
+    return subprocess.check_output(['git', '-C', str(repo), 'ls-files'], text=True).splitlines()
+
+
+def flatten(path, repo):
+    """Inline only local source dependencies; never load existing VC proofs."""
+    seen, chunks, external, dependencies = set(), [], [], []
+
+    def visit(p):
+        if p in seen:
+            return
+        seen.add(p)
+        text = p.read_text()
+        if re.search(r'\b(sorry|admit|axiom)\b', re.sub(r'--[^\n]*', '', text)):
+            raise ValueError(f'unproved source specification: {p.relative_to(repo)}')
+        dependencies.append({'path': str(p.relative_to(repo)), 'sha256': sha(p)})
+        for module in re.findall(r'^import\s+(\S+)\s*$', text, re.M):
+            relative = Path(*module.split('.')).with_suffix('.lean')
+            local = next((parent / relative for parent in p.parents
+                          if parent.is_relative_to(repo) and (parent / relative).is_file()), None)
+            if local:
+                if '/Proof/' in str(local):
+                    raise ValueError(f'proof dependency forbidden: {local}')
+                visit(local)
+            elif module.split('.')[0] in {'Lean', 'Std', 'Init', 'Mathlib', 'Flex', 'Aesop', 'Smt', 'Auto'}:
+                if module not in external:
+                    external.append(module)
+            else:
+                raise ValueError(f'unresolved local import {module} in {p}')
+        text = re.sub(r'^import\s+.*\n', '', text, flags=re.M)
+        chunks.append(f'-- Source: {p.relative_to(repo)}\n{text}\n')
+
+    visit(path)
+    return ''.join(f'import {m}\n' for m in external) + '\n'.join(chunks), dependencies
+
+
+def inventory_a(repo):
+    cases = []
+    for relative in tracked(repo):
+        if not relative.startswith(('flux_tests/', 'flux-medium/', 'wave/')):
+            continue
+        if '/VC/' not in relative or not relative.endswith('.lean'):
+            continue
+        path = repo / relative
+        text = path.read_text()
+        predicates = len(re.findall(r'∃\s+k\d+\s*:', text))
+        if not predicates:
+            continue
+        names = re.findall(r'^def\s+([^\s:(]+)\s*(?::=|:)', text, re.M)
+        if len(names) != 1:
+            raise ValueError(f'expected one generated VC in {relative}: {names}')
+        cases.append({'case': relative, 'suite': relative.split('/')[0],
+                      'family': relative.split('/')[0], 'repo_path': relative,
+                      'source_sha256': sha(path), 'bytes': path.stat().st_size,
+                      'predicates_static': predicates, 'declaration': 'F.' + names[0],
+                      'format': 'lean_statement'})
+    lh = repo / 'liquid-haskell'
+    data = json.loads((lh / 'manifest.json').read_text())
+    for item in data['cases']:
+        path = lh / item['lean']
+        if sha(path) != item['lean_sha256'] or sha(lh / item['fq']) != item['fq_sha256']:
+            raise ValueError(f'LiquidHaskell hash mismatch: {item["case"]}')
+        cases.append({'case': 'liquid-haskell/' + item['case'], 'suite': 'liquid-haskell',
+                      'family': item['features']['source_family'],
+                      'repo_path': str(path.relative_to(repo)), 'fq': 'liquid-haskell/' + item['fq'],
+                      'source_sha256': item['fq_sha256'], 'bytes': path.stat().st_size,
+                      'predicates_static': item['features']['active_kvars'],
+                      'declaration': 'FixpointGoal', 'format': 'lean_statement'})
+    return cases
+
+
+def unpack_chc(repo, output):
+    root = repo / 'CHC-COMP'
+    target = output / 'corpus' / 'CHC-COMP'
+    target.mkdir(parents=True, exist_ok=True)
+    manifest = json.loads((root / 'manifest.json').read_text())
+    for item in manifest['archives']:
+        archive = root / item['path']
+        if sha(archive) != item['sha256']:
+            raise ValueError(f'archive hash mismatch: {archive}')
+        with tarfile.open(archive) as tar:
+            for member in tar:
+                p = Path(member.name)
+                if not member.isfile() or p.is_absolute() or '..' in p.parts:
+                    raise ValueError(f'unsafe archive member {member.name}')
+                if p.parts[0] not in {'generated', 'sources'}:
+                    raise ValueError(f'unexpected archive member {member.name}')
+                dest = target / p
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(tar.extractfile(member).read())
+    return target
+
+
+def inventory_b(repo, output):
+    root = unpack_chc(repo, output)
+    selected = json.loads((repo / 'CHC-COMP/selection.json').read_text())['inputs']
+    translations = {}
+    for path in (root / 'generated').glob('*-manifest.json'):
+        data = json.loads(path.read_text())
+        for item in data['files']:
+            translations[data['project'] + '/' + item['input']] = (data, item)
+    cases, seen = [], {}
+    for entry in selected:
+        source = root / 'sources' / entry['source_relative_path']
+        data, item = translations[entry['source_relative_path']]
+        generated = root / 'generated' / Path(entry['source_relative_path']).with_suffix('.lean')
+        if sha(source) != entry['sha256'] or sha(generated) != item['output_sha256']:
+            raise ValueError(f'CHC-COMP hash mismatch: {source}')
+        if entry['sha256'] in seen:
+            seen[entry['sha256']]['aliases'].append(entry['source_relative_path'])
+            continue
+        case = {'case': entry['source_relative_path'].removesuffix('.smt2') + '.lean',
+                'suite': entry['suite'], 'family': entry['source_relative_path'].split('/')[0],
+                'track': entry['track'], 'source': str(source), 'generated': str(generated),
+                'source_sha256': entry['sha256'], 'generated_sha256': sha(generated),
+                'bytes': source.stat().st_size, 'namespace': item['namespace'],
+                'queries': item['queries'], 'inventory_status': 'translated',
+                'aliases': [entry['source_relative_path']]}
+        cases.append(case)
+        seen[entry['sha256']] = case
+    return cases
+
+
+def balanced(cases, count, seed):
+    """Round-robin source families and within-family size quartiles, then seeded draws."""
+    if count >= len(cases):
+        return sorted(cases, key=lambda x: x['case'])
+    rng = random.Random(seed)
+    families = defaultdict(list)
+    for case in sorted(cases, key=lambda x: (x['bytes'], x['case'])):
+        families[case['suite'] if case['suite'] != 'liquid-haskell' else case['family']].append(case)
+    groups = {}
+    for family, entries in families.items():
+        buckets = defaultdict(list)
+        for i, case in enumerate(entries):
+            bucket = min(3, i * 4 // len(entries))
+            case['size_quartile'] = bucket + 1
+            buckets[bucket].append(case)
+        for values in buckets.values():
+            rng.shuffle(values)
+        queue = []
+        while any(buckets.values()):
+            for key in sorted(buckets):
+                if buckets[key]:
+                    queue.append(buckets[key].pop())
+        groups[family] = queue
+    names = sorted(groups)
+    rng.shuffle(names)
+    result = []
+    while len(result) < count:
+        for name in names:
+            if groups[name] and len(result) < count:
+                result.append(groups[name].pop(0))
+    return result
+
+
+def select(cases, study, count, seed):
+    if count == 0:
+        return sorted(cases, key=lambda x: x['case'])
+    if study == 'b':
+        return balanced(cases, count, seed)
+    # Half LiquidHaskell; the other half includes all three Flux/Wave suites.
+    lh = count // 2
+    flux = count - lh
+    quotas = {'flux_tests': round(flux * .60), 'flux-medium': round(flux * .24)}
+    quotas['wave'] = flux - sum(quotas.values())
+    quotas['liquid-haskell'] = lh
+    result = []
+    for i, (suite, n) in enumerate(quotas.items()):
+        pool = [c for c in cases if c['suite'] == suite]
+        if len(pool) < n:
+            raise ValueError(f'only {len(pool)} cases in {suite}, requested {n}')
+        result += balanced(pool, n, seed + i)
+    return result
+
+
+def prepare_a(cases, repo, output):
+    root = output / 'corpus' / 'statements'
+    root.mkdir(parents=True, exist_ok=True)
+    helper = repo / 'tooling/liquid-haskell/FixpointImport.lean'
+    for i, case in enumerate(cases):
+        original = repo / case['repo_path']
+        try:
+            if case['suite'] == 'liquid-haskell':
+                text = helper.read_text() + '\n' + original.read_text().replace('import FixpointImport\n', '')
+                dependencies = [{'path': str(helper.relative_to(repo)), 'sha256': sha(helper)},
+                                {'path': case['repo_path'], 'sha256': sha(original)}]
+            else:
+                text, dependencies = flatten(original, repo)
+            imports = list(dict.fromkeys(re.findall(r'^import\s+(.*)$', text, re.M)))
+            body = re.sub(r'^import .*\n', '', text, flags=re.M)
+            text = ''.join(f'import {m}\n' for m in imports) + body
+            target = root / f'{i:03}.lean'
+            target.write_text(text)
+            case.update(generated=str(target), generated_sha256=sha(target),
+                        source=str(original), dependencies=dependencies, inventory_status='translated')
+        except (ValueError, OSError) as error:
+            case.update(source=str(original), inventory_status='preparation_failed',
+                        preparation_error=str(error))
+    return cases
+
+
+def build(repo, output, count, seed):
+    a = inventory_a(repo)
+    b = inventory_b(repo, output)
+    chosen = {'a': select(a, 'a', count, seed), 'b': select(b, 'b', count, seed)}
+    prepare_a(chosen['a'], repo, output)
+    return {'seed': seed, 'benchmarks_commit': subprocess.check_output(
+                ['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
+            'pool_counts': {'a': dict(Counter(c['suite'] for c in a)),
+                            'b_tasks': sum(len(c['aliases']) for c in b), 'b_distinct': len(b)},
+            'method': 'Fixed 50/50 Flux-Wave/LiquidHaskell split; round-robin source suites/families and size quartiles; seeded sampling. No outcome filtering. Structural graph classification follows selection.',
+            'liquidhaskell_scope': 'Published outcome-selected 320-query development corpus.',
+            'cases': chosen}

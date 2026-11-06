@@ -1,5 +1,6 @@
 import Flex.Tactic
 import Benchmarks.FluxRS.SortInsert
+import Flex.CHC.ModelImport
 
 set_option maxHeartbeats 2000000
 set_option maxRecDepth 16384

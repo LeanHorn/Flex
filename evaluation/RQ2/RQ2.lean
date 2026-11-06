@@ -1,4 +1,5 @@
 import Flex.Tactic.Tactics.Flex
+import Flex.CHC.ModelImport
 
 set_option maxHeartbeats 0
 set_option Elab.async false

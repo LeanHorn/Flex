@@ -1,5 +1,6 @@
 import Flex.Tactic.Tactics.Flex
 import Std.Time.DateTime.Timestamp
+import Flex.CHC.ModelImport
 
 /-! Evaluate the main flex pipeline with a shared internal budget. -/
 

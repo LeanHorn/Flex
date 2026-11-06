@@ -1,6 +1,6 @@
 import Flex.Core
 import Lean.Meta.Tactic.Replace
-import Mathlib.Tactic.Simproc.ExistsAndEq
+import Flex.Simproc.ExistsAndEq
 
 open Lean Meta
 
@@ -79,7 +79,7 @@ private def compactGoalImpl (goal : MVarId) (kvars : List KVar) : MetaM MVarId :
     lemmas ← lemmas.addConst name
   let context ← Simp.mkContext { maxSteps := 2000, decide := false } #[lemmas]
   -- Simplify inner witnesses first, before constructing proofs for outer existentials.
-  let procs ← ({} : Simp.Simprocs).add ``ExistsAndEq.existsAndEq true
+  let procs ← ({} : Simp.Simprocs).add ``Flex.ExistsAndEq.existsAndEq true
   let declarations ← kvars.toArray.mapM fun k => return (k.name, ← k.mvarId.getType)
   -- The simproc can work directly on parameters instead of abstracting κ-mvars at every node.
   let (result, proof) ← withNewMCtxDepth <| withLocalDeclsDND declarations fun symbols => do

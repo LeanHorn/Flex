@@ -1,5 +1,6 @@
 import Flex.Tactic
 import Benchmarks.FluxRS.SortInsertionSort
+import Flex.CHC.ModelImport
 
 /-!
 Fix proves this; Spacer and Eldarica find no invariant.

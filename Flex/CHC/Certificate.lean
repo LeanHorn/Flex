@@ -187,7 +187,7 @@ private def cleanupContext : MetaM Simp.Context := do
   let mut lemmas : SimpTheorems := {}
   for name in #[``eq_self, ``and_true, ``true_and, ``and_false, ``false_and,
       ``or_true, ``true_or, ``or_false, ``false_or, ``and_self, ``or_self,
-      ``not_true_eq_false, ``not_false_eq_true, ``not_not, ``iff_self,
+      ``not_true_eq_false, ``not_false_eq_true, ``Classical.not_not, ``iff_self,
       ``true_implies, ``false_implies, ``imp_true_iff,
       ``ite_true, ``ite_false, ``ite_self,
       ``exists_eq, ``exists_eq', ``exists_eq_left, ``exists_eq_left',

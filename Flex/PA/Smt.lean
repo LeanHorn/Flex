@@ -3,7 +3,7 @@ import Flex.CHC.Export
 import Flex.PA.Observation
 import Flex.CHC.Process
 import Smt
-import Mathlib.Tactic.Simproc.ExistsAndEq
+import Flex.Simproc.ExistsAndEq
 
 register_option flex.automation.sourcePredicates : Bool := {
   defValue := false
@@ -311,7 +311,7 @@ private def withSimplifiedBatch (compact : Bool) (queries : Array Expr)
       #[← getSimpTheorems, extensional] (← getSimpCongrTheorems)
     let mut simprocs := #[← Simp.getSimprocs]
     if compact then
-      simprocs := simprocs.push (← ({} : Simp.Simprocs).add ``ExistsAndEq.existsAndEq true)
+      simprocs := simprocs.push (← ({} : Simp.Simprocs).add ``Flex.ExistsAndEq.existsAndEq true)
     let simplify (e : Expr) : MetaM Expr := do
       let e ← instantiateMVars e
       let e ← if sources then unfoldSourcePredicates e else pure e

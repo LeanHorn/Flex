@@ -27,7 +27,6 @@ require smt2lean from git
 
 @[default_target]
 lean_lib «Flex» where
-  precompileModules := true
 
 input_file chcProcess.cpp where
   path := "native" / "chc_process.cpp"
@@ -56,3 +55,9 @@ lean_lib «Benchmarks» where
 
 lean_exe «flex» where
   root := `Main
+
+-- Native RQ timing runner: elaborates one file with the Flex tactics compiled in.
+-- An executable links its imports module by module, so Mathlib is not compiled.
+lean_exe «flex-lean» where
+  root := `scripts.FlexLean
+  supportInterpreter := true

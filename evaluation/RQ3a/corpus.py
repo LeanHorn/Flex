@@ -139,7 +139,7 @@ def inventory_b(repo, output):
     return cases
 
 
-def balanced(cases, count, seed):
+def balanced(cases, count, seed, rotate_sizes=False):
     """Round-robin source families and within-family size quartiles, then seeded draws."""
     if count >= len(cases):
         return sorted(cases, key=lambda x: x['case'])
@@ -156,9 +156,14 @@ def balanced(cases, count, seed):
             buckets[bucket].append(case)
         for values in buckets.values():
             rng.shuffle(values)
+        keys = sorted(buckets)
+        # Small CHC-COMP pilots must also sample the largest quartile.
+        if rotate_sizes:
+            offset = len(groups) % len(keys)
+            keys = keys[offset:] + keys[:offset]
         queue = []
         while any(buckets.values()):
-            for key in sorted(buckets):
+            for key in keys:
                 if buckets[key]:
                     queue.append(buckets[key].pop())
         groups[family] = queue
@@ -176,7 +181,7 @@ def select(cases, study, count, seed):
     if count == 0:
         return sorted(cases, key=lambda x: x['case'])
     if study == 'b':
-        return balanced(cases, count, seed)
+        return balanced(cases, count, seed, rotate_sizes=True)
     # Half Liquid Fixpoint; the other half includes all three Flux/Wave suites.
     lh = count // 2
     flux = count - lh
@@ -222,5 +227,8 @@ def build(repo, output, count, seed, study='both'):
                 ['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
             'pool_counts': {'a': dict(Counter(c['suite'] for c in a)),
                             'b_tasks': len(b)},
-            'method': 'Full published corpus when count=0; otherwise 50/50 Flux-Wave/Liquid Fixpoint pilot, balanced by suite/family and size. No outcome filtering or SMT-content deduplication.',
+            'method': ('Full published corpus when count=0. RQ3b pilots round-robin suites '
+                       'and rotate within-suite size quartiles; RQ3a pilots split equally '
+                       'between Flux-Wave and Liquid Fixpoint. Seeded draws within strata. '
+                       'No outcome filtering or SMT-content deduplication.'),
             'cases': chosen}

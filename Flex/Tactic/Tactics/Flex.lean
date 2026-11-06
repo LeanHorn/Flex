@@ -17,6 +17,8 @@ structure PhaseEvent where
   phase : String
   status : String
   elapsedMs : Nat := 0
+  budgetMs : Option Nat := none
+  deadlineMs : Option Nat := none
 
 inductive Backend where
   | fix | spacer | eldarica
@@ -40,6 +42,10 @@ structure Config where
   preprocess : Bool := true
   nesting : Bool := false
   zap : Bool := true
+  /-- Try CHC backends before Zap and Fix, retaining any accepted invariants. -/
+  chcFirst : Bool := false
+  /-- Cap the Zap/Fix and CHC stages in either order; zero uses only the shared deadline. -/
+  stageTimeout : Nat := 0
   zapCertificate : ZapCertificate := .constructive
   /-- Simplify equality-bound witnesses once after Zap; disabled by default. -/
   postprocess : Bool := false
@@ -436,6 +442,7 @@ private def runBackend (ctx : Context) (backend : Backend)
       executable := some (name.get (← getOptions))
       -- Leave the next backend a chance when retries would exhaust the deadline.
       retrySearch := ctx.deadline.isNone || remaining > searchAttempts * timeout
+      deadlineMs := ctx.deadline
       timeoutMs := timeout } (proofOracle ctx) (headsOnly := true)
       (onPhase := fun stage elapsed => do
         let name := match stage with
@@ -467,6 +474,16 @@ private def better (candidate best : Candidate) : Bool :=
     | some _, none => true
     | _, _ => false
 
+/-- Reserve a share of the remaining CHC time for each untried backend. -/
+private def backendContext (ctx : Context) (backend : Backend) (later : List Backend)
+    : TacticM Context := do
+  let some deadline := ctx.deadline | return ctx
+  -- An unsplit, legacy portfolio keeps its PA cap; staged portfolios isolate PA already.
+  if backend == .fix then return ctx
+  let now ← IO.monoMsNow
+  let slots := 1 + (later.filter (· != .fix)).length
+  return { ctx with deadline := some (now + (deadline - now) / slots) }
+
 /-- All alternatives start before predicate assignment. Only accepted branches survive. -/
 private def solveKGoal (ctx : Context) (goal : MVarId) (siblings : List MVarId) : TacticM Unit := do
   setGoals [goal]
@@ -480,84 +497,121 @@ private def solveKGoal (ctx : Context) (goal : MVarId) (siblings : List MVarId) 
         (← getGoals).toArray
       best.set (some (candidate, ← Tactic.saveState))
       checkpoint ctx siblings
+  let skip (backends : List Backend) (reason : String) := do
+    for backend in backends do
+      ctx.setup.onPhase { phase := s!"attempt/{backend}", status := reason }
   let search : TacticM Bool := do
-    for backend in ctx.setup.backends do
+    let mut backends := ctx.setup.backends
+    while let backend :: later := backends do
+      backends := later
       restore entry
+      let attemptCtx ← backendContext ctx backend later
+      let started ← IO.monoMsNow
+      let allowance := attemptCtx.deadline.map (· - started)
+      if allowance == some 0 then
+        skip (backend :: later) "skipped_budget"
+        break
       let pending ← IO.mkRef (none : Option (Candidate × Tactic.SavedState))
-      let tacticState ← getThe Tactic.State
-      -- Save validated instantiations before certification can exhaust the budget.
-      let onCandidate : MVarId → TermElabM PASynthResult := fun residual => do
-        let start ← IO.monoMsNow
-        let status ← IO.mkRef "interrupted"
-        ctx.setup.onPhase { phase := s!"{backend}/validate", status := "start" }
-        try
-          tryCatchRuntimeEx (do
-            -- Check the whole instantiated VC once, not each invariant conjunct separately.
-            let answers ← synthOracle ctx #[← instantiateMVars (← residual.getType)]
-            unless answers.size == 1 do throwError "flex: invalid validation response"
-            let answer := answers[0]!
-            status.set (match answer with
-              | .valid => "valid" | .invalid => "invalid" | .unknown _ => "unknown")
-            unless answer == .valid do return answer
-            let candidate : Candidate := {
-              backend, validated := true, remainingHeads := none }
-            ctx.setup.onSynthesis goal backend true none #[residual]
-            let state : Tactic.SavedState := {
-              term := ← Term.saveState, tactic := { tacticState with goals := [residual] } }
-            pending.set (some (candidate, state))
-            if (← best.get).all (fun (previous, _) => better candidate previous) then
-              ctx.checkpoint.set { state with
-                tactic := { state.tactic with goals := residual :: siblings } }
-            return .valid) fun error => do
-              if error.isInterrupt then throw error
-              Core.checkInterrupted
-              status.set "failed"
-              trace[flex] "{backend}: candidate validation failed: {error.toMessageData}"
-              return .unknown "candidate validation failed"
-        finally
-          ctx.setup.onPhase {
-            phase := s!"{backend}/validate"
-            status := ← status.get
-            elapsedMs := (← IO.monoMsNow) - start }
-      let budget := if backend == .fix then ctx.setup.config.paHeartbeats
-        else ctx.setup.config.solverHeartbeats
-      let result ← phase ctx s!"{backend}" budget (runBackend ctx backend onCandidate)
-      let candidate ← match result with
-        | .ok candidate => pure candidate
-        | .error _ =>
-          let some (candidate, state) ← pending.get | continue
-          restore state
-          pure candidate
-      if candidate.validated then retain candidate
-      -- Closing is separate: a failed proof search cannot undo synthesis.
-      discard <| guarded (close ctx)
-      let goals ← getUnsolvedGoals
-      if goals.isEmpty then
-        checkpoint ctx siblings
-        if ctx.setup.config.report then logInfo m!"flex: {backend} completed the predicate goal"
+      let run : TacticM Unit := do
+        let ctx := attemptCtx
+        let tacticState ← getThe Tactic.State
+        -- Save validated instantiations before certification can exhaust the budget.
+        let onCandidate : MVarId → TermElabM PASynthResult := fun residual => do
+          let start ← IO.monoMsNow
+          let status ← IO.mkRef "interrupted"
+          ctx.setup.onPhase { phase := s!"{backend}/validate", status := "start" }
+          try
+            tryCatchRuntimeEx (do
+              -- Check the whole instantiated VC once, not each invariant conjunct separately.
+              let answers ← synthOracle ctx #[← instantiateMVars (← residual.getType)]
+              unless answers.size == 1 do throwError "flex: invalid validation response"
+              let answer := answers[0]!
+              status.set (match answer with
+                | .valid => "valid" | .invalid => "invalid" | .unknown _ => "unknown")
+              unless answer == .valid do return answer
+              let candidate : Candidate := {
+                backend, validated := true, remainingHeads := none }
+              ctx.setup.onSynthesis goal backend true none #[residual]
+              let state : Tactic.SavedState := {
+                term := ← Term.saveState, tactic := { tacticState with goals := [residual] } }
+              pending.set (some (candidate, state))
+              if (← best.get).all (fun (previous, _) => better candidate previous) then
+                ctx.checkpoint.set { state with
+                  tactic := { state.tactic with goals := residual :: siblings } }
+              return .valid) fun error => do
+                if error.isInterrupt then throw error
+                Core.checkInterrupted
+                status.set "failed"
+                trace[flex] "{backend}: candidate validation failed: {error.toMessageData}"
+                return .unknown "candidate validation failed"
+          finally
+            ctx.setup.onPhase {
+              phase := s!"{backend}/validate"
+              status := ← status.get
+              elapsedMs := (← IO.monoMsNow) - start }
+        let budget := if backend == .fix then ctx.setup.config.paHeartbeats
+          else ctx.setup.config.solverHeartbeats
+        let result ← phase ctx s!"{backend}" budget (runBackend ctx backend onCandidate)
+        let candidate ← match result with
+          | .ok candidate => pure candidate
+          | .error _ =>
+            let some (candidate, state) ← pending.get | return
+            restore state
+            pure candidate
+        if candidate.validated then retain candidate
+        -- Closing is separate: a failed proof search cannot undo synthesis.
+        discard <| guarded (close ctx)
+        let goals ← getUnsolvedGoals
+        if goals.isEmpty then
+          checkpoint ctx siblings
+          if ctx.setup.config.report then logInfo m!"flex: {backend} completed the predicate goal"
+          return
+        let mut valid := candidate.validated
+        let mut refuted := false
+        unless valid do
+          let validation ← phase ctx "validate candidate" ctx.setup.config.solverHeartbeats do
+            let mut allValid := true
+            for pending in goals do
+              let answer ← pending.withContext do validate ctx (← pending.getType)
+              if answer == .invalid then return (false, true)
+              if answer != .valid then allValid := false
+            return (allValid, false)
+          if let .ok (checked, invalid) := validation then
+            valid := checked
+            refuted := invalid
+        if refuted || (!valid && !ctx.setup.config.keepCandidates) then
+          trace[flex] "{backend}: candidate {if refuted then "refuted" else "unvalidated"}"
+          return
+        let candidate := { candidate with validated := valid }
+        retain candidate
+        tidy ctx goal
+        retain candidate
+      ctx.setup.onPhase {
+        phase := s!"attempt/{backend}", status := "start"
+        budgetMs := allowance, deadlineMs := attemptCtx.deadline }
+      let result ← Flex.Timeout.run attemptCtx.deadline run
+      if result.isNone then
+        -- The shared checkpoint includes siblings hidden during this attempt.
+        let saved ← ctx.checkpoint.get
+        restore { saved with tactic := { saved.tactic with
+          goals := saved.tactic.goals.take (saved.tactic.goals.length - siblings.length) } }
+        if let some (candidate, _) ← pending.get then retain candidate
+      let solved ← getUnsolvedGoals
+      let inferred := (← best.get).any fun (candidate, _) =>
+        candidate.validated && candidate.remainingHeads == some 0
+      let accepted := (← best.get).any fun (candidate, _) => candidate.backend == backend
+      ctx.setup.onPhase {
+        phase := s!"attempt/{backend}"
+        status := if result.isNone then "timeout"
+          else if accepted || solved.isEmpty then "ok" else "failed"
+        elapsedMs := (← IO.monoMsNow) - started
+        budgetMs := allowance, deadlineMs := attemptCtx.deadline }
+      if solved.isEmpty then
+        skip later "skipped_solved"
         return true
-      let mut valid := candidate.validated
-      let mut refuted := false
-      unless valid do
-        let validation ← phase ctx "validate candidate" ctx.setup.config.solverHeartbeats do
-          let mut allValid := true
-          for pending in goals do
-            let answer ← pending.withContext do validate ctx (← pending.getType)
-            if answer == .invalid then return (false, true)
-            if answer != .valid then allValid := false
-          return (allValid, false)
-        if let .ok (checked, invalid) := validation then
-          valid := checked
-          refuted := invalid
-      if refuted || (!valid && !ctx.setup.config.keepCandidates) then
-        trace[flex] "{backend}: candidate {if refuted then "refuted" else "unvalidated"}"
-        continue
-      let candidate := { candidate with validated := valid }
-      retain candidate
-      tidy ctx goal
-      retain candidate
-      -- Inference is finished; the remaining work is an ordinary proof obligation.
-      if candidate.validated && candidate.remainingHeads == some 0 then break
+      if inferred then
+        skip later "skipped_inferred"
+        break
     return false
   let completed ← tryCatchRuntimeEx search fun error => do
     if error.isInterrupt then
@@ -679,6 +733,34 @@ private partial def walk (ctx : Context) (goal : MVarId) (siblings : List MVarId
   cleanup ctx goal siblings
   getUnsolvedGoals
 
+/-- Run a stage on the current frontier; interruption preserves committed progress. -/
+private def runStage (ctx : Context) (name : String) : TacticM Unit := do
+  let start ← IO.monoMsNow
+  let allowance := ctx.deadline.map (· - start)
+  ctx.setup.onPhase {
+    phase := name, status := "start"
+    budgetMs := allowance, deadlineMs := ctx.deadline }
+  let result ← Flex.Timeout.run ctx.deadline do
+    tryCatchRuntimeEx (do
+      let mut outputs := []
+      let mut pending ← getUnsolvedGoals
+      while let goal :: rest := pending do
+        pending := rest
+        outputs := outputs ++ (← walk ctx goal (outputs ++ pending))
+      setGoals outputs) fun error => do
+        restore (← ctx.checkpoint.get)
+        if error.isInterrupt then throw error
+        Core.checkInterrupted
+        trace[flex] "stopped at checkpoint: {error.toMessageData}"
+  if result.isNone then
+    restore (← ctx.checkpoint.get)
+    trace[flex] "time budget exhausted; retained the last checkpoint"
+  ctx.setup.onPhase {
+    phase := name
+    status := if result.isSome then "ok" else "timeout"
+    elapsedMs := (← IO.monoMsNow) - start
+    budgetMs := allowance, deadlineMs := ctx.deadline }
+
 /-- Preserve the latest committed frontier even when a later traversal reaches a limit. -/
 def flexImpl (setup : Setup) : TacticM Unit := focus do
   let timingEnabled ← isTracingEnabledFor `flex.timing
@@ -695,20 +777,34 @@ def flexImpl (setup : Setup) : TacticM Unit := focus do
   let reserve ← if (← getMaxHeartbeats) == 0 then pure 0 else
     pure (min 20000000 ((← getRemainingHeartbeats) / 20))
   let ctx : Context := { setup, deadline, reserve, checkpoint := saved }
-  let result ← Flex.Timeout.run deadline do
-    tryCatchRuntimeEx
-      (discard <| walk ctx parent [])
-      (fun error => do
-        restore (← saved.get)
-        if error.isInterrupt then throw error
-        Core.checkInterrupted
-        trace[flex] "stopped at checkpoint: {error.toMessageData}")
+  if setup.config.chcFirst || setup.config.stageTimeout > 0 then
+    let external := setup.backends.filter (· != .fix)
+    let internal := setup.backends.filter (· == .fix)
+    let se : Setup := { setup with
+      backends := external
+      config := { setup.config with zap := false, nesting := false } }
+    let pa : Setup := { setup with backends := internal }
+    let hasInternal := setup.config.zap || setup.config.nesting || !internal.isEmpty
+    let mut stages := if external.isEmpty then [("stage/zap_fix", pa)]
+      else if !hasInternal then [("stage/se", se)]
+      else if setup.config.chcFirst then [("stage/se", se), ("stage/zap_fix", pa)]
+      else [("stage/zap_fix", pa), ("stage/se", se)]
+    while let (name, stageSetup) :: later := stages do
+      stages := later
+      if (← getUnsolvedGoals).isEmpty then break
+      let now ← IO.monoMsNow
+      let share := deadline.map fun endTime => (endTime - now) / (1 + later.length)
+      let allowance := if setup.config.stageTimeout == 0 then share else
+        some (share.map (min (setup.config.stageTimeout * 1000)) |>.getD
+          (setup.config.stageTimeout * 1000))
+      runStage { ctx with setup := stageSetup, deadline := allowance.map (now + ·) } name
+  else
+    runStage ctx "search"
+  -- Bundling is optional; keep the same frontier if its remaining budget expires.
+  let bundled ← Flex.Timeout.run deadline do
     discard <| phase ctx "bundle residual" setup.config.zapHeartbeats do
       setGoals (← Flex.Residual.bundle parent (← getUnsolvedGoals))
-  if result.isNone then
-    restore (← saved.get)
-    setup.onPhase { phase := "search", status := "timeout" }
-    trace[flex] "time budget exhausted; retained the last checkpoint"
+  if bundled.isNone then restore (← saved.get)
   for event in ← events.get do
     if event.status != "start" then
       trace[flex.timing] "{event.phase}: {event.status}, {event.elapsedMs} ms"

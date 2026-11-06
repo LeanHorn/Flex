@@ -108,7 +108,8 @@ def prepareGoal (goal : MVarId) (maxClauses : Nat := 1024)
 Failures restore entry state; interrupts propagate. The tactic goal list is unchanged.
 
 Signatures and constraints must be closed except for peeled predicate slots.
-`maxClauses` bounds guard expansion; `config.timeoutMs` bounds only the solver.
+`maxClauses` bounds guard expansion. Each solver call is capped by `timeoutMs`
+and the remaining `deadlineMs`, including retries.
 With `headsOnly`, certify κ-heads and leave one VC with its original structure.
 `onCandidate` inspects a temporarily instantiated body before certification.
 `retryInconclusiveCandidates` prefers an alternate model when that check is unknown.
@@ -138,11 +139,13 @@ def solveGoal (goal : MVarId) (config : Config := {})
         exportConstraints prepared.kvars body
       size.set (problem.relations.size, problem.clauseCount)
       let solve (problem : ExportedProblem) (config : Config) := do
+        Core.checkInterrupted
         onEvent (.exported problem)
         measure phase timings onPhase .solver do
-          let result ← run problem config
+          let some (callConfig, result) ← runScript? problem.toSMTLib config
+            | throwError "CHC backend deadline expired before starting a solver call"
           transcript.set (some result)
-          onEvent (.solverReturned config result)
+          onEvent (.solverReturned callConfig result)
           Core.checkInterrupted
           return result
       let importModel (problem : ExportedProblem) (solver : SolverResult)

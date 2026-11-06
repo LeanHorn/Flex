@@ -224,6 +224,85 @@ private def waitForCancellation : TacticM Unit := do
 
 elab "wait_for_flex_timeout" : tactic => waitForCancellation
 
+-- An expired S/E stage leaves its unassigned predicates available to Zap and Fix.
+example : ∃ loop seed : Int → Prop,
+    seed 0 ∧ (∀ i, seed i → loop i) ∧
+    (∀ i, loop i → loop (i + 1)) ∧ (∀ i, loop i → 0 ≤ i) := by
+  run_tac do
+    let events ← IO.mkRef (#[] : Array Flex.Portfolio.PhaseEvent)
+    Flex.Portfolio.flexImpl {
+      config := { chcFirst := true, stageTimeout := 1, totalTimeout := 5 }
+      backends := [.spacer, .fix]
+      onPhase := fun e => do
+        events.modify (·.push e)
+        if e.phase == "spacer" && e.status == "start" then IO.sleep 1200 }
+    let events ← events.get
+    unless events.any (fun e => e.phase == "stage/se" && e.status == "timeout") &&
+        events.any (fun e => e.phase == "zap" && e.status == "ok") &&
+        events.any (fun e => e.phase == "fix" && e.status == "ok") do
+      throwError "S/E timeout did not continue through Zap and Fix"
+
+-- An accepted S/E invariant survives a timeout during certification.
+set_option flex.automation.proofHeartbeats 0 in
+example : ∃ k : Int → Prop,
+    k 0 ∧ (∀ i, k i → k (i + 1)) ∧ (∀ i, k i → 0 ≤ i) := by
+  run_tac do
+    let events ← IO.mkRef (#[] : Array Flex.Portfolio.PhaseEvent)
+    Flex.Portfolio.flexImpl {
+      config := { chcFirst := true, stageTimeout := 1, totalTimeout := 3, closeLeaves := false }
+      backends := [.spacer, .fix]
+      onPhase := fun e => do
+        events.modify (·.push e)
+        if e.phase == "spacer/certificate" && e.status == "start" then
+          while !(← IO.checkCanceled) do IO.sleep 1 }
+    FlexTests.expectPredicates 0
+    if (← events.get).any (fun e => e.phase == "zap" || e.phase == "fix") then
+      throwError "accepted S/E invariant was resynthesized"
+  all_goals (and_intros <;> intros <;> omega)
+
+-- Expiring Fix cannot consume S/E's block or change a caller's sibling goal.
+example (p : Prop) (hp : p) :
+    (∃ loop seed : Int → Prop,
+      seed 0 ∧ (∀ i, seed i → loop i) ∧
+      (∀ i, loop i → loop (i + 1)) ∧ (∀ i, loop i → 0 ≤ i)) ∧ p := by
+  constructor
+  · run_tac do
+      let events ← IO.mkRef (#[] : Array Flex.Portfolio.PhaseEvent)
+      Flex.Portfolio.flexImpl {
+        config := { stageTimeout := 2, totalTimeout := 6 }
+        backends := [.fix, .spacer]
+        onPhase := fun e => do
+          events.modify (·.push e)
+          if e.phase == "fix" && e.status == "start" then
+            while !(← IO.checkCanceled) do IO.sleep 1 }
+      let events ← events.get
+      unless events.any (fun e => (e.phase == "stage/zap_fix" || e.phase == "attempt/fix") &&
+          e.status == "timeout") &&
+          events.any (fun e => e.phase == "attempt/spacer" && e.status == "start" &&
+            e.budgetMs.any (· > 0)) &&
+          events.any (fun e => e.phase == "spacer" && e.status == "ok") do
+        throwError "Fix timeout did not preserve S/E's block"
+  · exact hp
+
+-- Spacer's complete attempt must leave time for Eldarica.
+example : ∃ k : Int → Prop,
+    k 0 ∧ (∀ i, k i → k (i + 1)) ∧ (∀ i, k i → 0 ≤ i) := by
+  run_tac do
+    let events ← IO.mkRef (#[] : Array Flex.Portfolio.PhaseEvent)
+    Flex.Portfolio.flexImpl {
+      config := { zap := false, totalTimeout := 6 }
+      backends := [.spacer, .eldarica]
+      onPhase := fun e => do
+        events.modify (·.push e)
+        if e.phase == "spacer" && e.status == "start" then
+          while !(← IO.checkCanceled) do IO.sleep 1 }
+    let events ← events.get
+    unless events.any (fun e => e.phase == "attempt/spacer" && e.status == "timeout") &&
+        events.any (fun e => e.phase == "attempt/eldarica" && e.status == "start" &&
+          e.budgetMs.any (· > 0)) &&
+        events.any (fun e => e.phase == "eldarica" && e.status == "ok") do
+      throwError "Spacer consumed Eldarica's allocation"
+
 example : True := by
   run_tac do
     let events ← IO.mkRef (#[] : Array Flex.Portfolio.PhaseEvent)

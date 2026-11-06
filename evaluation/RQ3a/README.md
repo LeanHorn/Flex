@@ -23,22 +23,33 @@ positive-test directory membership is not a SAT guarantee. No outcome filtering.
 | --- | --- | ---: |
 | `zap_fix` | Zap → Fix → discharge | 180 s |
 | `se` | Spacer → Eldarica if needed → discharge | 180 s |
-| `flex` | Zap → Fix → Spacer/Eldarica → discharge | 360 s |
+| `flex` | Zap → Fix → Spacer/Eldarica → discharge | 360 s: two 180 s blocks |
 
 All use the same checked discharge, True/False preprocessing, no nesting, and no
-postprocessing. Fix escalates Bank → Basic → Standard → Deep. Synthesis, import,
-certification and discharge share the internal deadline; there are no reserved
-phase slices. Spacer can consume the budget before Eldarica gets a turn.
+postprocessing. Fix escalates Bank → Basic → Standard → Deep. The combined arm
+reserves one 180 s block for Zap + Fix and one for S/E, cancelling each at its own
+deadline. `se_zap_fix` uses the same blocks in the opposite order.
+Within the S/E block, remaining time is shared among untried backends. The entire
+attempt—export, solver retries, import, validation, certification and closing—uses
+that allocation. Unused backend time passes forward; accepted progress is retained.
 
-Other limits: 180 s per external solver call capped by remaining internal time;
+Other limits: 90 s per external solver call, recomputed against its backend
+deadline immediately before each call, including retries;
 4,000,000 phase heartbeats; 40,000 proof-automation heartbeats; recursion limit
 16,384. The outer process watchdog is internal budget + 120 s (300/480 s), allowing
 source elaboration and kernel checking, followed by bounded solver cleanup. Fix's
-own synthesis cap is set to the pipeline budget. Internal timeout retains checked
-progress; a killed process has no certified outcome unless its record proves one.
+own synthesis cap is set to the pipeline budget; the enclosing block deadline
+provides the tighter limit. Cancellation is cooperative, so actual time can exceed
+an internal deadline. The watchdog remains separate. A killed process has no
+certified outcome unless its record proves one.
+
+New runs record `timeout_policy: reserved_blocks_v1`. Earlier runs used a shared
+deadline and a 180 s solver cap; their recorded settings remain unchanged and
+must not be pooled with the new policy as a uniform timing experiment.
 
 The combined arm gets twice the budget: compare its coverage with that extra time
-explicit. It has not yet been measured across the full corpus.
+explicit. Custom combined budgets must accommodate both standalone blocks:
+`--combined-timeout` must be at least twice `--flex-timeout`.
 
 ## First setup
 
@@ -135,7 +146,7 @@ touch ../Flex/evaluation/results/RQ3a/rq3a-server/STOP
 
 `--prepare-only` freezes the build/selection without running trials. Resume with
 the same settings and `--resume`; completed trials are reused. Start a new output
-folder after code/settings changes. Reports refresh every 25 completions and at
+folder after code/settings changes. Reports refresh periodically and at
 finish; progress reads the latest records directly.
 
 ## Measurements and interpretation
@@ -162,6 +173,7 @@ it never precomputes a residual. Only `propext`, `Classical.choice`, and
 | `wall_ms` | Whole query process: Lean startup, elaboration, tactic, formatting and independent kernel check |
 | `startup_ms` | Process launch to the first harness event |
 | Phase times | Zap, Fix, solver calls, discharge, kernel checking; nested phases must not be summed together |
+| Backend scheduling | Attempted/skipped backends, skip reasons, completed calls/retries, and actual allocated deadlines |
 | Heartbeats | Tactic/total/phase effort, in Lean's displayed units; external solver work is not counted |
 | Predicate counts | Original, remaining, eliminated; retained heads and full-proof milestones |
 | Proof metrics | Expression nodes, distinct constants, approximate depth and kernel-check time |

@@ -1,7 +1,9 @@
 """Generate RQ3b reports with the shared coverage and timing definitions."""
 from pathlib import Path
-import runpy
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'RQ3a'))
+from report import main
 
 if __name__ == '__main__':
-    runpy.run_path(str(Path(__file__).resolve().parents[1] / 'RQ3a' / 'report.py'),
-                  run_name='__main__')
+    main(default_figures=False)

@@ -10,15 +10,35 @@ from pathlib import Path
 import statistics
 import itertools
 import math
+import tempfile
 
 LABELS={'zap_fix':'Zap + Fix', 'se':'S/E only', 'flex':'Full Flex',
+        'se_zap_fix':'S/E → Zap + Fix',
         'native_spacer':'Spacer (SMT)', 'native_eldarica':'Eldarica (SMT)'}
 
 
+def read_jsonl(path):
+    return [json.loads(l) for l in path.read_text().splitlines(keepends=True)
+            if l.endswith('\n') and l.strip()] if path.exists() else []
+
+
 def read(output):
-    p=output/'results.jsonl'
-    return [json.loads(l) for l in p.read_text().splitlines(keepends=True)
-            if l.endswith('\n') and l.strip()] if p.exists() else []
+    return read_jsonl(output/'results.jsonl')
+
+
+def phase_events(record, output):
+    if 'phase_events' in record:
+        return record['phase_events']
+    # Older runs stored absolute paths. Prefer artifacts inside a copied result folder.
+    local = output/'runs'/record['study']/'cases'/record['configuration']/record['case'].removesuffix('.lean')
+    candidates = [local, output/record.get('artifacts', '')]
+    if record.get('record_source'):
+        candidates.insert(1, Path(record['record_source']).parent/'runs'/record['study']/
+                          'cases'/record['configuration']/record['case'].removesuffix('.lean'))
+    for directory in candidates:
+        path = directory/'phases.jsonl'
+        if path.is_file(): return read_jsonl(path)
+    return []
 
 
 def budget_caption(settings):
@@ -27,6 +47,31 @@ def budget_caption(settings):
     internal = (f'{single} s internal Flex budget' if single == combined else
                 f'{single} s Zap + Fix / S/E only; {combined} s combined')
     return f'{internal} · {settings["solver_timeout"]} s per S/E call · {settings.get("workers", 1)} worker(s)'
+
+
+def stage_budget(config, settings):
+    configured=settings.get('configuration_budgets',{}).get(config,{})
+    if 'stage_timeout' in configured:
+        return configured['stage_timeout'] or None
+    # Earlier S/E-first runs had a block cap; the original internal-first arm did not.
+    return settings['flex_timeout'] if config=='se_zap_fix' else None
+
+
+def backend_usage(phases, events):
+    usage={}
+    for backend in ['fix','spacer','eldarica']:
+        rows=[e for e in phases if e['phase']=='attempt/'+backend]
+        starts=[e for e in rows if e['status']=='start']
+        calls=[e for e in events if e['stage']=='chc/solver' and e.get('solver_backend')==backend]
+        usage[backend+'_attempts']=len(starts)
+        skipped=[e['status'] for e in rows if e['status'].startswith('skipped_')]
+        usage[backend+'_skipped']=len(skipped)
+        usage[backend+'_skip_reasons']=';'.join(sorted(set(skipped)))
+        if backend!='fix':
+            usage[backend+'_calls_completed']=len(calls)
+            counts=Counter(e['backend_attempt'] for e in calls if 'backend_attempt' in e)
+            usage[backend+'_retries_completed']=sum(max(0,count-1) for count in counts.values())
+    return usage
 
 
 def distribution(values):
@@ -43,7 +88,7 @@ def distribution(values):
             'max': values[-1]}
 
 
-def row(record, cases, classes):
+def row(record, cases, classes, phases):
     key=(record['study'],record['case']); case=cases[key]
     terminal=next((e for e in reversed(record.get('events',[])) if e['stage']=='result'),{})
     checked=terminal.get('kernel_checked') is True and record['status'] in {'proved','partial'}
@@ -60,21 +105,22 @@ def row(record, cases, classes):
     category=('proved' if proved else 'heads_eliminated' if all_heads else
               'instantiated' if all_inst else 'some_predicates' if removed else
               'preparation_failed' if record['status']=='preparation_failed' else 'no_certified_progress')
-    phases=[]
-    path=Path(record.get('artifacts',''))/'phases.jsonl'
-    if path.is_file():
-        phases=[json.loads(l) for l in path.read_text().splitlines()]
     starts=defaultdict(list); durations=defaultdict(float); beats=defaultdict(float)
+    completed=Counter()
     for e in phases:
         if e['status']=='start':
             starts[e['phase']].append(e)
         elif starts[e['phase']]:
             start=starts[e['phase']].pop()
+            completed[e['phase']]+=1
             durations[e['phase']]+=e.get('elapsed_ms',0)
             beats[e['phase']]+=(e.get('heartbeats_raw',0)-start.get('heartbeats_raw',0))/1000
     base={'study':record['study'],'case':record['case'],'suite':case['suite'],
           'configuration':record['configuration'],'status':record['status'],'category':category,
           'structure':classes.get(key,{}).get('kind','unclassified'),'input_bytes':case['bytes'],
+          'family':case.get('family'), 'track':case.get('track'),
+          'source_sha256':case.get('source_sha256'), 'generated_sha256':case.get('generated_sha256'),
+          **{f'classified_{k}':classes.get(key,{}).get(k) for k in ['acyclic','cyclic','eliminable','cut']},
           'model_obtained_attempt':model,'imported_attempt':imported,'kernel_checked':checked,
           'all_predicates_instantiated':all_inst,'all_heads_eliminated':all_heads,'fully_proved':proved,
           'original_predicates':before,'remaining_predicates':after,'instantiated_count':removed,
@@ -85,46 +131,58 @@ def row(record, cases, classes):
           'peak_recursion_depth':terminal.get('peak_recursion_depth'),
           'native_ms':record.get('elapsed_ms'),
           'native_model_obtained':record.get('model_obtained',False),'error':record.get('error',''),
-          **terminal.get('proof_metrics',{})}
+          'artifacts':record.get('artifacts'),
+          **{k:terminal.get('proof_metrics',{}).get(k) for k in
+             ['kernel_ns','proof_nodes','proof_depth','proof_constants']}}
     if record['status']=='preparation_failed':base['wall_ms']=None
     base['predicate_progress'] = category in {'proved','heads_eliminated','instantiated','some_predicates'}
     base['genuine_partial_progress'] = base['predicate_progress'] and not proved
     base['solver_calls'] = sum(e['stage']=='chc/solver' for e in events)
     base['record_source'] = record.get('record_source')
-    base['solver_ms']=sum(v for k,v in durations.items() if k.endswith('/solver'))
-    base['fix_ms']=durations.get('fix',0)
-    base['zap_ms']=durations.get('zap',0)
-    base['discharge_ms']=durations.get('discharge',0)
-    base['kernel_ms']=durations.get('verify/kernel',0)
-    if not phases:
-        for key in ['solver_ms','fix_ms','zap_ms','discharge_ms','kernel_ms']:base[key]=None
+    for metric, match in [('solver',lambda k:k.endswith('/solver')),
+                          ('fix',lambda k:k=='fix'), ('zap',lambda k:k=='zap'),
+                          ('discharge',lambda k:k=='discharge'), ('kernel',lambda k:k=='verify/kernel')]:
+        base[metric+'_ms']=(sum(v for k,v in durations.items() if match(k))
+            if phases and not any(v for k,v in starts.items() if match(k)) else None)
+    base['internal_timeout']=any(e['status']=='timeout' for e in phases)
+    base['phase_log_complete']=bool(phases) and not any(starts.values())
+    base['last_event_stage']=events[-1]['stage'] if events else None
+    base['solver_timeouts']=sum(e['stage']=='chc/solver' and e['status']=='timeout' for e in events)
     base['tactic_time_measured'] = base['flex_ms'] is not None
     base['external_timeout'] = record['status'] in {'case_timeout','process_timeout'}
     return base,[{'study':base['study'],'case':base['case'],'configuration':base['configuration'],
-                  'phase':k,'ms':v,'heartbeats':beats[k]} for k,v in durations.items()]
+                  'phase':k,'ms':durations[k] if not starts[k] else None,
+                  'completed_ms':durations[k], 'completed_calls':completed[k],
+                  'unfinished_calls':len(starts[k]),
+                  'heartbeats':beats[k] if not starts[k] else None}
+                 for k in sorted(durations.keys() | starts.keys())]
 
 
-def write_csv(path,rows):
-    fields=list(dict.fromkeys(k for r in rows for k in r))
-    temporary=path.with_suffix('.tmp')
-    with temporary.open('w',newline='') as f:
+def write_csv(path,rows,fields=()):
+    fields=list(dict.fromkeys([*fields, *(k for r in rows for k in r)]))
+    with tempfile.NamedTemporaryFile(mode='w',newline='',dir=path.parent,
+                                     prefix=path.name+'.',suffix='.tmp',delete=False) as f:
+        temporary=Path(f.name)
         writer=csv.DictWriter(f,fieldnames=fields)
         writer.writeheader();writer.writerows(rows)
     temporary.replace(path)
 
 
 def detailed_statistics(output, rows):
-    metrics = ['flex_ms','wall_ms','startup_ms','zap_ms','fix_ms','solver_ms',
+    metrics = ['flex_ms','wall_ms','startup_ms','native_ms','zap_ms','fix_ms','solver_ms',
                'discharge_ms','kernel_ms','tactic_heartbeats','total_heartbeats',
-               'proof_nodes','proof_depth','solver_calls']
+               'proof_nodes','proof_depth','proof_constants','kernel_ns','solver_calls']
     stats, comparisons = [], []
     for study, config in sorted({(r['study'],r['configuration']) for r in rows}):
         group = [r for r in rows if (r['study'],r['configuration'])==(study,config)]
         for suite in ['ALL'] + sorted({r['suite'] for r in group}):
             selected = [r for r in group if suite=='ALL' or r['suite']==suite]
-            for population in ['all_measured','proved','not_proved']:
+            populations=(['all_measured','model_returned','no_model'] if config.startswith('native_')
+                         else ['all_measured','proved','not_proved'])
+            for population in populations:
+                field='native_model_obtained' if config.startswith('native_') else 'fully_proved'
                 subset = [r for r in selected if population=='all_measured' or
-                          r['fully_proved']==(population=='proved')]
+                          r[field]==(population in {'proved','model_returned'})]
                 for metric in metrics:
                     stats.append({'study':study,'configuration':config,'suite':suite,
                                   'population':population,'metric':metric,
@@ -151,8 +209,38 @@ def detailed_statistics(output, rows):
                     **{f'second_{k}':v for k,v in distribution([y for x,y in pairs]).items()},
                     'ratio_pairs':len(ratios),
                     'median_first_over_second':statistics.median(ratios) if ratios else None})
-    write_csv(output/'statistics.csv',stats)
-    write_csv(output/'comparisons.csv',comparisons)
+    write_csv(output/'statistics.csv',stats,['study','configuration','suite','population','metric','n'])
+    write_csv(output/'comparisons.csv',comparisons,['study','first','second','completed_pairs'])
+
+
+def flatten_event(event, prefix=''):
+    fields={}
+    for key,value in event.items():
+        name=prefix+key
+        if isinstance(value,dict): fields.update(flatten_event(value,name+'_'))
+        else: fields[name]=json.dumps(value) if isinstance(value,list) else value
+    return fields
+
+
+def coverage_table(rows, selected):
+    result=[]
+    milestones=['all_predicates_instantiated','all_heads_eliminated','fully_proved',
+                'genuine_partial_progress','predicate_progress','native_model_obtained']
+    for study,cases in selected.items():
+        for config in sorted({r['configuration'] for r in rows if r['study']==study}):
+            for suite in ['ALL']+sorted({c['suite'] for c in cases}):
+                total=sum(suite=='ALL' or c['suite']==suite for c in cases)
+                group=[r for r in rows if r['study']==study and r['configuration']==config
+                       and (suite=='ALL' or r['suite']==suite)]
+                item={'study':study,'configuration':config,'suite':suite,
+                      'queries':total,'completed':len(group),'pending':total-len(group),
+                      'outer_timeouts':sum(r['external_timeout'] for r in group)}
+                for metric in milestones:
+                    count=sum(bool(r[metric]) for r in group)
+                    item[metric]=count
+                    item[metric+'_percent']=100*count/total if total else None
+                result.append(item)
+    return result
 
 
 def tables(output):
@@ -160,11 +248,37 @@ def tables(output):
     cases={(s,c['case']):c for s,cs in selection['cases'].items() for c in cs}
     cp=output/'classification.json'
     classes={(r['study'],r['case']):r for r in json.loads(cp.read_text())} if cp.exists() else {}
-    rows=[];phases=[]
+    settings=json.loads((output/'settings.json').read_text())
+    rows=[];phases=[];events=[];phase_rows=[]
     for record in read(output):
-        r,p=row(record,cases,classes);rows.append(r);phases+=p
-    write_csv(output/'results.csv',rows);write_csv(output/'phases.csv',phases)
+        raw_phases=phase_events(record,output)
+        r,p=row(record,cases,classes,raw_phases)
+        native=record['configuration'].startswith('native_')
+        combined=record['configuration'] in {'flex','se_zap_fix'}
+        budget=settings.get('combined_timeout',settings['flex_timeout']) if combined else settings['flex_timeout']
+        r.update(flex_budget_seconds=None if native else budget,
+                 solver_budget_seconds=settings['solver_timeout'],
+                 stage_budget_seconds=stage_budget(record['configuration'],settings),
+                 timeout_policy=settings.get('timeout_policy','legacy_shared_deadline'),
+                 phase_heartbeat_limit=None if native else settings['heartbeats'],
+                 proof_heartbeat_limit=None if native else settings['proof_heartbeats'],
+                 watchdog_seconds=settings['solver_timeout']+30 if native else
+                     settings.get('case_timeout') or budget+120,
+                 workers=settings.get('workers',1))
+        if settings.get('timeout_policy')=='reserved_blocks_v1' and not native:
+            r.update(backend_usage(raw_phases, record.get('events',[])))
+        rows.append(r);phases+=p
+        identity={k:r[k] for k in ['study','case','configuration']}
+        events.extend({**identity,'event_index':i,**flatten_event(e)}
+                      for i,e in enumerate(record.get('events',[])))
+        phase_rows.extend({**identity,'event_index':i,**e} for i,e in enumerate(raw_phases))
+    identity=['study','case','configuration']
+    write_csv(output/'results.csv',rows,identity)
+    write_csv(output/'phases.csv',phases,[*identity,'phase','ms','heartbeats'])
+    write_csv(output/'events.csv',events,[*identity,'event_index','stage','status'])
+    write_csv(output/'phase_events.csv',phase_rows,[*identity,'event_index','phase','status'])
     selected={s:cs for s,cs in selection['cases'].items() if cs}
+    write_csv(output/'coverage.csv',coverage_table(rows,selected),['study','configuration','suite','queries','completed'])
     summary={'selected':{s:len(cs) for s,cs in selected.items()},'completed_runs':len(rows),
              'by_configuration':{},'structure':{s:dict(Counter(classes.get((s,c['case']),{}).get('kind','unclassified') for c in cs)) for s,cs in selected.items()}}
     for study in selected:
@@ -189,6 +303,7 @@ def tables(output):
         if r['configuration'].startswith('native_'):native[r['case']][r['configuration']]=r['status']
     if native:
         summary['native_union']={'paired_completed':sum(len(v)==2 for v in native.values()),
+                                 'either_model_observed':sum(any(s == 'sat' for s in v.values()) for v in native.values()),
                                  'either_sat_observed':sum(any(s in {'sat','sat_no_model'} for s in v.values()) for v in native.values())}
     discrepancy=[]
     for r in rows:
@@ -196,7 +311,7 @@ def tables(output):
             discrepancy.append({**r,'native_spacer':native[r['case']].get('native_spacer'),
                                 'native_eldarica':native[r['case']].get('native_eldarica')})
     if native:
-        write_csv(output/'discrepancies.csv',discrepancy)
+        write_csv(output/'discrepancies.csv',discrepancy,[*identity,'native_spacer','native_eldarica'])
     detailed_statistics(output,rows)
     (output/'summary.json').write_text(json.dumps(summary,indent=2)+'\n')
     return rows,summary
@@ -225,7 +340,7 @@ def figures(output):
                          'axes.spines.top':False,'axes.spines.right':False})
     with PdfPages(output/'report.pdf') as pdf:
         for study in sorted({r['study'] for r in rows}):
-            configs = [c for c in ['zap_fix','se','flex']
+            configs = [c for c in ['zap_fix','se','se_zap_fix','flex']
                        if any(r['study']==study and r['configuration']==c for r in rows)]
             if not configs: continue
             fig, axes = plt.subplots(1,2,figsize=(12,5.3))
@@ -301,7 +416,7 @@ def merge(output, sources):
         selection = json.loads((source/'selection.json').read_text())
         current = json.loads((source/'settings.json').read_text())
         if settings is None:settings=current
-        for k in ['flex_timeout','combined_timeout','solver_timeout','heartbeats','proof_heartbeats']:
+        for k in ['flex_timeout','combined_timeout','solver_timeout','heartbeats','proof_heartbeats','timeout_policy']:
             if settings.get(k)!=current.get(k):raise ValueError(f'incompatible {k} in {source}')
         for study, cases in selection['cases'].items():
             for case in cases:
@@ -328,14 +443,21 @@ def merge(output, sources):
     (output/'results.jsonl').write_text(''.join(json.dumps(r)+'\n' for _,r in sorted(records.items())))
 
 
-if __name__=='__main__':
+def main(default_figures=True):
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('output',type=Path)
     p.add_argument('--progress',action='store_true')
-    p.add_argument('--tables-only',action='store_true')
+    plotting=p.add_mutually_exclusive_group()
+    plotting.add_argument('--tables-only',action='store_true',help='CSV/JSON only')
+    plotting.add_argument('--figures',dest='tables_only',action='store_false',help='also generate PDF plots')
+    p.set_defaults(tables_only=not default_figures)
     p.add_argument('--merge',nargs='+',type=Path,help='source runs in precedence order; latest record wins')
     a=p.parse_args()
     if a.merge:merge(a.output,a.merge)
     if a.progress:progress(a.output)
     elif a.tables_only:tables(a.output)
     else:figures(a.output)
+
+
+if __name__=='__main__':
+    main()

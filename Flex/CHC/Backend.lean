@@ -113,6 +113,8 @@ structure Config where
   backend : Backend := .spacer
   executable : Option String := none
   timeoutMs : Nat := 30000
+  /-- Shared absolute monotonic deadline, including time spent between solver calls. -/
+  deadlineMs : Option Nat := none
   /-- Retry timeout/unknown with equivalent Horn syntax when the caller has time. -/
   retrySearch : Bool := true
   spacerInlining : Bool := false
@@ -146,9 +148,22 @@ def Config.modelFallback? (config : Config) : Option Config :=
       some { config with eldaricaIntervals := false, eldaricaLargeBlockEncoding := false }
     else none
 
+/-- Return the actual call configuration and result, or `none` if its deadline expired. -/
+def runScript? (input : String) (config : Config) : IO (Option (Config × SolverResult)) := do
+  let config ← match config.deadlineMs with
+    | none => pure config
+    | some deadline =>
+      let now ← IO.monoMsNow
+      if now >= deadline then return none
+      pure { config with timeoutMs := min config.timeoutMs (deadline - now) }
+  let result ← Process.run config.toProcessConfig input
+  return some (config, SolverResult.ofProcess result)
+
 /-- Run a script without assigning Lean witnesses or trusting the solver's answer. -/
 def runScript (input : String) (config : Config := {}) : IO SolverResult := do
-  return SolverResult.ofProcess (← Process.run config.toProcessConfig input)
+  match ← runScript? input config with
+  | some (_, result) => return result
+  | none => return SolverResult.ofProcess { completion := .timedOut }
 
 /-- Run the selected solver, retaining its transcript for import and certification. -/
 def run (problem : ExportedProblem) (config : Config := {}) : IO SolverResult :=

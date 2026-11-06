@@ -46,3 +46,10 @@ jobs:
         run: |
           lake --log-level=error lean evaluation/RQ2/RQ2.lean -- --error=hasSorry
           python3 -B evaluation/RQ2/benchmark_rq2.py --help
+      - name: Check RQ3 tooling
+        run: |
+          lake --log-level=error lean evaluation/RQ3a/RQ3.lean -- --error=hasSorry
+          python3 -B evaluation/RQ3a/benchmark.py --help
+          python3 -B evaluation/RQ3b/benchmark.py --help
+          python3 -B evaluation/RQ3b/report.py --help
+          python3 -B evaluation/RQ3a/test_harness.py

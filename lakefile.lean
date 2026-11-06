@@ -27,6 +27,7 @@ require smt2lean from git
 
 @[default_target]
 lean_lib «Flex» where
+  precompileModules := true
 
 input_file chcProcess.cpp where
   path := "native" / "chc_process.cpp"

@@ -46,21 +46,35 @@ private structure Batch where
   omittedAssumptions : Bool
   deriving Inhabited
 
+/-- SMT signature of a free input: a scalar constant, or a first-order uninterpreted function
+over scalars such as Liquid Fixpoint's defunctionalized `apply`. Lean's function space is
+exactly an SMT uninterpreted function, so declaring it keeps `sat` answers conclusive. -/
+private def inputSignature (type : Expr) : MetaM (Array CHC.ValueSort × CHC.ValueSort) :=
+  forallTelescopeReducing type fun parameters result => do
+    let arguments ← parameters.mapM fun parameter => do
+      CHC.Fragment.valueSort (← inferType parameter)
+    return (arguments, ← CHC.Fragment.valueSort result)
+
+private def sortName : CHC.ValueSort → String
+  | .int => "Int" | .bool => "Bool"
+
 private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch := do
   let mut assumptions := #[]
   let mut omittedAssumptions := false
   for declaration in (← getLCtx) do
+    -- Auxiliary declarations (e.g. an `example`'s recursive reference) are not hypotheses.
+    if declaration.isImplementationDetail then continue
     if ← isProp declaration.type then
       try
         let assumption ← zetaReduce (← instantiateMVars declaration.type)
         for id in (collectFVars {} assumption).fvarIds do
-          discard <| CHC.Fragment.valueSort (← inferType (mkFVar id))
+          discard <| inputSignature (← inferType (mkFVar id))
         assumptions := assumptions.push (← CHC.Prepare.atom assumption true)
       catch error =>
         if error.isInterrupt then throw error
         omittedAssumptions := true
     else
-      try discard <| CHC.Fragment.valueSort declaration.type
+      try discard <| inputSignature declaration.type
       catch error =>
         if error.isInterrupt then throw error
         -- A local value of an unsupported type may witness an empty type.
@@ -72,7 +86,7 @@ private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch :=
     for conclusion in conclusions, i in [:conclusions.size] do
       try
         for id in (collectFVars {} conclusion).fvarIds do
-          discard <| CHC.Fragment.valueSort (← inferType (mkFVar id))
+          discard <| inputSignature (← inferType (mkFVar id))
         supported := supported.push (i, conclusion)
       catch error =>
         if error.isInterrupt then throw error
@@ -85,11 +99,11 @@ private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch :=
     let mut names : Std.HashMap FVarId String := {}
     let mut script := s!"(set-option :print-success false)\n(set-option :produce-models false)\n(set-option :produce-proofs false)\n(set-option :produce-unsat-cores false)\n(set-option :timeout {timeoutMs})\n(set-logic ALL)\n"
     for input in inputs, i in [:inputs.size] do
-      let sort ← CHC.Fragment.valueSort (← inferType input)
+      let (arguments, result) ← inputSignature (← inferType input)
       let name := s!"pa_{i}"
       names := names.insert input.fvarId! name
-      let sort := match sort with | .int => "Int" | .bool => "Bool"
-      script := script ++ s!"(declare-const {name} {sort})\n"
+      script := script ++ if arguments.isEmpty then s!"(declare-const {name} {sortName result})\n"
+        else s!"(declare-fun {name} ({" ".intercalate (arguments.map sortName).toList}) {sortName result})\n"
     let symbols := inputs.map fun input => names[input.fvarId!]!
     -- The context and symbol mapping stay fixed for this batch. Commit only
     -- checked translations, so a rejected candidate cannot contaminate the cache.

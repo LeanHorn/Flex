@@ -211,7 +211,9 @@ def trial(case, study, config, args, command, env, header):
     run_args.case_timeout = watchdog
     directory = run_args.output/'cases'/config/case['case'].removesuffix('.lean')
     archive_attempt(directory)
+    directory.mkdir(parents=True, exist_ok=True)
     record = common.run_case(case, config, run_args, command, {**env,
+        'FLEX_SMT_STATS': str(directory/'smt_stats.jsonl'),
         'FLEX_PARITY_ZAP': str(int(zap)), 'FLEX_PARITY_FULL': str(int(fix)),
         'FLEX_PARITY_SE': str(int(se)), 'FLEX_PARITY_SCRAPE': 'auto',
         'RQ3_CHC_FIRST': str(int(config == 'se_zap_fix')),

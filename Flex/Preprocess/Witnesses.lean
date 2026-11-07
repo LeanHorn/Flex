@@ -99,13 +99,15 @@ def compactGoal (goal : MVarId) (kvars : List KVar) : MetaM MVarId := do
   let budget ← if (← getMaxHeartbeats) == 0 then pure 1000000 else
     pure (min 1000000 (← getRemainingHeartbeats))
   if budget == 0 then return goal
-  try
-    withTheReader Core.Context (fun ctx => { ctx with maxHeartbeats := budget }) <|
-      Core.withCurrHeartbeats (compactGoalImpl goal kvars)
-  catch error =>
-    saved.restore
-    if error.isInterrupt then throw error
-    Core.checkInterrupted
-    return goal
+  -- Exhausting the budget raises a runtime exception, which plain `try`/`catch` would not
+  -- catch; it would escape and fail the enclosing pass, discarding earlier cleanup.
+  tryCatchRuntimeEx
+    (withTheReader Core.Context (fun ctx => { ctx with maxHeartbeats := budget }) <|
+      Core.withCurrHeartbeats (compactGoalImpl goal kvars))
+    fun error => do
+      saved.restore
+      if error.isInterrupt then throw error
+      Core.checkInterrupted
+      return goal
 
 end Flex.Preprocess

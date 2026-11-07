@@ -52,6 +52,20 @@ example : ∃ k : Int → Prop, (∀ x, k x → k x) := by
       throwError "postprocessing ran after a no-op Zap"
   exact ⟨fun _ => True, fun _ h => h⟩
 
+-- Witness compaction is bounded: running out of heartbeats leaves the goal unchanged
+-- (keeping earlier True/False cleanup) instead of failing the enclosing pass.
+open Lean Elab Term in
+run_elab do
+  let source ← elabTerm (← `(∀ x : Int, (∃ y : Int, y = x ∧ 0 ≤ y) → 0 ≤ x)) none
+  synthesizeSyntheticMVarsNoPostponing
+  let goal ← mkFreshExprSyntheticOpaqueMVar (← instantiateMVars source)
+  let result ← tryCatchRuntimeEx
+    (some <$> withTheReader Core.Context (fun ctx => { ctx with maxHeartbeats := 200 })
+      (Core.withCurrHeartbeats (Flex.Preprocess.compactGoal goal.mvarId! [])))
+    fun _ => pure none
+  let some next := result | throwError "exhausted witness compaction escaped compactGoal"
+  unless next == goal.mvarId! do throwError "a failed witness compaction changed the goal"
+
 /-- info: flex: fix completed the predicate goal -/
 #guard_msgs in
 example : ∃ k : Int → Prop,

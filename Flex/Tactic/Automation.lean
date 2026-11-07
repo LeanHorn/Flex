@@ -175,6 +175,12 @@ register_option flex.automation.synthTimeout : Nat := {
   descr := "Seconds per SMT synthesis batch; zero disables external synthesis."
 }
 
+register_option flex.automation.nativeFallback : Bool := {
+  defValue := true
+  descr := "Try bounded native proofs for synthesis queries SMT leaves unknown. When false, \
+    unknown queries stay unknown and their candidates are dropped; certification is unaffected."
+}
+
 register_option flex.automation.equations : Bool := {
   defValue := true
   descr := "Use bounded source equations and fold lemmas during candidate validation and proof."
@@ -460,6 +466,7 @@ def synthOracle (checkBudget : TermElabM Unit := pure ()) : PASynthOracle := fun
     | .valid | .invalid => return result
     | .unknown reason =>
       trace[flex.oracle] "SMT synthesis inconclusive: {reason}"
+      unless flex.automation.nativeFallback.get (← getOptions) do return result
       if (← proveWithSourcePredicates target).isSome then return .valid
       let quickLimit := min 500 (flex.automation.proofHeartbeats.get (← getOptions))
       if (← withOptions (·.set `flex.automation.proofHeartbeats quickLimit) <|

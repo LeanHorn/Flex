@@ -79,6 +79,7 @@ automation.
 | `flex.smt.uninterpretedDefs` | `false` | Leave every definition uninterpreted. |
 | `flex.smt.encodeNonlinear` | `false` | Encode products of non-literals and division or modulo by a non-literal. |
 | `flex.smt.encodeQuantifiers` | `false` | Encode lambdas and the quantifiers the solver cannot skolemize (see below). |
+| `flex.automation.nativeFallback` | `true` | Try bounded Lean automation on queries SMT leaves undecided; when off, their candidates are dropped. Certification is unaffected. |
 
 Queries are first flattened into clauses; clause variables are SMT constants, not quantifiers.
 As in Liquid Fixpoint, existentials in premises are passed to the solver, which skolemizes them,

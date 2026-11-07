@@ -92,26 +92,26 @@ private def buildBatch (queries : Array Expr) (timeoutMs : Nat) (config : SMT.Co
     else if decl.value?.isNone then
       dataTypes := dataTypes.push decl.type
   withSharedPrefix queries fun inputs premises conclusions => SMT.EncodeM.run' config do
-    let mut abstracted := incomplete
-    -- A variable of an unencodable, possibly empty type could make every query vacuous.
+    -- The shared part abstracts when anything in it does: a fact with metavariables, a variable
+    -- of an unencodable (possibly empty) type that could make every query vacuous, an omitted
+    -- fact, or an abstraction inside an encoded one.
+    if incomplete then modify fun s => { s with abstracted := true }
     for type in dataTypes ++ (← inputs.mapM fun x => inferType x) do
       try discard <| SMT.encodeSort type
       catch error =>
         if error.isInterrupt then throw error
-        abstracted := true
-    if (← get).abstracted then abstracted := true
+        modify fun s => { s with abstracted := true }
     let mut assertions := #[]
     for fact in facts ++ premises do
       for conjunct in SMT.conjuncts fact do
-        modify fun s => { s with abstracted := false }
         try
           let encoded ← SMT.withPolarity .pos (SMT.encode conjunct)
           assertions := assertions.push s!"(assert {encoded})"
-          if (← get).abstracted then abstracted := true
         catch error =>
           if error.isInterrupt then throw error
           trace[flex.smt] "omitted fact: {error.toMessageData}"
-          abstracted := true
+          modify fun s => { s with abstracted := true }
+    let abstracted := (← get).abstracted
     let mut results := unknowns queries.size "unsupported query"
     let mut blocks := #[]
     let mut indices := #[]

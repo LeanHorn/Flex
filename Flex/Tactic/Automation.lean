@@ -392,6 +392,13 @@ private def proveCompletedPrefix (target : Expr) : TermElabM (Option Expr) := do
       simp (config := { maxSteps := 10000 }) <;> intros <;> grind)) target
       (budgetLeaves := 1)
 
+/-- Native tactics tried, in order, by both `proofOracle` and the `synthOracle` fallback. -/
+private def nativePortfolio : TermElabM (Array (TSyntax `tactic)) := do
+  return #[← `(tactic| omega), ← `(tactic| grind),
+    ← `(tactic| constructor <;> grind),
+    ← `(tactic| (simp (config := { maxSteps := 10000, failIfUnchanged := true })
+      [List.eq_replicate_iff] at *) <;> intros <;> grind)]
+
 /-- Simplify conjunctions, then try reconstructed SMT and the native portfolio.
 Every accepted proof is kernel checked and uses only Lean's standard axioms. -/
 def proofOracle : Flex.CHC.ProofOracle := fun target => do
@@ -424,11 +431,9 @@ def proofOracle : Flex.CHC.ProofOracle := fun target => do
             (run_tac generalizeRecordFields) <;>
             smt (timeout := some $(quote timeout)) (trust := false) [*])) target then
       return some proof
-  for tactic in #[← `(tactic| omega), ← `(tactic| grind),
-      ← `(tactic| (run_tac exposeTarget) <;> intros <;> grind),
-      ← `(tactic| constructor <;> grind),
-      ← `(tactic| (simp (config := { maxSteps := 10000, failIfUnchanged := true })
-        [List.eq_replicate_iff] at *) <;> intros <;> grind)] do
+  let tactics := (← nativePortfolio).insertIdxIfInBounds 2
+    (← `(tactic| (run_tac exposeTarget) <;> intros <;> grind))
+  for tactic in tactics do
     if let some proof ← attempt tactic target then return some proof
   if let some proof ← proveWithEquations target then return some proof
   let needsSearch := fun e : Expr =>
@@ -459,23 +464,21 @@ def synthOracle (checkBudget : TermElabM Unit := pure ()) : PASynthOracle := fun
     {(results.filter (· == .valid)).size} valid, \
     {(results.filter (· == .invalid)).size} invalid, {(← IO.monoMsNow) - start}ms"
   let pending := results.countP fun result => match result with | .unknown _ => true | _ => false
+  unless flex.automation.nativeFallback.get (← getOptions) && pending > 0 do return results
   let start ← IO.monoMsNow
+  let tactics ← nativePortfolio
   let answers ← targets.zipWithM (fun target result => do
     checkBudget
     match result with
     | .valid | .invalid => return result
     | .unknown reason =>
       trace[flex.oracle] "SMT synthesis inconclusive: {reason}"
-      unless flex.automation.nativeFallback.get (← getOptions) do return result
       if (← proveWithSourcePredicates target).isSome then return .valid
       let quickLimit := min 500 (flex.automation.proofHeartbeats.get (← getOptions))
       if (← withOptions (·.set `flex.automation.proofHeartbeats quickLimit) <|
           attempt (← `(tactic| grind only)) target (budgetLeaves := 1)).isSome then
         return .valid
-      for tactic in #[← `(tactic| omega), ← `(tactic| grind),
-          ← `(tactic| constructor <;> grind),
-          ← `(tactic| (simp (config := { maxSteps := 10000, failIfUnchanged := true })
-            [List.eq_replicate_iff] at *) <;> intros <;> grind)] do
+      for tactic in tactics do
         checkBudget
         let proof ← attempt tactic target
         checkBudget

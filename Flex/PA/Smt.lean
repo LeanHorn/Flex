@@ -58,6 +58,27 @@ private def inputSignature (type : Expr) : MetaM (Array CHC.ValueSort × CHC.Val
 private def sortName : CHC.ValueSort → String
   | .int => "Int" | .bool => "Bool"
 
+/-- Declared functions must be applied to exactly their declared arguments. A partial
+application (e.g. `f x : SmtMap Int Int` for `f : Int → SmtMap Int Int`) or a function used
+as a value is not first-order SMT: z3 rejects the command and the batch's exit status. -/
+private partial def fullyApplied (arities : Std.HashMap String Nat) : Smt.Term → Bool
+  | .symbolT name => arities.getD name 0 == 0
+  | .appT f x =>
+    let rec spine : Smt.Term → Nat → Option (String × Nat)
+      | .appT g _, n => spine g (n + 1)
+      | .symbolT name, n => some (name, n)
+      | _, _ => none
+    let rec args : Smt.Term → Array Smt.Term → Array Smt.Term
+      | .appT g y, acc => args g (#[y] ++ acc)
+      | _, acc => acc
+    let headOk := match spine (.appT f x) 0 with
+      | some (name, n) => arities.getD name n == n
+      | none => fullyApplied arities f
+    headOk && (args (.appT f x) #[]).all (fullyApplied arities)
+  | .forallT _ _ body | .existsT _ _ body => fullyApplied arities body
+  | .letT _ value body => fullyApplied arities value && fullyApplied arities body
+  | _ => true
+
 private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch := do
   let mut assumptions := #[]
   let mut omittedAssumptions := false
@@ -97,11 +118,13 @@ private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch :=
         let input := mkFVar id
         unless inputs.contains input do inputs := inputs.push input
     let mut names : Std.HashMap FVarId String := {}
+    let mut arities : Std.HashMap String Nat := {}
     let mut script := s!"(set-option :print-success false)\n(set-option :produce-models false)\n(set-option :produce-proofs false)\n(set-option :produce-unsat-cores false)\n(set-option :timeout {timeoutMs})\n(set-logic ALL)\n"
     for input in inputs, i in [:inputs.size] do
       let (arguments, result) ← inputSignature (← inferType input)
       let name := s!"pa_{i}"
       names := names.insert input.fvarId! name
+      arities := arities.insert name arguments.size
       script := script ++ if arguments.isEmpty then s!"(declare-const {name} {sortName result})\n"
         else s!"(declare-fun {name} ({" ".intercalate (arguments.map sortName).toList}) {sortName result})\n"
     let symbols := inputs.map fun input => names[input.fvarId!]!
@@ -118,6 +141,8 @@ private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch :=
       unless constants.isEmpty && freeVariables.toArray.all names.contains do
         throwError "PA SMT: unsupported constant or free-input dependencies"
       CHC.Fragment.checkTerm term symbols true
+      unless fullyApplied arities term do
+        throwError "PA SMT: partially applied or function-valued input"
       translation.set next
       terms.modify (·.insert input term)
       return term

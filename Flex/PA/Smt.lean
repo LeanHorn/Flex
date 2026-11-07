@@ -2,6 +2,7 @@ import Flex.PA.Check
 import Flex.CHC.Export
 import Flex.PA.Observation
 import Flex.CHC.Process
+import Flex.PA.Datatype
 import Smt
 import Mathlib.Tactic.Simproc.ExistsAndEq
 
@@ -34,7 +35,7 @@ where
       withLocalDecl name bi domain fun proof =>
         go (queries.map (·.bindingBody!.instantiate1 proof)) inputs (premises.push domain)
     else
-      if scalars then discard <| CHC.Fragment.valueSort domain
+      if scalars then discard <| Datatype.sortOf domain
       let domain ← if scalars then pure domain else whnf domain
       withLocalDecl name bi domain fun input =>
         go (queries.map (·.bindingBody!.instantiate1 input)) (inputs.push input) premises
@@ -44,19 +45,18 @@ private structure Batch where
   indices : Array Nat
   results : Array PASynthResult
   omittedAssumptions : Bool
+  /-- Per query: the script uses an uninterpreted function, so `sat` is inconclusive. -/
+  abstracted : Std.HashSet Nat := {}
   deriving Inhabited
 
 /-- SMT signature of a free input: a scalar constant, or a first-order uninterpreted function
 over scalars such as Liquid Fixpoint's defunctionalized `apply`. Lean's function space is
 exactly an SMT uninterpreted function, so declaring it keeps `sat` answers conclusive. -/
-private def inputSignature (type : Expr) : MetaM (Array CHC.ValueSort × CHC.ValueSort) :=
+private def inputSignature (type : Expr) : MetaM (Array String × String) :=
   forallTelescopeReducing type fun parameters result => do
     let arguments ← parameters.mapM fun parameter => do
-      CHC.Fragment.valueSort (← inferType parameter)
-    return (arguments, ← CHC.Fragment.valueSort result)
-
-private def sortName : CHC.ValueSort → String
-  | .int => "Int" | .bool => "Bool"
+      Datatype.sortOf (← inferType parameter)
+    return (arguments, ← Datatype.sortOf result)
 
 /-- Declared functions must be applied to exactly their declared arguments. A partial
 application (e.g. `f x : SmtMap Int Int` for `f : Int → SmtMap Int Int`) or a function used
@@ -79,7 +79,8 @@ private partial def fullyApplied (arities : Std.HashMap String Nat) : Smt.Term �
   | .letT _ value body => fullyApplied arities value && fullyApplied arities body
   | _ => true
 
-private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch := do
+private def buildBatch (registry : IO.Ref Datatype.Registry) (queries : Array Expr)
+    (timeoutMs : Nat) : MetaM Batch := do
   let mut assumptions := #[]
   let mut omittedAssumptions := false
   for declaration in (← getLCtx) do
@@ -119,14 +120,15 @@ private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch :=
         unless inputs.contains input do inputs := inputs.push input
     let mut names : Std.HashMap FVarId String := {}
     let mut arities : Std.HashMap String Nat := {}
-    let mut script := s!"(set-option :print-success false)\n(set-option :produce-models false)\n(set-option :produce-proofs false)\n(set-option :produce-unsat-cores false)\n(set-option :timeout {timeoutMs})\n(set-logic ALL)\n"
+    let header := s!"(set-option :print-success false)\n(set-option :produce-models false)\n(set-option :produce-proofs false)\n(set-option :produce-unsat-cores false)\n(set-option :timeout {timeoutMs})\n(set-logic ALL)\n"
+    let mut declarations := ""
     for input in inputs, i in [:inputs.size] do
       let (arguments, result) ← inputSignature (← inferType input)
       let name := s!"pa_{i}"
       names := names.insert input.fvarId! name
       arities := arities.insert name arguments.size
-      script := script ++ if arguments.isEmpty then s!"(declare-const {name} {sortName result})\n"
-        else s!"(declare-fun {name} ({" ".intercalate (arguments.map sortName).toList}) {sortName result})\n"
+      declarations := declarations ++ if arguments.isEmpty then s!"(declare-const {name} {result})\n"
+        else s!"(declare-fun {name} ({" ".intercalate arguments.toList}) {result})\n"
     let symbols := inputs.map fun input => names[input.fvarId!]!
     -- The context and symbol mapping stay fixed for this batch. Commit only
     -- checked translations, so a rejected candidate cannot contaminate the cache.
@@ -140,29 +142,44 @@ private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch :=
         (Smt.Translator.translateExpr expression).run (← translation.get)
       unless constants.isEmpty && freeVariables.toArray.all names.contains do
         throwError "PA SMT: unsupported constant or free-input dependencies"
-      CHC.Fragment.checkTerm term symbols true
+      let registered ← registry.get
+      let extra := registered.symbols
+      CHC.Fragment.checkTerm term (symbols ++ extra.map (·.1)) true registered.sorts
+      let arities := extra.foldl (fun m (name, arity) => m.insert name arity) arities
       unless fullyApplied arities term do
         throwError "PA SMT: partially applied or function-valued input"
       translation.set next
       terms.modify (·.insert input term)
       return term
+    let mut script := ""
+    let mut sharedAbstraction := false
     for premise in premises do
-      script := script ++ s!"(assert {← translate premise})\n"
+      let term ← translate premise
+      sharedAbstraction := sharedAbstraction || Datatype.usesFunctions term
+      script := script ++ s!"(assert {term})\n"
     for assumption in assumptions do
-      try script := script ++ s!"(assert {← translate assumption})\n"
+      try
+        let term ← translate assumption
+        sharedAbstraction := sharedAbstraction || Datatype.usesFunctions term
+        script := script ++ s!"(assert {term})\n"
       catch error =>
         if error.isInterrupt then throw error
         omittedAssumptions := true
     let mut indices := #[]
+    let mut abstracted : Std.HashSet Nat := {}
     for (i, conclusion) in supported do
       try
         let term ← translate conclusion
         script := script ++ s!"(push 1)\n(assert (not {term}))\n(check-sat)\n(pop 1)\n"
         indices := indices.push i
+        if sharedAbstraction || Datatype.usesFunctions term then abstracted := abstracted.insert i
       catch error =>
         if error.isInterrupt then throw error
         results := results.set! i (.unknown (← error.toMessageData.toString))
-    return { script := script ++ "(exit)\n", indices, results, omittedAssumptions }
+    let registered ← registry.get
+    let full := header ++ registered.datatypeCommands ++ declarations ++
+      registered.functionCommands ++ script ++ "(exit)\n"
+    return { script := full, indices, results, omittedAssumptions, abstracted }
 
 /-- Reject extra, missing, or malformed responses rather than guessing their query positions. -/
 private def parseResponses (output : String) (count : Nat) : Except String (Array PASynthResult) := do
@@ -207,7 +224,8 @@ def smtOracle (timeoutMs : Nat := 2000) : PASynthOracle := fun queries => do
       let queries ← queries.mapM fun query => do zetaReduce (← instantiateMVars query)
       if queries.any (fun q => q.hasMVar || q.hasLooseBVars) then
         return unknowns queries.size "unresolved metavariable or loose binder"
-      let batch ← CHC.Fragment.withTranslators (buildBatch queries timeoutMs) true
+      let batch ← CHC.Fragment.withTranslators (allowQuantifiers := true) <|
+        Datatype.withRegistry fun registry => buildBatch registry queries timeoutMs
       if batch.indices.isEmpty then return batch.results
       Core.checkInterrupted
       let response ← CHC.Process.run {
@@ -219,8 +237,11 @@ def smtOracle (timeoutMs : Nat := 2000) : PASynthOracle := fun queries => do
       | .ok answers =>
         for i in [:batch.indices.size] do
           let answer := match answers[i]! with
-            | .invalid => if batch.omittedAssumptions then
-                .unknown "SMT omitted unsupported local assumptions" else .invalid
+            | .invalid =>
+              if batch.omittedAssumptions then .unknown "SMT omitted unsupported local assumptions"
+              else if batch.abstracted.contains batch.indices[i]! then
+                .unknown "SMT abstracted uninterpreted functions"
+              else .invalid
             | answer => answer
           results := results.set! batch.indices[i]! answer
       | .error reason =>

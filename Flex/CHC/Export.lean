@@ -124,7 +124,7 @@ private def positiveNumeral : Smt.Term → Bool
 
 /-- Check supported operators and arities; the native parser subsequently checks sorts. -/
 partial def checkTerm (term : Smt.Term) (symbols : Array String)
-    (allowQuantifiers : Bool := false) : MetaM Unit := do
+    (allowQuantifiers : Bool := false) (sorts : Array String := #[]) : MetaM Unit := do
   match term with
   | .literalT _ =>
     unless numeral term do throwError "CHC export: unsupported SMT literal {term}"
@@ -134,9 +134,15 @@ partial def checkTerm (term : Smt.Term) (symbols : Array String)
   | .forallT name sort body | .existsT name sort body =>
     if !allowQuantifiers then
       if let .existsT .. := term then throwError "CHC export: existential SMT terms are unsupported"
-    unless (toString sort == "Int" || toString sort == "Bool") && !symbols.contains name do
+    unless (toString sort == "Int" || toString sort == "Bool" || sorts.contains (toString sort))
+        && !symbols.contains name do
       throwError "CHC export: invalid or shadowed SMT binder '{name}'"
-    checkTerm body (symbols.push name) allowQuantifiers
+    checkTerm body (symbols.push name) allowQuantifiers sorts
+  | .letT name value body =>
+    unless allowQuantifiers do throwError "CHC export: SMT let bindings are unsupported"
+    if symbols.contains name then throwError "CHC export: shadowed SMT let binder '{name}'"
+    checkTerm value symbols allowQuantifiers sorts
+    checkTerm body (symbols.push name) allowQuantifiers sorts
   | .appT .. =>
     let (head, args) := application term
     let .symbolT name := head | throwError "CHC export: higher-order SMT application"
@@ -151,7 +157,7 @@ partial def checkTerm (term : Smt.Term) (symbols : Array String)
       unless valid do throwError "CHC export: unsupported SMT operator '{name}' or arity"
       if (name == "div" || name == "mod") && !positiveNumeral args[1]! then
         throwError "CHC export: {name} requires a positive integer literal divisor"
-    for argument in args do checkTerm argument symbols allowQuantifiers
+    for argument in args do checkTerm argument symbols allowQuantifiers sorts
   | _ => throwError "CHC export: unsupported SMT term {term}"
 
 end Fragment
@@ -299,6 +305,35 @@ private def unfoldRecordCall? (e : Expr) : MetaM (Option Expr) := do
         return ← unfoldDefinition? e
   return none
 
+/-- Unfold a matcher application to its `casesOn` implementation. (`unfoldDefinition?`
+declines matchers.) -/
+def unfoldMatcher? (e : Expr) : MetaM (Option Expr) := do
+  let .const name levels := e.getAppFn | return none
+  let some info ← getMatcherInfo? name | return none
+  if e.getAppNumArgs < info.arity then return none
+  let some constant@(.defnInfo _) := (← getEnv).find? name | return none
+  return some ((← instantiateValueLevelParams constant levels).beta e.getAppArgs)
+
+/-- PA datatype encoding: matchers unfold to `casesOn`, whose alternatives are normalized
+under their field binders. The motive and parameters are left untouched. -/
+private partial def casesOnAtom? (e : Expr) (atom : Expr → MetaM Expr) : MetaM (Option Expr) := do
+  let .const name _ := e.getAppFn | return none
+  let env ← getEnv
+  if (← getMatcherInfo? name).isSome then
+    let some unfolded ← unfoldMatcher? e | return none
+    return some (← atom unfolded)
+  unless isCasesOnRecursor env name do return none
+  let some (.inductInfo info) := env.find? name.getPrefix | return none
+  let major := info.numParams + 1 + info.numIndices
+  let minors := major + 1 + info.ctors.length
+  let args := e.getAppArgs
+  if args.size < minors then return none
+  let args ← args.mapIdxM fun i arg => do
+    if i < major then return arg
+    if i == major || i ≥ minors then return ← atom arg
+    lambdaTelescope arg fun fields body => do mkLambdaFVars fields (← atom body)
+  return some (mkAppN e.getAppFn args)
+
 /-- Normalize checked theory terms. PA can also enable first-order Int/Bool/Prop
 quantifiers; CHC export keeps them restricted to clause prefixes. -/
 partial def atom (input : Expr) (allowQuantifiers : Bool := false) : MetaM Expr := do
@@ -325,7 +360,7 @@ partial def atom (input : Expr) (allowQuantifiers : Bool := false) : MetaM Expr 
   match e with
   | .forallE name domain body bi =>
     if !(← isProp domain) && allowQuantifiers then
-      discard <| Fragment.valueSort domain
+      -- PA binder sorts (Int, Bool, or batch datatypes) are checked after translation.
       let name ← mkFreshUserName `_pa_quant
       return ← withLocalDecl name bi domain fun input => do
         -- lean-smt treats unused forall binders as function arrows. These sorts
@@ -341,13 +376,14 @@ partial def atom (input : Expr) (allowQuantifiers : Bool := false) : MetaM Expr 
   | .app .. =>
     if allowQuantifiers && e.isAppOfArity ``Exists 2 then
       let domain := e.getArg! 0
-      discard <| Fragment.valueSort domain
       let predicate ← whnf (e.getArg! 1)
       let name ← mkFreshUserName `_pa_quant
       return ← withLocalDeclD name domain fun input => do
         let body ← atom (mkApp predicate input).headBeta true
         return mkApp2 e.getAppFn domain (← mkLambdaFVars #[input] body)
     let head := e.getAppFn
+    if allowQuantifiers then
+      if let some body ← casesOnAtom? e (atom · true) then return body
     let args ← e.getAppArgs.mapM fun arg => atom arg allowQuantifiers
     let applied := mkAppN head args
     let env ← getEnv

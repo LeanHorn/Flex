@@ -45,6 +45,8 @@ private structure Batch where
   indices : Array Nat
   results : Array PASynthResult
   omittedAssumptions : Bool
+  /-- Why the first omitted local or assumption was rejected. -/
+  omissionReason : String := ""
   /-- Per query: the script uses an uninterpreted function, so `sat` is inconclusive. -/
   abstracted : Std.HashSet Nat := {}
   deriving Inhabited
@@ -83,6 +85,7 @@ private def buildBatch (registry : IO.Ref Datatype.Registry) (queries : Array Ex
     (timeoutMs : Nat) : MetaM Batch := do
   let mut assumptions := #[]
   let mut omittedAssumptions := false
+  let mut omissionReason := ""
   for declaration in (← getLCtx) do
     -- Auxiliary declarations (e.g. an `example`'s recursive reference) are not hypotheses.
     if declaration.isImplementationDetail then continue
@@ -94,15 +97,18 @@ private def buildBatch (registry : IO.Ref Datatype.Registry) (queries : Array Ex
         assumptions := assumptions.push (← CHC.Prepare.atom assumption true)
       catch error =>
         if error.isInterrupt then throw error
+        if omissionReason.isEmpty then omissionReason ← error.toMessageData.toString
         omittedAssumptions := true
     else
       try discard <| inputSignature declaration.type
       catch error =>
         if error.isInterrupt then throw error
         -- A local value of an unsupported type may witness an empty type.
+        if omissionReason.isEmpty then omissionReason ← error.toMessageData.toString
         omittedAssumptions := true
   withSharedPrefix queries fun inputs premises conclusions => do
     let mut omittedAssumptions := omittedAssumptions
+    let mut omissionReason := omissionReason
     let mut results := unknowns queries.size "unsupported query"
     let mut supported := #[]
     for conclusion in conclusions, i in [:conclusions.size] do
@@ -140,8 +146,10 @@ private def buildBatch (registry : IO.Ref Datatype.Registry) (queries : Array Ex
       unless ← isProp expression do throwError "PA SMT: expected a proposition"
       let ((term, constants, freeVariables), next) ←
         (Smt.Translator.translateExpr expression).run (← translation.get)
-      unless constants.isEmpty && freeVariables.toArray.all names.contains do
-        throwError "PA SMT: unsupported constant or free-input dependencies"
+      unless constants.isEmpty do
+        throwError "PA SMT: unsupported constant {constants.toList.take 3}"
+      unless freeVariables.toArray.all names.contains do
+        throwError "PA SMT: unsupported free-input dependencies"
       let registered ← registry.get
       let extra := registered.symbols
       CHC.Fragment.checkTerm term (symbols ++ extra.map (·.1)) true registered.sorts
@@ -164,6 +172,7 @@ private def buildBatch (registry : IO.Ref Datatype.Registry) (queries : Array Ex
         script := script ++ s!"(assert {term})\n"
       catch error =>
         if error.isInterrupt then throw error
+        if omissionReason.isEmpty then omissionReason ← error.toMessageData.toString
         omittedAssumptions := true
     let mut indices := #[]
     let mut abstracted : Std.HashSet Nat := {}
@@ -179,7 +188,7 @@ private def buildBatch (registry : IO.Ref Datatype.Registry) (queries : Array Ex
     let registered ← registry.get
     let full := header ++ registered.datatypeCommands ++ declarations ++
       registered.functionCommands ++ script ++ "(exit)\n"
-    return { script := full, indices, results, omittedAssumptions, abstracted }
+    return { script := full, indices, results, omittedAssumptions, omissionReason, abstracted }
 
 /-- Reject extra, missing, or malformed responses rather than guessing their query positions. -/
 private def parseResponses (output : String) (count : Nat) : Except String (Array PASynthResult) := do
@@ -238,7 +247,8 @@ def smtOracle (timeoutMs : Nat := 2000) : PASynthOracle := fun queries => do
         for i in [:batch.indices.size] do
           let answer := match answers[i]! with
             | .invalid =>
-              if batch.omittedAssumptions then .unknown "SMT omitted unsupported local assumptions"
+              if batch.omittedAssumptions then
+                .unknown s!"SMT omitted unsupported local assumptions: {(batch.omissionReason.take 160).toString}"
               else if batch.abstracted.contains batch.indices[i]! then
                 .unknown "SMT abstracted uninterpreted functions"
               else .invalid

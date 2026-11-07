@@ -441,77 +441,125 @@ def proofOracle : Flex.CHC.ProofOracle := fun target => do
       first | omega | grind |
         aesop (config := { maxRuleApplications := 200 }) (add unsafe 20% (by omega)))) target
 
-/-- Batch SMT decisions select candidates; only `proofOracle` builds evidence.
-Unsupported or inconclusive SMT queries fall back to bounded native proofs. -/
-def synthOracle (checkBudget : TermElabM Unit := pure ()) : PASynthOracle := fun targets => do
+/-- Per-batch synthesis statistics for `synthOracle`. -/
+private structure SynthStats where
+  queries : Nat
+  scalar : Json := Json.null
+  passes : Array (String × Json) := #[]
+  fallback : Json := Json.null
+  fallbackProved : Std.HashMap String Nat := {}
+
+private def countValid (results : Array PASynthResult) : Nat :=
+  results.countP (· == .valid)
+
+/-- Unknown reasons, grouped. Solver diagnostics are truncated to keep the log small. -/
+private def unknownReasons (results : Array PASynthResult) : Json := Id.run do
+  let mut counts : Std.HashMap String Nat := {}
+  for result in results do
+    if let .unknown reason := result then
+      let reason := (reason.take 80).toString
+      counts := counts.insert reason (counts.getD reason 0 + 1)
+  return Json.mkObj (counts.toList.map fun (reason, count) => (reason, toJson count))
+
+/-- Append one JSON line per batch to `$FLEX_SMT_STATS`. It writes through `IO`, so
+elaboration-state rollbacks after a failed or interrupted attempt cannot discard it. -/
+private def recordSynthStats (stats : SynthStats) (completed : Bool) (ms : Nat) : IO Unit := do
+  let some path ← IO.getEnv "FLEX_SMT_STATS" | return
+  let line := Json.mkObj ([("queries", toJson stats.queries), ("completed", toJson completed),
+    ("ms", toJson ms), ("scalar", stats.scalar)] ++ stats.passes.toList ++
+    [("fallback", stats.fallback),
+     ("fallback_proved_by", Json.mkObj (stats.fallbackProved.toList.map fun (k, v) => (k, toJson v)))])
+  IO.FS.withFile path .append fun handle => handle.putStrLn line.compress
+
+/-- The SMT passes and native fallback behind `synthOracle`, recording into `stats`. -/
+private def synthOracleCore (checkBudget : TermElabM Unit) (stats : IO.Ref SynthStats)
+    (targets : Array Expr) : TermElabM (Array PASynthResult) := do
   checkBudget
   let timeout := flex.automation.synthTimeout.get (← getOptions)
   let start ← IO.monoMsNow
   let mut results ← if timeout == 0 then
     pure (targets.map fun _ => PASynthResult.unknown "SMT synthesis disabled")
     else Flex.PA.smtOracle (timeout * 1000) targets
+  let scalarMs := (← IO.monoMsNow) - start
+  stats.modify ({ · with scalar := Json.mkObj [("ms", toJson scalarMs),
+    ("valid", toJson (countValid results)),
+    ("invalid", toJson (results.countP (· == .invalid))),
+    ("unknown_reasons", unknownReasons results)] })
   checkBudget
   unless results.size == targets.size do
     throwError "PA synthesis oracle returned the wrong number of decisions"
-  trace[flex.synthesis] "scalar SMT: {targets.size} queries, {(← IO.monoMsNow) - start}ms"
-  let pending := (Array.range results.size).filter fun i =>
-    match results[i]! with | .unknown _ => true | _ => false
-  if timeout != 0 && !pending.isEmpty then
+  trace[flex.synthesis] "scalar SMT: {targets.size} queries, {scalarMs}ms"
+  let pass (name : String) (enabled : Bool)
+      (oracle : Nat → PASynthOracle) (results : Array PASynthResult) :
+      TermElabM (Array PASynthResult) := do
+    let pending := (Array.range results.size).filter fun i =>
+      match results[i]! with | .unknown _ => true | _ => false
+    unless enabled && timeout != 0 && !pending.isEmpty do return results
     let start ← IO.monoMsNow
-    let retry ← Flex.PA.observationSmtOracle (timeout * 1000) (pending.map (targets[·]!))
+    let retry ← oracle (timeout * 1000) (pending.map (targets[·]!))
+    let ms := (← IO.monoMsNow) - start
+    stats.modify fun s => { s with passes := s.passes.push (name, Json.mkObj [
+      ("queries", toJson pending.size), ("valid", toJson (countValid retry)), ("ms", toJson ms)]) }
     checkBudget
-    trace[flex.synthesis] "observation SMT: {pending.size} queries, \
-      {(retry.filter (· == .valid)).size} valid, {(← IO.monoMsNow) - start}ms"
+    trace[flex.synthesis] "{name} SMT: {pending.size} queries, {countValid retry} valid, {ms}ms"
+    let mut results := results
     for i in [:pending.size] do
       if let .valid := retry[i]! then results := results.set! pending[i]! .valid
-  let pending := (Array.range results.size).filter fun i =>
-    match results[i]! with | .unknown _ => true | _ => false
-  if timeout != 0 && !pending.isEmpty then
-    let start ← IO.monoMsNow
-    let retry ← Flex.PA.simplifiedSmtOracle (timeout * 1000) (pending.map (targets[·]!))
-    checkBudget
-    trace[flex.synthesis] "simplified SMT: {pending.size} queries, \
-      {(retry.filter (· == .valid)).size} valid, {(← IO.monoMsNow) - start}ms"
-    for i in [:pending.size] do
-      if let .valid := retry[i]! then results := results.set! pending[i]! .valid
-  let pending := (Array.range results.size).filter fun i =>
-    match results[i]! with | .unknown _ => true | _ => false
-  if flex.automation.functionSmt.get (← getOptions) && timeout != 0 && !pending.isEmpty then
-    let start ← IO.monoMsNow
-    let retry ← Flex.PA.functionSmtOracle (timeout * 1000) (pending.map (targets[·]!))
-    checkBudget
-    trace[flex.synthesis] "function SMT: {pending.size} queries, \
-      {(retry.filter (· == .valid)).size} valid, {(← IO.monoMsNow) - start}ms"
-    for i in [:pending.size] do
-      if let .valid := retry[i]! then results := results.set! pending[i]! .valid
+    return results
+  results ← pass "observation" true (fun ms => Flex.PA.observationSmtOracle ms) results
+  results ← pass "simplified" true (fun ms => Flex.PA.simplifiedSmtOracle ms) results
+  results ← pass "function" (flex.automation.functionSmt.get (← getOptions))
+    (fun ms => Flex.PA.functionSmtOracle ms) results
   let pending := results.countP fun result => match result with | .unknown _ => true | _ => false
   let start ← IO.monoMsNow
-  let answers ← targets.zipWithM (fun target result => do
-    checkBudget
-    match result with
-    | .valid | .invalid => return result
-    | .unknown reason =>
-      trace[flex.oracle] "SMT synthesis inconclusive: {reason}"
-      if (← proveWithSourcePredicates target).isSome then return .valid
-      let quickLimit := min 500 (flex.automation.proofHeartbeats.get (← getOptions))
-      if (← withOptions (·.set `flex.automation.proofHeartbeats quickLimit) <|
-          attempt (← `(tactic| grind only)) target (budgetLeaves := 1)).isSome then
-        return .valid
-      for tactic in #[← `(tactic| omega), ← `(tactic| grind),
-          ← `(tactic| constructor <;> grind),
-          ← `(tactic| (simp (config := { maxSteps := 10000, failIfUnchanged := true })
-            [List.eq_replicate_iff] at *) <;> intros <;> grind)] do
-        checkBudget
-        let proof ← attempt tactic target
-        checkBudget
-        if proof.isSome then return .valid
+  let proved (method : String) : TermElabM PASynthResult := do
+    stats.modify fun s => { s with
+      fallbackProved := s.fallbackProved.insert method (s.fallbackProved.getD method 0 + 1) }
+    return .valid
+  let answers ← try
+    targets.zipWithM (fun target result => do
       checkBudget
-      let proof ← proveWithEquations target
-      checkBudget
-      if proof.isSome then return .valid
-      return result) results
-  trace[flex.synthesis] "native fallback: {pending} queries, {(← IO.monoMsNow) - start}ms"
+      match result with
+      | .valid | .invalid => return result
+      | .unknown reason =>
+        trace[flex.oracle] "SMT synthesis inconclusive: {reason}"
+        if (← proveWithSourcePredicates target).isSome then return ← proved "source_predicates"
+        let quickLimit := min 500 (flex.automation.proofHeartbeats.get (← getOptions))
+        if (← withOptions (·.set `flex.automation.proofHeartbeats quickLimit) <|
+            attempt (← `(tactic| grind only)) target (budgetLeaves := 1)).isSome then
+          return ← proved "grind_only"
+        for (method, tactic) in #[("omega", ← `(tactic| omega)), ("grind", ← `(tactic| grind)),
+            ("constructor_grind", ← `(tactic| constructor <;> grind)),
+            ("simp_grind", ← `(tactic| (simp (config := { maxSteps := 10000, failIfUnchanged := true })
+              [List.eq_replicate_iff] at *) <;> intros <;> grind))] do
+          checkBudget
+          let proof ← attempt tactic target
+          checkBudget
+          if proof.isSome then return ← proved method
+        checkBudget
+        let proof ← proveWithEquations target
+        checkBudget
+        if proof.isSome then return ← proved "equations"
+        return result) results
+  finally
+    let ms := (← IO.monoMsNow) - start
+    stats.modify ({ · with fallback := Json.mkObj [("queries", toJson pending), ("ms", toJson ms)] })
+  trace[flex.synthesis] "native fallback: {pending} queries, \
+    {(← stats.get).fallbackProved.fold (fun n _ v => n + v) 0} valid"
   return answers
+
+/-- Batch SMT decisions select candidates; only `proofOracle` builds evidence.
+Unsupported or inconclusive SMT queries fall back to bounded native proofs. -/
+def synthOracle (checkBudget : TermElabM Unit := pure ()) : PASynthOracle := fun targets => do
+  let stats ← IO.mkRef ({ queries := targets.size } : SynthStats)
+  let batchStart ← IO.monoMsNow
+  let completed ← IO.mkRef false
+  try
+    let answers ← synthOracleCore checkBudget stats targets
+    completed.set true
+    return answers
+  finally
+    recordSynthStats (← stats.get) (← completed.get) ((← IO.monoMsNow) - batchStart)
 
 /-- The structural walk used by `solve_fixpoint`, with checked leaf proofs and
 finite progress. Definitions are retried only after their target changes; goals

@@ -134,6 +134,8 @@ def run_case(case: dict, variant: str, args: argparse.Namespace, lean: str,
            "LEAN_PATH": os.pathsep.join([str(args.output / "harness"), str(workspace / ".compiled"),
                                           environment.get("LEAN_PATH", "")]),
            "FLEX_RQ1_OUTPUT": str(directory),
+           # One JSON line per PA synthesis batch: SMT pass usage and native fallback.
+           "FLEX_SMT_STATS": str(directory / "smt_stats.jsonl"),
            "FLEX_RQ1_CASE_SECONDS": str(args.case_timeout),
            "FLEX_RQ1_PA_SECONDS": str(args.pa_timeout),
            "FLEX_RQ1_SOLVER_MS": str(args.solver_timeout * 1000),

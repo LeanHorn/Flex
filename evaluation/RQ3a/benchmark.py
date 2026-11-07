@@ -98,28 +98,6 @@ def invoke(path, directory, command, environment, seconds):
     return code, (time.perf_counter() - started) * 1000
 
 
-def classify_case(case, study, output, header, command, env):
-    directory = output / 'classification' / study / common.hashlib.sha256(case['case'].encode()).hexdigest()[:16]
-    directory.mkdir(parents=True, exist_ok=True)
-    if (directory / 'record.json').exists():
-        return json.loads((directory / 'record.json').read_text())
-    if case['inventory_status'] != 'translated':
-        row = {'case': case['case'], 'study': study, 'status': case['inventory_status']}
-    else:
-        source, error = common.case_source(case, header)
-        path = directory / 'Case.lean'
-        path.write_text(source)
-        code, ms = invoke(path, directory, command, {**env, 'RQ3_MODE': 'classify',
-            'FLEX_PARITY_OUTPUT': str(directory)}, 120)
-        row = {'case': case['case'], 'study': study, 'exit_code': code, 'wall_ms': ms,
-               'status': 'classified' if code == 0 and (directory/'classification.json').exists() else 'classification_failed',
-               'log': str(directory/'lean.log')}
-        if row['status'] == 'classified':
-            row.update(json.loads((directory/'classification.json').read_text()))
-    save(directory / 'record.json', row)
-    return row
-
-
 def setup(args):
     output = args.output
     output.mkdir(parents=True, exist_ok=True)
@@ -219,7 +197,8 @@ def trial(case, study, config, args, command, env, header):
         'FLEX_PARITY_PROFILE_PA': '1', 'FLEX_PARITY_CASE_SECONDS': str(watchdog),
         'RQ3_DIAGNOSTIC': str(int(args.diagnostic)),
         'FLEX_PARITY_FLEX_SECONDS': str(internal),
-        'FLEX_PARITY_SOLVER_SECONDS': str(args.solver_timeout)}, header)
+        'FLEX_PARITY_SOLVER_SECONDS': str(args.solver_timeout),
+        'RQ3_CLASSIFY': '0' if args.skip_classification else '1'}, header)
     record.update(study=study, configuration=config)
     return record
 
@@ -287,7 +266,7 @@ def main(study='a'):
                    choices=list(CONFIGS) + (['native_spacer', 'native_eldarica'] if study == 'b' else []),
                    help='select explicit arms; RQ3b defaults to both native solvers plus se, zap_fix, se_zap_fix')
     p.add_argument('--diagnostic', action='store_true', help='retain pipeline failure traces')
-    p.add_argument('--skip-classification', action='store_true', help='skip graph classification for pipeline diagnosis')
+    p.add_argument('--skip-classification', action='store_true', help='skip the in-trial graph classification for pipeline diagnosis')
     plotting = p.add_mutually_exclusive_group()
     plotting.add_argument('--no-figures', action='store_true', help='CSV/JSON only (default for RQ3b)')
     plotting.add_argument('--figures', dest='no_figures', action='store_false', help='also generate PDF plots')
@@ -372,7 +351,8 @@ def main(study='a'):
         'workers': args.workers, 'logical_cpus': os.cpu_count(),
         'timeout_policy': TIMEOUT_POLICY,
         'timing': f'{args.workers} concurrent query processes, one trial per configuration/query. '
-                  'Builds and classification excluded; process startup included in wall_ms. '
+                  'Builds excluded; classification runs in each trial process before the measured '
+                  'tactic (excluded from flex_ms, included in wall_ms), as is process startup. '
                   'Concurrent workers or other machine activity can affect timings.',
         'classification_skipped':args.skip_classification,
         'proof_depth':'Lean approxDepth, not an exact DAG-depth measurement.',
@@ -396,15 +376,8 @@ def main(study='a'):
         if not args.no_figures: report.figures(args.output)
         report.progress(args.output)
         return
-    # Classification is separate from timed trials and never changes selection.
-    jobs=[] if args.skip_classification else [(c,s) for s,cs in selection['cases'].items() for c in cs]
-    meta['phase']='classification'; save(meta_path,meta)
-    with ThreadPoolExecutor(max_workers=min(2,args.workers)) as pool:
-        futures=[pool.submit(classify_case,c,s,args.output,header,command,env) for c,s in jobs]
-        rows=[]
-        for i,f in enumerate(futures):
-            rows.append(f.result()); save(args.output/'classification.json',rows)
-            if (i+1)%10==0:print(f'Classified {i+1}/{len(jobs)}',flush=True)
+    # Classification runs inside each trial, before the measured tactic; it never
+    # changes selection.
     meta.update(phase='trials', complete=False)
     meta.setdefault('trials_started_at', now())
     save(meta_path,meta)

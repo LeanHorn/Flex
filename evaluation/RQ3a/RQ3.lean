@@ -347,11 +347,6 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
   let initialHeartbeats ← IO.getNumHeartbeats
   try
     tryCatchRuntimeEx (do
-      if (← IO.getEnv "RQ3_MODE").getD "run" == "classify" then
-        let info ← classify (Lean.mkConst name)
-        IO.FS.writeFile (output / "classification.json") info.pretty
-        emit output "result" "classified"
-        return
       let heartbeats ← envNat "FLEX_PARITY_HEARTBEATS" 4000000
       let proofHeartbeats ← envNat "FLEX_PARITY_PROOF_HEARTBEATS" 40000
       let zap := (← IO.getEnv "FLEX_PARITY_ZAP").getD "1" != "0"
@@ -426,6 +421,17 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
             ("native_fallback", toJson (flex.automation.nativeFallback.get options)),
             ("recursion_limit", toJson recursionLimit)]).pretty
           let target := Lean.mkConst name
+          -- Structural classification shares the trial's process; it precedes the measured tactic.
+          if (← IO.getEnv "RQ3_CLASSIFY").getD "1" != "0" then
+            let classifyStart ← IO.monoMsNow
+            let info ← tryCatchRuntimeEx (some <$> classify target) fun error => do
+              if error.isInterrupt then throw error
+              emit output "classification" "failed" [("error", toJson (← error.toMessageData.toString))]
+              pure none
+            if let some info := info then
+              IO.FS.writeFile (output / "classification.json") info.pretty
+              emit output "classification" "ok"
+                [("elapsed_ms", toJson ((← IO.monoMsNow) - classifyStart))]
           let before ← predicateCount target
           let original ← mkFreshExprMVar (some target) (kind := .syntheticOpaque)
           stage.set "flex"

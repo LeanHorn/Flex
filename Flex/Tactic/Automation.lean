@@ -171,8 +171,9 @@ register_option flex.automation.smtTimeout : Nat := {
 }
 
 register_option flex.automation.synthTimeout : Nat := {
-  defValue := 2
-  descr := "Seconds per SMT synthesis batch; zero disables external synthesis."
+  defValue := 1000
+  descr := "Milliseconds per SMT check in synthesis; a batch of n checks may run for n times \
+    this plus one second. Zero disables external synthesis."
 }
 
 register_option flex.automation.nativeFallback : Bool := {
@@ -456,7 +457,7 @@ def synthOracle (checkBudget : TermElabM Unit := pure ()) : PASynthOracle := fun
   let start ← IO.monoMsNow
   let mut results ← if timeout == 0 then
     pure (targets.map fun _ => PASynthResult.unknown "SMT synthesis disabled")
-    else Flex.PA.smtOracle (timeout * 1000) targets
+    else Flex.PA.smtOracle timeout targets
   checkBudget
   unless results.size == targets.size do
     throwError "PA synthesis oracle returned the wrong number of decisions"

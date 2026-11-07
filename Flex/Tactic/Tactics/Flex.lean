@@ -120,12 +120,14 @@ private def checkTime (ctx : Context) : TermElabM Unit := do
 private def withRemainingTime (ctx : Context) (action : TermElabM α) : TermElabM α := do
   checkTime ctx
   let some deadline := ctx.deadline | return ← action
-  let seconds := max 1 ((deadline - (← IO.monoMsNow) + 999) / 1000)
+  let remaining := max 1 (deadline - (← IO.monoMsNow))
+  let seconds := (remaining + 999) / 1000
   withOptions (fun opts =>
     let opts := if flex.automation.smtTimeout.get opts == 0 then opts else
       flex.automation.smtTimeout.set opts seconds
-    if flex.automation.synthTimeout.get opts == 0 then opts else
-      flex.automation.synthTimeout.set opts seconds) action
+    let check := flex.automation.synthTimeout.get opts
+    if check == 0 then opts else
+      flex.automation.synthTimeout.set opts (min check remaining)) action
 
 private def withBudget (ctx : Context) (heartbeats : Nat) (act : TacticM α) : TacticM α := do
   let configured := if ctx.setup.config.heartbeats == 0 then heartbeats

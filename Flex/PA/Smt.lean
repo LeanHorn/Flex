@@ -151,8 +151,11 @@ private def clauseOracle (timeoutMs : Nat) : PASynthOracle := fun queries => do
       if batch.indices.isEmpty then return batch.results
       trace[flex.smt] "script:\n{batch.script}"
       Core.checkInterrupted
+      -- `timeoutMs` bounds each check-sat, so one stuck check answers unknown and the rest of
+      -- the batch still runs; the process limit only guards against a hung solver.
+      let processMs := timeoutMs * batch.indices.size + 1000
       let response ← CHC.Process.run {
-        executable := "z3", args := #["-in", "-smt2"], timeoutMs } batch.script
+        executable := "z3", args := #["-in", "-smt2"], timeoutMs := processMs } batch.script
       Core.checkInterrupted
       let mut results := batch.results
       match decodeSmtResponses response batch.indices.size with
@@ -173,12 +176,12 @@ private def clauseOracle (timeoutMs : Nat) : PASynthOracle := fun queries => do
       set saved.elab
       CHC.restoreMetaState saved.meta
 
-/-- Check a batch with one bounded z3 process and the exact encoding of `Flex.SMT`.
-Each query is first flattened into clauses (conjunctions of conclusions split, universals
-distributed): a query is valid when all its clauses are, and invalid when one of them has an
-exact counterexample. Results guide synthesis only; selected predicates still
+/-- Check a batch with one z3 process and the exact encoding of `Flex.SMT`; `timeoutMs` bounds
+each check-sat. Each query is first flattened into clauses (conjunctions of conclusions split,
+universals distributed): a query is valid when all its clauses are, and invalid when one of them
+has an exact counterexample. Results guide synthesis only; selected predicates still
 require Lean certification. -/
-def smtOracle (timeoutMs : Nat := 2000) : PASynthOracle := fun queries => do
+def smtOracle (timeoutMs : Nat := 1000) : PASynthOracle := fun queries => do
   if queries.isEmpty then return #[]
   let mut clauses := #[]
   let mut owners : Array (Array Nat) := #[]

@@ -156,8 +156,13 @@ run_elab do
   expect (← `(∀ (a : Token) (x : Int), (∃ b : Token, a = b ∧ x = 1) → x = 1)) .valid
   expectUnknown (← `(∀ (a b : Unknown), a = b))
 
--- Direct `Int.le`/`Int.lt` calls are exact.
+-- Definitionally equal sorts share one declaration; direct `Int.le`/`Int.lt` calls are exact.
+private abbrev Pairs := List (Int × Int)
 run_elab do
+  expect (← `(∀ (o : Option Pairs) (p : Option (List (Int × Int))), o = p → p = o)) .valid
+  expect (← `(∀ (xs : List Pairs) (o : Option (List (Int × Int))), xs.head? = o → o = xs.head?)) .valid
+  expect (← `(∀ (xs : List Pairs), xs = ([] : List (List (Int × Int))) → xs ≠ [[]])) .valid
+  expect (← `(∀ (xs : List (List (Int × Int))), xs = ([] : List Pairs) → xs ≠ [[]])) .valid
   expect (← `(∀ (i n : Int), Int.le i n → Int.lt n i → False)) .valid
   expect (← `(∀ (i n : Int), Int.le i n → Int.lt i n)) .invalid
 

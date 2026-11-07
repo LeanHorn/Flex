@@ -154,6 +154,22 @@ partial def isOpaqueType (type : Expr) : MetaM Bool := do
     | _ => return false
   | _ => return false
 
+/-- Normalize a closed type so that definitionally equal sorts share one SMT declaration:
+reduce the head and, recursively, every type argument and function domain/codomain
+(e.g. `Option (ASeq Int Int)` and `Option (List (Int × Int))`). -/
+partial def canonicalType (type : Expr) : MetaM Expr := do
+  let type ← whnf (← instantiateMVars type).consumeMData
+  match type with
+  | .forallE n d b bi =>
+    if b.hasLooseBVars then return type
+    return .forallE n (← canonicalType d) (← canonicalType b) bi
+  | _ =>
+    let fn := type.getAppFn
+    unless fn.isConst do return type
+    let args ← type.getAppArgs.mapM fun a => do
+      if (← inferType a).isSort then canonicalType a else pure a
+    return mkAppN fn args
+
 mutual
 
 /-- Encode a closed Lean type as an SMT sort. -/
@@ -162,13 +178,13 @@ partial def encodeSort (type : Expr) : EncodeM String := do
   let type := type.consumeMData
   if type.hasLooseBVars || type.hasFVar || type.hasMVar then
     unsupported m!"open sort {type}"
-  let reduced ← whnf type
+  let reduced ← canonicalType type
   let pending := (← get).pendingDatatypes
   if pending.contains reduced then
     -- Only a direct self-reference of the datatype being declared is well-formed.
     if pending.back? == some reduced then return (← get).sorts[reduced]!
     unsupported m!"nested inductive occurrence of {type}"
-  if let some sort := (← get).sorts[type]? then
+  if let some sort := (← get).sorts[type]? <|> (← get).sorts[reduced]? then
     if (← get).lossySorts.contains sort then markAbstracted
     return sort
   let (sort, lossy) ← match reduced with
@@ -198,13 +214,15 @@ partial def encodeSort (type : Expr) : EncodeM String := do
       let datatype ← encodeDatatype reduced
       pure (datatype.symbol, (← get).lossySorts.contains datatype.symbol)
   modify fun s => { s with
-    sorts := s.sorts.insert type sort
+    sorts := (s.sorts.insert type sort).insert reduced sort
     lossySorts := if lossy then s.lossySorts.insert sort else s.lossySorts }
   if lossy then markAbstracted
   return sort
 
 /-- Declare a monomorphized instance of a non-indexed inductive type. -/
 partial def encodeDatatype (type : Expr) : EncodeM Datatype := do
+  -- Constructor and projection terms reach this with unnormalized type arguments.
+  let type ← canonicalType type
   if let some datatype := (← get).datatypes[type]? then return datatype
   let .const name levels := type.getAppFn | unsupported m!"sort {type}"
   let some (.inductInfo info) := (← getEnv).find? name | unsupported m!"sort {type}"

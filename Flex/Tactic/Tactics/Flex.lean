@@ -333,7 +333,7 @@ private structure Candidate where
   remainingHeads : Option Nat
 
 private inductive PASearch where
-  | full | sources | functions
+  | full | sources
   deriving BEq
 
 private def runPA (ctx : Context) (scrape : PAScrapeConfig)
@@ -347,14 +347,9 @@ private def runPA (ctx : Context) (scrape : PAScrapeConfig)
     withOptions (fun opts => if directSources then
         opts.set `flex.automation.proofHeartbeats limit else opts) <|
       synthOracle ctx queries
-  let scrape := if search == .functions then
-      { scrape with
-        maxCompoundCandidatesPerKappa := max 24 scrape.maxCompoundCandidatesPerKappa
-        pointwiseFrames := true } else scrape
   withOptions (fun opts =>
-      let opts := if search == .sources && !opts.contains `flex.automation.equationHeartbeats then
-        opts.set `flex.automation.equationHeartbeats (5000 : Nat) else opts
-      if search == .functions then opts.setBool `flex.automation.sourcePredicates true else opts) <|
+      if search == .sources && !opts.contains `flex.automation.equationHeartbeats then
+        opts.set `flex.automation.equationHeartbeats (5000 : Nat) else opts) <|
     fixImpl proveLeaf scrape (some (proofOracle ctx)) (observe := ctx.setup.onPA)
       (synthOracle := some decision) (allowUnprovedHeads := allowUnprovedHeads)
       (onCertification := fun result => report.set result) (directSources := directSources)
@@ -375,21 +370,6 @@ private partial def largeTemplateSearch (type : Expr) (limits : PAScrapeLimits) 
   if permutations > limits.maxInstancesPerKappa then return true
   withLocalDeclD `κ domain fun κ =>
     largeTemplateSearch (type.appArg!.beta #[κ]) limits
-
-private def hasCompoundObservations (type : Expr) : MetaM Bool := do
-  let found ← IO.mkRef false
-  discard <| Meta.transform type (pre := fun e => do
-    if (← found.get) then return .done e
-    let .const name _ := e.getAppFn | return .continue
-    unless (← getConstInfo name) matches .defnInfo _ do return .continue
-    unless ← isProp e do return .continue
-    for arg in e.getAppArgs do
-      if !arg.hasFVar || arg.isFVar || arg.isProj then continue
-      if let .const name _ := arg.getAppFn then
-        if (← getProjectionFnInfo? name).isSome then continue
-      if (← whnf (← inferType arg)).isForall then found.set true
-    return .continue)
-  found.get
 
 private def runBackend (ctx : Context) (backend : Backend)
     (onCandidate : MVarId → TermElabM PASynthResult) : TacticM Candidate := do
@@ -419,13 +399,6 @@ private def runBackend (ctx : Context) (backend : Backend)
         trace[flex] "fix: stateful source candidates validated"
         return candidate
       if let .error message := result then trace[flex] "fix stateful sources: {message}"
-    if ctx.setup.scrape.mode == .deep && ctx.setup.scrape.maxCandidatesPerKappa > 0 &&
-        (← withMainContext do hasCompoundObservations (← getMainTarget)) then
-      let result ← guarded <| runPA ctx ctx.setup.scrape true .functions
-      if let .ok candidate := result then
-        trace[flex] "fix: direct source candidates validated"
-        return candidate
-      if let .error message := result then trace[flex] "fix direct sources: {message}"
     runPA ctx ctx.setup.scrape true
   | .spacer | .eldarica =>
     let name := if backend == .spacer then flex.spacer.executable else flex.eldarica.executable

@@ -175,11 +175,6 @@ register_option flex.automation.synthTimeout : Nat := {
   descr := "Seconds per SMT synthesis batch; zero disables external synthesis."
 }
 
-register_option flex.automation.functionSmt : Bool := {
-  defValue := false
-  descr := "Try an additional CVC5 synthesis batch for function-valued inputs."
-}
-
 register_option flex.automation.equations : Bool := {
   defValue := true
   descr := "Use bounded source equations and fold lemmas during candidate validation and proof."
@@ -441,8 +436,9 @@ def proofOracle : Flex.CHC.ProofOracle := fun target => do
       first | omega | grind |
         aesop (config := { maxRuleApplications := 200 }) (add unsafe 20% (by omega)))) target
 
-/-- Batch SMT decisions select candidates; only `proofOracle` builds evidence.
-Unsupported or inconclusive SMT queries fall back to bounded native proofs. -/
+/-- Batch SMT decisions select candidates; only `proofOracle` builds evidence. One exact SMT
+pass (`Flex.SMT`) decides what it can encode; unsupported or inconclusive queries fall back to
+bounded native proofs. -/
 def synthOracle (checkBudget : TermElabM Unit := pure ()) : PASynthOracle := fun targets => do
   checkBudget
   let timeout := flex.automation.synthTimeout.get (← getOptions)
@@ -453,37 +449,9 @@ def synthOracle (checkBudget : TermElabM Unit := pure ()) : PASynthOracle := fun
   checkBudget
   unless results.size == targets.size do
     throwError "PA synthesis oracle returned the wrong number of decisions"
-  trace[flex.synthesis] "scalar SMT: {targets.size} queries, {(← IO.monoMsNow) - start}ms"
-  let pending := (Array.range results.size).filter fun i =>
-    match results[i]! with | .unknown _ => true | _ => false
-  if timeout != 0 && !pending.isEmpty then
-    let start ← IO.monoMsNow
-    let retry ← Flex.PA.observationSmtOracle (timeout * 1000) (pending.map (targets[·]!))
-    checkBudget
-    trace[flex.synthesis] "observation SMT: {pending.size} queries, \
-      {(retry.filter (· == .valid)).size} valid, {(← IO.monoMsNow) - start}ms"
-    for i in [:pending.size] do
-      if let .valid := retry[i]! then results := results.set! pending[i]! .valid
-  let pending := (Array.range results.size).filter fun i =>
-    match results[i]! with | .unknown _ => true | _ => false
-  if timeout != 0 && !pending.isEmpty then
-    let start ← IO.monoMsNow
-    let retry ← Flex.PA.simplifiedSmtOracle (timeout * 1000) (pending.map (targets[·]!))
-    checkBudget
-    trace[flex.synthesis] "simplified SMT: {pending.size} queries, \
-      {(retry.filter (· == .valid)).size} valid, {(← IO.monoMsNow) - start}ms"
-    for i in [:pending.size] do
-      if let .valid := retry[i]! then results := results.set! pending[i]! .valid
-  let pending := (Array.range results.size).filter fun i =>
-    match results[i]! with | .unknown _ => true | _ => false
-  if flex.automation.functionSmt.get (← getOptions) && timeout != 0 && !pending.isEmpty then
-    let start ← IO.monoMsNow
-    let retry ← Flex.PA.functionSmtOracle (timeout * 1000) (pending.map (targets[·]!))
-    checkBudget
-    trace[flex.synthesis] "function SMT: {pending.size} queries, \
-      {(retry.filter (· == .valid)).size} valid, {(← IO.monoMsNow) - start}ms"
-    for i in [:pending.size] do
-      if let .valid := retry[i]! then results := results.set! pending[i]! .valid
+  trace[flex.synthesis] "SMT: {targets.size} queries, \
+    {(results.filter (· == .valid)).size} valid, \
+    {(results.filter (· == .invalid)).size} invalid, {(← IO.monoMsNow) - start}ms"
   let pending := results.countP fun result => match result with | .unknown _ => true | _ => false
   let start ← IO.monoMsNow
   let answers ← targets.zipWithM (fun target result => do

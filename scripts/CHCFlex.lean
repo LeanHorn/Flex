@@ -213,7 +213,9 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
             ("case_timeout_seconds", toJson caseSeconds),
             ("phase_heartbeats", toJson heartbeats),
             ("proof_heartbeats", toJson proofHeartbeats),
-            ("function_smt", toJson (flex.automation.functionSmt.get options)),
+            ("smt_uninterpreted_defs", toJson (flex.smt.uninterpretedDefs.get options)),
+            ("smt_encode_nonlinear", toJson (flex.smt.encodeNonlinear.get options)),
+            ("smt_encode_quantifiers", toJson (flex.smt.encodeQuantifiers.get options)),
             ("recursion_limit", toJson recursionLimit)]).pretty
           let target := Lean.mkConst name
           let before ← predicateCount target

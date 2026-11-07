@@ -1,6 +1,5 @@
 import Flex.CHC.Goal
 import Flex.Preprocess.Witnesses
-import Flex.CHC.ModelImport
 
 /-! Small checks for model import and certification; solver coverage lives in the benchmarks. -/
 

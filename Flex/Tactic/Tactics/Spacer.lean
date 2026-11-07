@@ -1,4 +1,4 @@
-import Flex.CHC.Goal
+import Flex.CHC
 
 open Lean Elab Tactic
 

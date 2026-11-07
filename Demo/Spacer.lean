@@ -1,6 +1,5 @@
 import Flex.Tactic.Tactics.Spacer
 import Flex.Tactic.Tactics.Eldarica
-import Flex.CHC.ModelImport
 
 /-! Spacer and Eldarica remove proved heads and leave one VC for grind.
 Requires `z3` and `eld` on PATH, or the `flex.spacer.executable` /

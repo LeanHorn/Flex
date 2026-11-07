@@ -13,9 +13,6 @@ import Flex.Zap
 -- Tactic related code
 import Flex.Tactic
 
--- Spacer/Eldarica model import (SMTLib-to-Lean; not precompiled)
-import Flex.CHC
-
 -- Predicate Abstraction
 import Flex.PA
 

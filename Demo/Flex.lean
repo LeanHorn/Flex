@@ -1,5 +1,4 @@
 import Flex.Tactic.Tactics.Flex
-import Flex.CHC.ModelImport
 
 /-! `flex` prepares constraints, runs Zap and the invariant backends, and keeps
 validated progress when proof obligations still need manual work. -/

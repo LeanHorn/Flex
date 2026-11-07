@@ -835,8 +835,7 @@ elab_rules : tactic
       $[(closer := $closer:tacticSeq)]? $[(config := $config:term)]?) => do
     let backends ← match backends with
       | none => pure Flex.Portfolio.Backend.all
-      | some names => names.getElems.toList.mapM fun (backend : TSyntax `flexBackend) =>
-        match backend with
+      | some names => names.getElems.toList.mapM fun
         | `(flexBackend| fix) => pure Flex.Portfolio.Backend.fix
         | `(flexBackend| spacer) => pure .spacer
         | `(flexBackend| eldarica) => pure .eldarica

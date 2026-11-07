@@ -1,5 +1,4 @@
 import Flex.Tactic
-import Flex.CHC.ModelImport
 
 open Lean Meta Elab Tactic Command
 

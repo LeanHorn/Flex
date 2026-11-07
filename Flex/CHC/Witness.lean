@@ -1,24 +1,10 @@
 import Flex.CHC.Export
 import Flex.CHC.Backend
-import Smt2Lean.Definition
-import Smt2Lean.SolverResponse
+import Smt2Lean.Model
 
 namespace Flex.CHC
 
 open Lean Meta
-
-/-- A solver model translated by SMTLib-to-Lean, mirroring `Smt2Lean.Model.Response`. -/
-structure ImportedModel where
-  status : Option Smt2Lean.SolverResponse.Status
-  definitions : Option (Array Smt2Lean.ReconstructedDefinition)
-  diagnostics : Array Smt2Lean.SolverResponse.Diagnostic
-
-/-- Translate a solver response (input, environment, source name) into Lean definitions. -/
-abbrev ModelImporter := String → Environment → String → IO ImportedModel
-
-/-- Set by `Flex.CHC.ModelImport`. SMTLib-to-Lean's model translator imports Mathlib's
-reals, so it stays out of the core import graph that Flex precompiles to native code. -/
-initialize modelImporter : IO.Ref (Option ModelImporter) ← IO.mkRef none
 
 /-- A closed, typed predicate candidate; satisfaction is checked by certification. -/
 structure Witness where
@@ -134,11 +120,9 @@ def importWitnesses (problem : ExportedProblem) (result : SolverResult) : MetaM 
     checkRelations problem
     successfulModel result
     -- Kernel checking needs temporary declarations in an unlocked environment.
-    let some importModel ← modelImporter.get
-      | throwError "CHC witnesses: model import unavailable; import `Flex.CHC.ModelImport`"
     let response ← withoutModifyingEnv do
       let environment ← getEnv
-      importModel result.process.stdout environment "flex-chc-model"
+      Smt2Lean.Model.importResponse result.process.stdout environment "flex-chc-model"
     unless response.status == some .sat && response.diagnostics.isEmpty do
       throwError "CHC witnesses: expected a sat model without solver errors"
     let some definitions := response.definitions

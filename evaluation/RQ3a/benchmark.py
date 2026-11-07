@@ -165,17 +165,6 @@ def build_setup(args, selection):
                     '--', '--error=hasSorry'], cwd=ROOT, check=True)
     command, env = common.lean_setup(output, True, header)
     command, env = freeze(output, command, env)
-    if args.native_runner:
-        # Same setup and inputs; only the elaborator binary changes to one with Flex compiled in.
-        subprocess.run(['lake', '--log-level=error', 'build', 'flex-lean'], cwd=ROOT, check=True)
-        runner = output / 'compiled/bin/flex-lean'
-        runner.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / '.lake/build/bin/flex-lean', runner)
-        command = [str(runner), *command[1:]]
-        common.write_json(output / 'frozen-command.json', command)
-        hashes = json.loads((output / 'compiled-hashes.json').read_text())
-        hashes['.lake/build/bin/flex-lean'] = common.digest(runner)
-        common.write_json(output / 'compiled-hashes.json', hashes)
     frozen = output / 'source/evaluation/RQ3a'
     frozen.mkdir(parents=True, exist_ok=True)
     for p in HERE.iterdir():
@@ -315,8 +304,6 @@ def main(study='a'):
                    help='outer process watchdog; defaults to the configuration budget plus 120 seconds')
     p.add_argument('--heartbeats', type=int, default=4000000)
     p.add_argument('--proof-heartbeats', type=int, default=40000)
-    p.add_argument('--native-runner', action='store_true',
-                   help='elaborate with flex-lean, which links the Flex tactics as native code')
     p.add_argument('--z3', default='z3')
     p.add_argument('--eldarica', default='eld')
     p.add_argument('--prepare-only', action='store_true')

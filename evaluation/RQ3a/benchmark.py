@@ -100,7 +100,6 @@ def invoke(path, directory, command, environment, seconds):
 
 def classify_case(case, study, output, header, command, env):
     directory = output / 'classification' / study / common.hashlib.sha256(case['case'].encode()).hexdigest()[:16]
-    directory.mkdir(parents=True, exist_ok=True)
     if (directory / 'record.json').exists():
         return json.loads((directory / 'record.json').read_text())
     if case['inventory_status'] != 'translated':
@@ -180,7 +179,6 @@ def build_setup(args, selection):
 def native(case, backend, args, command, env, header):
     directory = args.output/'native'/backend/case['case'].removesuffix('.lean')
     archive_attempt(directory)
-    directory.mkdir(parents=True, exist_ok=True)
     file = directory/'Case.lean'
     file.write_text(header+'\nrun_elab FlexParity.native\n')
     executable = args.z3 if backend == 'spacer' else args.eldarica
@@ -211,7 +209,6 @@ def trial(case, study, config, args, command, env, header):
     run_args.case_timeout = watchdog
     directory = run_args.output/'cases'/config/case['case'].removesuffix('.lean')
     archive_attempt(directory)
-    directory.mkdir(parents=True, exist_ok=True)
     record = common.run_case(case, config, run_args, command, {**env,
         'FLEX_SMT_STATS': str(directory/'smt_stats.jsonl'),
         'FLEX_PARITY_ZAP': str(int(zap)), 'FLEX_PARITY_FULL': str(int(fix)),

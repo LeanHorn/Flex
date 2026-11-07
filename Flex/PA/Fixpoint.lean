@@ -15,6 +15,7 @@ inductive PAProgress where
   | roundStarted (candidates : Nat)
   | roundFinished (before after : Nat)
   | converged (candidates : Nat)
+  | oracle (event : PASynthEvent)
 
 abbrev PAObserver := PAProgress → TermElabM Unit
 

@@ -113,7 +113,7 @@ private def SourceRule.origin : SourceRule → String
   | .accumulate => "accumulator completion"
   | .stateful => "stateful completion"
   | .algebra => "algebraic completion"
-  | .affine => "affine endpoints"
+  | .affine => "affine relations"
   | .measures => "measure transport"
   | .guarded => "state-guarded completion"
   | .fragments => "pending fragments"

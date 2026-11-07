@@ -18,6 +18,28 @@ inductive PASynthResult where
 /-- Check related candidate implications together, preserving their order. -/
 abbrev PASynthOracle := Array Expr → TermElabM (Array PASynthResult)
 
+structure PASynthEvent where
+  stage : String
+  status : String
+  elapsedMs : Nat := 0
+  queries : Nat := 0
+  valid : Nat := 0
+  invalid : Nat := 0
+  unknown : Nat := 0
+  guardShortcut : Bool := false
+  reasons : Array (String × Nat) := #[]
+
+abbrev PASynthObserver := PASynthEvent → TermElabM Unit
+
+/-- Only a literal `False` in the current local context certifies the whole batch. -/
+def paContextGuard : Expr :=
+  mkMData (KVMap.empty.setBool `flex.pa.contextGuard true) (mkConst ``False)
+
+def isPAContextGuard (target : Expr) : Bool :=
+  match target with
+  | .mdata data body => data.getBool `flex.pa.contextGuard false && body.isConstOf ``False
+  | _ => false
+
 /-- A failed proof attempt is unknown, not a counterexample. -/
 def PAOracle.toSynth (oracle : PAOracle) : PASynthOracle := fun targets =>
   targets.mapM fun target => do

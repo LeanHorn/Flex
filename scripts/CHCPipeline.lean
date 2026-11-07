@@ -138,6 +138,7 @@ private def runPA (ctx : Context) (close : Bool := true) : TacticM Unit := do
         ("initial_candidates", toJson (candidates.foldl (fun n (_, count) => n + count) 0)),
         ("candidates", Json.arr (candidates.map fun (name, count) => Json.mkObj [
           ("name", toJson name.toString), ("count", toJson count)]))]
+    | .oracle _ => pure ()
     | .roundStarted count =>
       rounds.modify (· + 1)
       emit ctx "fix_round" "running" [

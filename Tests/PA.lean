@@ -56,6 +56,8 @@ namespace PABatchTests
 
 open Lean Meta Elab Term
 
+private def fixedFunction (x : Int) : Int := x
+
 private def queries (terms : Array (TSyntax `term)) : TermElabM (Array Expr) :=
   terms.mapM fun term => do instantiateMVars (← elabTerm term none)
 
@@ -78,6 +80,35 @@ run_elab do
     #[.valid, .invalid]
   expect #[← `(∀ x : Int, 0 ≤ x → 0 ≤ x % 3),
            ← `(∀ x : Int, 0 ≤ x → x / 3 ≤ x)] #[.valid, .valid]
+  expect #[← `(∀ f : Int → Int, ∀ x : Int, f x = 0 → f x ≤ 0),
+           ← `(∀ f : Int → Int, ∀ x : Int, f x = 0 → 0 ≤ x),
+           ← `(∀ f : Int → Int, ∀ x : Int, f x = 0 → f (x + 1) = 0)]
+    #[.valid, .invalid, .invalid]
+  expect #[← `(∀ f : Int → Bool → Prop, f 0 true → f 0 true),
+           ← `(∀ f : Int → Bool → Prop, f 0 true → f 0 false)] #[.valid, .invalid]
+  expect #[← `(∀ f : Prop → Bool, ∀ p : Prop, p → f p = f True),
+           ← `(∀ f : Prop → Bool, ∀ p : Prop, p → f p = f False)] #[.valid, .invalid]
+  withLocalDeclD `f (← mkArrow (mkConst ``Int) (mkConst ``Int)) fun f => do
+    withLocalDeclD `x (mkConst ``Int) fun x => do
+      let query ← mkAppM ``LE.le #[mkIntLit 0, x]
+      unless (← Flex.PA.smtOracle 2000 #[query]) == #[.invalid] do
+        throwError "unused first-order function made an exact context incomplete"
+      withLocalDeclD `h (← mkEq (mkApp f x) (mkIntLit 0)) fun _ => do
+        unless (← Flex.PA.smtOracle 2000 #[query, ← mkEq (mkApp f x) (mkIntLit 0)]) ==
+            #[.invalid, .valid] do
+          throwError "first-order function assumption was lost"
+  withLocalDeclD `f (← mkArrow (mkConst ``Int) (mkConst ``Int)) fun f => do
+    withLocalDeclD `h (← mkEq f f) fun _ => do
+      let result ← Flex.PA.smtOracle 2000 #[mkConst ``False]
+      unless result.all (fun | .unknown _ => true | _ => false) do
+        throwError "omitted function equality was treated as an exact assumption"
+  for term in #[← `(fixedFunction 0 = 1), ← `(∀ f g : Int → Int, f = g),
+      ← `(∀ f : Int → Int → Int, f 0 = f 1),
+      ← `(∀ f : (Int → Int) → Int, f (fun x => x) = 0),
+      ← `(∀ f : (p : Prop) → p → Int, f True True.intro = 0)] do
+    let result ← Flex.PA.smtOracle 2000 (← queries #[term])
+    unless result.all (fun | .unknown _ => true | _ => false) do
+      throwError "exact SMT accepted a higher-order or dependent input"
   withLocalDeclD `x (mkConst ``Int) fun x => do
     withLocalDeclD `h (← mkEq x (mkIntLit 3)) fun _ => do
       let result ← Flex.PA.smtOracle 2000 #[← mkAppM ``LE.le #[mkIntLit 0, x]]
@@ -1438,3 +1469,104 @@ run_elab do
       if let some proof := proof then checkWithKernel proof
 
 end PAObservationTests
+
+namespace PASchedulingTests
+open Lean Meta Elab Term
+
+run_elab do
+  let events ← IO.mkRef (#[] : Array PASynthEvent)
+  let oracle := Flex.Automation.synthOracleWithObserver (pure ())
+    (fun event => events.modify (·.push event))
+  withLocalDeclD `x (mkConst ``Int) fun x => do
+    let zero ← mkNumeral (mkConst ``Int) 0
+    let positive ← mkAppM ``LT.lt #[zero, x]
+    let negative ← mkAppM ``LE.le #[x, zero]
+    withLocalDeclD `hp positive fun _ => withLocalDeclD `hn negative fun _ => do
+      let unsupported ← instantiateMVars (← elabTerm (← `(∀ n : Nat, n = n)) none)
+      let results ← oracle #[paContextGuard, unsupported]
+      unless results == #[.valid, .valid] do throwError "shared guard failed"
+      unless (← events.get).any (·.guardShortcut) do throwError "guard did not short-circuit"
+      if (← events.get).any (·.stage == "native fallback") then
+        throwError "proved guard retried native candidates"
+  let unrelated ← instantiateMVars (← elabTerm (← `(∀ x : Int, x < x → False)) none)
+  let results ← oracle #[unrelated, mkConst ``False]
+  unless results == #[.valid, .invalid] do
+    throwError "quantified query was mistaken for a shared-context guard"
+  withOptions (fun opts => opts.set `flex.automation.synthTimeout (0 : Nat)
+      |>.set `flex.automation.synthHeartbeats (1000 : Nat)) do
+    let easy ← instantiateMVars (← elabTerm (← `((1 : Int) = 1)) none)
+    let results ← oracle #[mkConst ``False, easy]
+    unless results[1]! == .valid && results[0]! != .valid do
+      throwError "cheap native sweep missed a later candidate"
+
+end PASchedulingTests
+
+namespace PAAffineTests
+open Lean Meta Elab Term
+
+-- Entry and transition clauses supply constants and coefficients, without target qualifiers.
+run_elab do
+  for (source, expected) in #[
+      (← `(fun (k : Int → Int → Prop) =>
+        k 0 5 ∧ (∀ x y, k x y → k (x + 1) (y - 1))),
+       ← `(fun (x y : Int) => x + y = 5)),
+      (← `(fun (k : Int → Int → Int → Prop) =>
+        (∀ n, k 0 n n) ∧ (∀ x y n, k x y n → k (x + 1) (y - 1) n)),
+       ← `(fun (x y n : Int) => x + y = n)),
+      (← `(fun (k : Int → Int → Prop) =>
+        k 0 7 ∧ (∀ x y, k x y → k (x + 2) (y - 3))),
+       ← `(fun (x y : Int) => 3 * x + 2 * y = 14)),
+      (← `(fun (k : Int → Int → Int → Prop) => ∀ initial : ULift.{0, 0} Int,
+        k 0 initial.down initial.down ∧
+        (∀ (count : Int) (current next : ULift.{0, 0} Int), k count current.down initial.down →
+          current = ULift.up (next.down + 1) → k (count + 1) next.down initial.down)),
+       ← `(fun (count current initial : Int) => count + current = initial))] do
+    let source ← elabTermAndSynthesize source none
+    let expected ← elabTermAndSynthesize expected none
+    let k ← mkFreshExprMVar (some source.bindingDomain!)
+    let body := source.bindingBody!.instantiate1 k
+    let result ← scrapePAQualifiersWithReport body { mode := .deep }
+    unless ← result.anchored.anyM (fun q => isDefEq q.qualifier expected) do
+      throwError "missing affine conservation: {expected}"
+    unless (← PAScrape.Structured.affineConservationCandidates body {} 0).isEmpty do
+      throwError "disabled affine discovery generated candidates"
+
+private def checkFixedAffine (count : Nat) (source expected : Expr) : TermElabM Unit := do
+  match count with
+  | 0 =>
+    let k ← mkFreshExprMVar (some source.bindingDomain!)
+    let body := source.bindingBody!.instantiate1 k
+    let result ← scrapePAQualifiersWithReport body { mode := .deep }
+    unless ← result.anchored.anyM (fun q => isDefEq q.qualifier expected) do
+      throwError "missing affine relation with fixed inputs: {expected}"
+  | n + 1 =>
+    withLocalDeclD source.bindingName! source.bindingDomain! fun input =>
+      checkFixedAffine n (source.bindingBody!.instantiate1 input) (mkApp expected input).headBeta
+
+run_elab do
+  for (fixedCount, source, expected) in #[
+      (1, ← `(fun (z : Int) (k : Int → Int → Prop) =>
+        k 0 z ∧ (∀ x y, k x y → k (x + 1) (y - 1))),
+       ← `(fun (z x y : Int) => x + y = z)),
+      (1, ← `(fun (size : Int → Int) (k : Int → Int → Int → Prop) =>
+        ∀ initial, k 0 initial initial ∧
+        (∀ count current next, k count current initial → size next = size current - 1 →
+          k (count + 1) next initial)),
+       ← `(fun (size : Int → Int) (count current initial : Int) =>
+         count + size current = size initial)),
+      (2, ← `(fun (α : Type) (size : α → Int) (k : Int → α → α → Prop) =>
+        ∀ initial, k 0 initial initial ∧
+        (∀ count current next, k count current initial → size next = size current - 1 →
+          k (count + 1) next initial)),
+       ← `(fun (α : Type) (size : α → Int) (count : Int) (current initial : α) =>
+         count + size current = size initial)),
+      (2, ← `(fun (size : Int → Int) (initial : Int) (k : Int → Int → Prop) =>
+        0 ≤ size initial → k 0 initial ∧
+        (∀ count current next, k count current → size next = size current - 1 →
+          k (count + 1) next)),
+       ← `(fun (size : Int → Int) (initial count current : Int) =>
+         count + size current = size initial))] do
+    checkFixedAffine fixedCount (← elabTermAndSynthesize source none)
+      (← elabTermAndSynthesize expected none)
+
+end PAAffineTests

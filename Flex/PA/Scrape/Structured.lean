@@ -6,7 +6,8 @@ open Lean Meta
 
 namespace PAScrape.Structured
 
-open PAScrape.Internal (support dependsOnArguments isResolved isCandidate appendCandidate indexedPredicates)
+open PAScrape.Internal (support containsArgument dependsOnArguments isResolved isCandidate
+  appendCandidate indexedPredicates)
 
 private def numeric (type : Expr) : MetaM Bool := do
   let type ← whnf type
@@ -100,6 +101,289 @@ def affineCandidates (properties arguments : Array Expr) (maxCandidates : Nat :=
         let candidate ← mkAppM ``LE.le #[left, right]
         out ← appendCandidate out candidate
         if out.size >= maxCandidates then return out
+  return out
+
+/-- Sparse affine forms keep source applications opaque. -/
+private structure AffineForm where
+  terms : Array (Expr × Rat) := #[]
+  constant : Rat := 0
+  deriving Inhabited
+
+private def AffineForm.coeff (form : AffineForm) (atom : Expr) : Rat :=
+  (form.terms.find? (·.1 == atom)).map (·.2) |>.getD 0
+
+private def AffineForm.add (a b : AffineForm) (scale : Rat := 1) : AffineForm := Id.run do
+  let mut terms := a.terms
+  for (atom, value) in b.terms do
+    if let some i := terms.findIdx? (·.1 == atom) then
+      terms := terms.set! i (atom, terms[i]!.2 + scale * value)
+    else terms := terms.push (atom, scale * value)
+  return ⟨terms.filter (·.2 != 0), a.constant + scale * b.constant⟩
+
+private def AffineForm.scale (a : AffineForm) (value : Rat) : AffineForm :=
+  ({} : AffineForm).add a value
+
+private def affineOp (e : Expr) (names : Array Name) : Bool :=
+  names.contains (e.getAppFn.constName?.getD .anonymous)
+
+private partial def affineForm (raw : Expr) (fuel : Nat := 64) : MetaM AffineForm := do
+  let e := raw.consumeMData.headBeta
+  if fuel == 0 then return ⟨#[(e, 1)], 0⟩
+  if let some value ← getIntValue? e then return ⟨#[], value⟩
+  let args := e.getAppArgs
+  if args.size >= 2 then
+    let a := args[args.size - 2]!
+    let b := args.back!
+    if affineOp e #[``HAdd.hAdd, ``Int.add, ``HSub.hSub, ``Int.sub] then
+      let sign := if affineOp e #[``HSub.hSub, ``Int.sub] then -1 else 1
+      return (← affineForm a (fuel - 1)).add (← affineForm b (fuel - 1)) sign
+    if affineOp e #[``HMul.hMul, ``Int.mul] then
+      if let some n ← getIntValue? a then return (← affineForm b (fuel - 1)).scale n
+      if let some n ← getIntValue? b then return (← affineForm a (fuel - 1)).scale n
+  if !args.isEmpty && affineOp e #[``Neg.neg, ``Int.neg] then
+    return (← affineForm args.back! (fuel - 1)).scale (-1)
+  -- Keep arithmetic in a selected field intact; whnf would also unfold that arithmetic.
+  if e.isProj then
+    if let some reduced ← reduceProj? e then return ← affineForm reduced (fuel - 1)
+  else if (← getProjectionFnInfo? (e.getAppFn.constName?.getD .anonymous)).isSome then
+    if let some reduced ← unfoldDefinition? e then return ← affineForm reduced (fuel - 1)
+  return ⟨#[(e, 1)], 0⟩
+
+private def reduceAffine (form : AffineForm) (basis : Array (Expr × AffineForm)) : AffineForm :=
+  basis.foldl (fun current (atom, row) => current.add row (-current.coeff atom)) form
+
+private def affineEquations (properties : Array Expr) : Array Expr := Id.run do
+  let mut pending := properties.toList
+  let mut equations := #[]
+  for _ in [:512] do
+    let e :: rest := pending | break
+    pending := rest
+    if !isResolved e then continue
+    if e.eq?.isSome && !equations.contains e then equations := equations.push e
+    pending := e.getAppArgs.toList ++ pending
+  return equations
+
+private def cyclicAffineAlias (input value : Expr) (aliases : Array (Expr × Expr)) : Bool := Id.run do
+  let mut pending := support value
+  let mut visited : FVarIdSet := {}
+  while let some id := pending.back? do
+    pending := pending.pop
+    if visited.contains id then continue
+    if id == input.fvarId! then return true
+    visited := visited.insert id
+    for (lhs, rhs) in aliases do
+      if lhs.fvarId! == id then pending := pending ++ support rhs
+  return false
+
+private def sourceAffineBasis (equations : Array Expr)
+    : MetaM (Array (Expr × AffineForm) × Array (Expr × Expr)) := do
+  let mut aliases := #[]
+  for equation in equations do
+    let some (type, lhs, rhs) := equation.eq? | continue
+    if (← whnf type).isConstOf ``Int then continue
+    for (a, b) in #[(lhs, rhs), (rhs, lhs)] do
+      if a.isFVar && !cyclicAffineAlias a b aliases then aliases := aliases.push (a, b)
+  let mut basis := #[]
+  for equation in equations do
+    let some (type, lhs, rhs) := equation.eq? | continue
+    unless (← whnf type).isConstOf ``Int do continue
+    let row := reduceAffine ((← affineForm lhs).add (← affineForm rhs) (-1)) basis
+    let some (atom, value) := row.terms[0]? | continue
+    basis := basis.push (atom, row.scale (1 / value))
+  return (basis, aliases)
+
+private def rewriteAffineAliases (e : Expr) (aliases : Array (Expr × Expr)) : Expr :=
+  (List.range 3).foldl (fun e _ => aliases.foldl (fun e (a, b) => e.replaceFVar a b) e) e
+
+private structure AffineSystem where
+  types : Array Expr
+  features : Array Expr := #[]
+  entryPairs : Array (Nat × Nat) := #[]
+  rows : Array (Nat × Array Rat) := #[]
+  entries : Nat := 0
+  transitions : Nat := 0
+  deriving Inhabited
+
+private def affineRow (rows : Array (Nat × Array Rat)) (input : Array Rat)
+    : Array (Nat × Array Rat) := Id.run do
+  let subtract (a b : Array Rat) (c : Rat) := a.zipWith (fun x y => x - c * y) b
+  let row := rows.foldl (fun row (i, old) => subtract row old row[i]!) input
+  let some pivot := row.findIdx? (· != 0) | return rows
+  let row := row.map (· / row[pivot]!)
+  return (rows.map fun (i, old) => (i, subtract old row old[pivot]!)).push (pivot, row)
+
+private partial def affineCalls (e : Expr) (fuel : Nat := 64) : Array Expr :=
+  if fuel == 0 then #[] else if e.getAppFn.isMVar then #[e]
+  else e.getAppArgs.foldl (fun found arg => found ++ affineCalls arg (fuel - 1)) #[]
+
+private partial def affineClauses (raw : Expr) (fuel : IO.Ref Nat)
+    (visit : Array Expr → Expr → MetaM Unit) (premises : Array Expr := #[]) : MetaM Unit := do
+  if (← fuel.get) == 0 then return
+  fuel.modify (· - 1)
+  let e := raw.consumeMData.headBeta
+  if let .letE _ _ value body _ := e then
+    affineClauses (body.instantiate1 value) fuel visit premises
+  else if let .forallE name type body bi := e then
+    let premises ← if ← isProp type then pure (premises.push type) else pure premises
+    withLocalDecl name bi type fun x => affineClauses (body.instantiate1 x) fuel visit premises
+  else if let some (left, right) := e.and? then
+    affineClauses left fuel visit premises
+    affineClauses right fuel visit premises
+  else if e.getAppFn.isMVar then visit premises e
+
+private def affineFeatures (fixed : FVarIdSet) (system : AffineSystem)
+    (properties : Array Expr) (relation : Expr) : MetaM AffineSystem := do
+  withLocalDeclsDND (system.types.map (`slot, ·)) fun slots => do
+    let mut features := system.features
+    if features.isEmpty then
+      for slot in slots do
+        if (← inferType slot).isConstOf ``Int then
+          features := features.push (← mkLambdaFVars slots slot)
+    let arguments := relation.getAppArgs
+    let mut pending := (properties ++ arguments).toList
+    for _ in [:512] do
+      let e :: rest := pending | break
+      pending := rest
+      if features.size >= 24 then break
+      pending := e.getAppArgs.toList ++ pending
+      unless (e.isApp || e.isFVar || e.isProj) && isResolved e do continue
+      unless (← whnf (← inferType e)).isConstOf ``Int do continue
+      if affineOp e #[``HAdd.hAdd, ``Int.add, ``HSub.hSub, ``Int.sub,
+          ``HMul.hMul, ``Int.mul, ``Neg.neg, ``Int.neg, ``OfNat.ofNat] then continue
+      let fixedValue := (support e).all fixed.contains
+      let value := if fixedValue then e else e.replace fun part =>
+        arguments.findIdx? (fun arg => arg.hasFVar && arg == part) |>.map (slots[·]!)
+      unless fixedValue || containsArgument value slots do continue
+      let feature ← mkLambdaFVars slots value
+      unless (support feature).all fixed.contains do continue
+      unless features.contains feature do features := features.push feature
+    return { system with features }
+
+/-- An entry's equal arguments transfer observed measures between those slots. -/
+private def closeAffineFeatures (system : AffineSystem) : MetaM AffineSystem := do
+  withLocalDeclsDND (system.types.map (`slot, ·)) fun slots => do
+    let mut features := system.features
+    let mut cursor := 0
+    let mut attempts := 0
+    while cursor < features.size && features.size < 24 && attempts < 256 do
+      let value := (mkAppN features[cursor]! slots).headBeta
+      cursor := cursor + 1
+      unless value.isApp || value.isProj do continue
+      for (a, b) in system.entryPairs do
+        for (source, target) in #[(a, b), (b, a)] do
+          if features.size >= 24 || attempts >= 256 then break
+          unless value.containsFVar slots[source]!.fvarId! do continue
+          attempts := attempts + 1
+          let feature ← mkLambdaFVars slots (value.replaceFVar slots[source]! slots[target]!)
+          unless features.contains feature do features := features.push feature
+    return { system with features }
+
+private def addAffineClause (system : AffineSystem) (premises : Array Expr) (head : Expr)
+    : MetaM AffineSystem := do
+  let previous := premises.flatMap affineCalls |>.find? (·.getAppFn == head.getAppFn)
+  let (basis, aliases) ← sourceAffineBasis (affineEquations premises)
+  let evaluate (feature relation : Expr) := do
+    let value := (mkAppN feature relation.getAppArgs).headBeta
+    return reduceAffine (← affineForm (rewriteAffineAliases value aliases)) basis
+  let mut forms := #[]
+  for feature in system.features do
+    let after ← evaluate feature head
+    let before ← match previous with
+      | some relation => evaluate feature relation
+      | none => pure {}
+    forms := forms.push (after.add before (-1))
+  forms := forms.push ⟨#[], if previous.isSome then 0 else 1⟩
+  let atoms := forms.foldl (fun atoms form =>
+    form.terms.foldl (fun atoms (atom, _) => if atoms.contains atom then atoms else atoms.push atom) atoms) #[]
+  let mut rows := system.rows
+  for atom in atoms do rows := affineRow rows (forms.map (·.coeff atom))
+  rows := affineRow rows (forms.map (·.constant))
+  return { system with
+    rows
+    entries := system.entries + (if previous.isNone then 1 else 0)
+    transitions := system.transitions + (if previous.isSome then 1 else 0) }
+
+private def affineKernel (system : AffineSystem) : Array (Array Int) := Id.run do
+  let mut out := #[]
+  for free in [:system.features.size + 1] do
+    if system.rows.any (·.1 == free) then continue
+    let mut vector := (Array.replicate (system.features.size + 1) (0 : Rat)).set! free 1
+    for (pivot, row) in system.rows do vector := vector.set! pivot (-row[free]!)
+    let denominator := vector.foldl (fun n q => Nat.lcm n q.den) 1
+    let integers := vector.map fun q => q.num * ((denominator / q.den : Nat) : Int)
+    let divisor := integers.foldl (fun n c => Nat.gcd n c.natAbs) 0
+    let sign := if (integers.find? (· != 0)).getD 0 < 0 then -1 else 1
+    out := out.push (integers.map fun c => sign * (c / (divisor : Int)))
+  return out
+
+/-- Infer a bounded affine space from entry calls and source transition equations.
+`maxNodes` bounds clause traversal; features and nested observations have separate caps.
+Conditional equations only suggest relations; PA still checks every candidate. -/
+def affineConservationCandidates (body : Expr) (fixed : FVarIdSet)
+    (maxCandidates : Nat := 16) (maxNodes : Nat := 5000) : MetaM (Array PAAnchoredQualifier) :=
+    withNewMCtxDepth do
+  if maxCandidates == 0 || maxNodes == 0 then return #[]
+  let systems ← IO.mkRef ({} : Std.HashMap MVarId AffineSystem)
+  let fuel ← IO.mkRef maxNodes
+  affineClauses body fuel fun premises head => do
+    let id := head.getAppFn.mvarId!
+    let mut system ← match (← systems.get)[id]? with
+      | some system => pure system
+      | none => do
+        let types ← head.getAppArgs.mapM (fun arg => do whnf (← inferType arg))
+        if types.size > 24 || types.any (fun ty =>
+            !isResolved ty || !(support ty).all fixed.contains) then return
+        pure { types }
+    let previous := premises.flatMap affineCalls
+    for relation in #[head] ++ previous do
+      if relation.getAppFn == head.getAppFn then
+        system ← affineFeatures fixed system premises relation
+    unless previous.any (·.getAppFn == head.getAppFn) do
+      let arguments := head.getAppArgs
+      for i in [:arguments.size] do
+        for j in [:i] do
+          if arguments[i]! == arguments[j]! && !system.entryPairs.contains (i, j) then
+            system := { system with entryPairs := system.entryPairs.push (i, j) }
+    systems.modify (·.insert id system)
+  for (id, system) in (← systems.get).toArray do
+    let system ← closeAffineFeatures system
+    systems.modify (·.insert id system)
+  fuel.set maxNodes
+  affineClauses body fuel fun premises head => do
+    let id := head.getAppFn.mvarId!
+    if let some system := (← systems.get)[id]? then
+      let system ← addAffineClause system premises head
+      systems.modify (·.insert id system)
+  let mut out := #[]
+  for (id, system) in (← systems.get).toArray do
+    if system.entries == 0 || system.transitions == 0 then continue
+    let candidates ← withLocalDeclsDND (system.types.map (`slot, ·)) fun slots => do
+      let mut candidates := #[]
+      let mut count := 0
+      for vector in affineKernel system do
+        if count >= maxCandidates then break
+        let values := system.features.map (fun f => (mkAppN f slots).headBeta)
+        let mut left : Option Expr := none
+        let mut right : Option Expr := none
+        for coefficient in vector, i in [:vector.size] do
+          if coefficient == 0 then continue
+          let value ← if i == values.size then pure (mkIntLit coefficient.natAbs)
+            else if coefficient.natAbs == 1 then pure values[i]!
+            else pure (mkApp2 (mkConst ``Int.mul) (mkIntLit coefficient.natAbs) values[i]!)
+          if coefficient > 0 then
+            left := some (left.map (mkApp2 (mkConst ``Int.add) · value) |>.getD value)
+          else right := some (right.map (mkApp2 (mkConst ``Int.add) · value) |>.getD value)
+        let property ← mkEq (left.getD (mkIntLit 0)) (right.getD (mkIntLit 0))
+        let used := slots.filter fun slot => property.containsFVar slot.fvarId!
+        if used.isEmpty then continue
+        let qualifier ← mkLambdaFVars used property
+        check qualifier
+        let indices := slots.toList.zipIdx |>.filterMap fun (slot, i) =>
+          if used.contains slot then some i else none
+        candidates := candidates.push (⟨id, qualifier, indices, "affine relations"⟩ : PAAnchoredQualifier)
+        count := count + 1
+      return candidates
+    out := out ++ candidates
   return out
 
 /-- Compare a source observation at fixed inputs and at up to two predicate slots. -/

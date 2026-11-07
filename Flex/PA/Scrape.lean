@@ -19,6 +19,7 @@ The schemas below propose candidates; PA validates their instances.
 | Slot substitution | `sorted a n`, slot `i` → `sorted a i` | Structured |
 | Endpoint occurrence | `v = n * n`, slot `i` → `v = n * i` | Structured |
 | Affine transport | `i = n + 1`, `v = f n` → `v = f (i - 1)` | Structured |
+| Affine conservation | entry `(0, c)`, update `(+1, -1)` → `x + y = c` | Structured |
 | Scalar measures | `v = f input`, slot `rest` → `f rest = f input` | Structured |
 | Completion | `acc = xs.sum` → `acc + rest.sum = xs.sum` | Accumulate |
 | Algebraic completion | `acc = xs.all p` → `(acc && rest.all p) = xs.all p` | Accumulate |
@@ -114,6 +115,10 @@ private def collect (cfg : PAScrapeConfig) (body : Expr) : ScrapeM Unit := do
     if cfg.mode == .deep then
       let stable ← stablePredicateSlots body cfg.maxNodes
       modify fun s => { s with stableSlots := stable }
+      let affine ← Structured.affineConservationCandidates body (← get).fixed
+        cfg.maxAffineCandidatesPerKappa cfg.maxAnchoredNodes
+      let affine := affine.extract 0 cfg.maxAnchoredAttempts
+      modify fun s => { s with anchored := s.anchored ++ affine }
       let extraCap := SourceRule.all.foldl (fun n rule => n + rule.cap cfg) 0
       for rule in SourceRule.all do
         if rule.cap cfg == 0 then continue

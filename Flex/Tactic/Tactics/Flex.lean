@@ -112,23 +112,6 @@ private def guarded (act : TacticM α) (quiet : Bool := true) : TacticM (Except 
   finally
     if quiet then Core.setMessageLog messages
 
-private def checkTime (ctx : Context) : TermElabM Unit := do
-  Core.checkInterrupted
-  if let some deadline := ctx.deadline then
-    if (← IO.monoMsNow) >= deadline then throwError "flex: time budget exhausted"
-
-private def withRemainingTime (ctx : Context) (action : TermElabM α) : TermElabM α := do
-  checkTime ctx
-  let some deadline := ctx.deadline | return ← action
-  let remaining := max 1 (deadline - (← IO.monoMsNow))
-  let seconds := (remaining + 999) / 1000
-  withOptions (fun opts =>
-    let opts := if flex.automation.smtTimeout.get opts == 0 then opts else
-      flex.automation.smtTimeout.set opts seconds
-    let check := flex.automation.synthTimeout.get opts
-    if check == 0 then opts else
-      flex.automation.synthTimeout.set opts (min check remaining)) action
-
 private def withBudget (ctx : Context) (heartbeats : Nat) (act : TacticM α) : TacticM α := do
   let configured := if ctx.setup.config.heartbeats == 0 then heartbeats
     else ctx.setup.config.heartbeats
@@ -148,7 +131,7 @@ private def phase (ctx : Context) (name : String) (heartbeats : Nat)
   let status ← IO.mkRef "interrupted"
   try
     let result ← guarded <| withBudget ctx heartbeats do
-      checkTime ctx
+      Flex.Timeout.checkDeadline
       act
     status.set (match result with | .ok _ => "ok" | .error _ => "failed")
     if let .error message := result then trace[flex] "{name}: {message}"
@@ -278,24 +261,24 @@ private def tidy (ctx : Context) (parent : MVarId) : TacticM Unit := do
     let goals ← Flex.Residual.bundle parent (← getUnsolvedGoals)
     setGoals (← goals.filterM fun goal => return !(← goal.isAssignedOrDelayedAssigned))
 
-private def proofOracle (ctx : Context) : PAOracle := fun target => withRemainingTime ctx do
+/-- Stages and backend attempts run under `Flex.Timeout.run`, which passes their deadline to
+the automation below; it checks the deadline and caps its external calls by it. -/
+private def proofOracle (ctx : Context) : PAOracle := fun target => do
   if let some tactic := ctx.setup.proof then
     if let some proof ← Flex.Automation.proveWith tactic target then return some proof
   Flex.Automation.proofOracle target
 
-private def synthOracle (ctx : Context) : PASynthOracle := fun targets => withRemainingTime ctx do
-  let result ← match ctx.setup.synth with
-    | none => Flex.Automation.synthOracle (checkTime ctx) targets
-    | some tactic => (withPAPriority tactic).toSynth targets
-  checkTime ctx
-  return result
+private def synthOracle (ctx : Context) : PASynthOracle := fun targets =>
+  match ctx.setup.synth with
+  | none => Flex.Automation.synthOracle targets
+  | some tactic => (withPAPriority tactic).toSynth targets
 
 private def close (ctx : Context) : TacticM Unit := do
   unless ctx.setup.config.closeLeaves do return
   let oracle : PAOracle := match ctx.setup.closer with
     | none => proofOracle ctx
     | some tactic => fun target => do
-        checkTime ctx
+        Flex.Timeout.checkDeadline
         Flex.Automation.proveWith tactic target
   let mut remaining := []
   for goal in ← getGoals do
@@ -313,7 +296,7 @@ private def close (ctx : Context) : TacticM Unit := do
   setGoals remaining
 
 private partial def validate (ctx : Context) (target : Expr) : TermElabM PASynthResult := do
-  checkTime ctx
+  Flex.Timeout.checkDeadline
   let target ← instantiateMVars target
   if target.isConstOf ``True then return .valid
   if target.isForall then
@@ -405,10 +388,9 @@ private def runBackend (ctx : Context) (backend : Backend)
   | .spacer | .eldarica =>
     let name := if backend == .spacer then flex.spacer.executable else flex.eldarica.executable
     let validated ← IO.mkRef false
-    checkTime ctx
-    let remaining ← match ctx.deadline with
-      | some deadline => pure (max 1 (deadline - (← IO.monoMsNow)))
-      | none => pure (UInt64.size - 1)
+    -- The attempt's deadline (this backend's share), not the stage's.
+    let deadline ← Flex.Timeout.deadline?
+    let remaining ← Flex.Timeout.capMs (UInt64.size - 1)
     let timeout := if ctx.setup.config.solverTimeout == 0 then remaining else
       min remaining (ctx.setup.config.solverTimeout * 1000)
     let searchAttempts := if backend == .spacer then 3 else 2
@@ -416,8 +398,8 @@ private def runBackend (ctx : Context) (backend : Backend)
       backend := if backend == .spacer then .spacer else .eldarica
       executable := some (name.get (← getOptions))
       -- Leave the next backend a chance when retries would exhaust the deadline.
-      retrySearch := ctx.deadline.isNone || remaining > searchAttempts * timeout
-      deadlineMs := ctx.deadline
+      retrySearch := deadline.isNone || remaining > searchAttempts * timeout
+      deadlineMs := deadline
       timeoutMs := timeout } (proofOracle ctx) (headsOnly := true)
       (onPhase := fun stage elapsed => do
         let name := match stage with

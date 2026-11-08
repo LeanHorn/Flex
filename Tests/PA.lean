@@ -1474,3 +1474,29 @@ run_elab do
       (← elabTermAndSynthesize expected none)
 
 end PAAffineTests
+
+namespace PABudgetTests
+open Lean Meta Elab Term
+
+run_elab do
+  let easy ← instantiateMVars (← elabTerm (← `((1 : Int) = 1)) none)
+  -- A small shared budget still gives a later candidate the cheap native pass.
+  withOptions (fun opts => opts.set `flex.automation.synthTimeout (0 : Nat)
+      |>.set `flex.automation.synthHeartbeats (1000 : Nat)) do
+    let results ← Flex.Automation.synthOracle #[mkConst ``False, easy]
+    unless results[1]! == .valid && results[0]! != .valid do
+      throwError "cheap native pass missed a later candidate"
+  -- No budget: no native fallback.
+  withOptions (fun opts => opts.set `flex.automation.synthTimeout (0 : Nat)
+      |>.set `flex.automation.synthHeartbeats (0 : Nat)) do
+    let results ← Flex.Automation.synthOracle #[easy]
+    unless results.all (fun | .unknown _ => true | _ => false) do
+      throwError "native fallback ran with a zero heartbeat budget"
+  -- An expired enclosing deadline stops synthesis instead of starting it.
+  let expired ← try
+      discard <| Flex.Timeout.withDeadline (some 1) (Flex.Automation.synthOracle #[easy])
+      pure false
+    catch _ => pure true
+  unless expired do throwError "synthesis ran past its deadline"
+
+end PABudgetTests

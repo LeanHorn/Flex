@@ -27,11 +27,11 @@ positive-test directory membership is not a SAT guarantee. No outcome filtering.
 
 All use the same checked discharge, True/False preprocessing, no nesting, and no
 postprocessing. Fix decides candidates with the exact SMT encoding only: the native
-Lean fallback for undecided synthesis queries is off (`flex.automation.nativeFallback`),
+Lean fallback for undecided synthesis queries is off (`flex.automation.synthHeartbeats` = 0),
 and undecided candidates are dropped. Certification, safety validation and discharge
 still use Lean automation. Non-linear arithmetic is encoded (`flex.smt.encodeNonlinear`
 on; off by default in Flex). `invocation.json` records these settings
-(`native_fallback`, `smt_encode_nonlinear`); earlier runs used the fallback and must not
+(`synth_heartbeats`, `smt_encode_nonlinear`); earlier runs used the fallback and must not
 be pooled with new ones.
 Fix escalates Bank → Basic → Standard → Deep. The combined arm
 reserves one 180 s block for Zap + Fix and one for S/E, cancelling each at its own

@@ -20,7 +20,7 @@ import, validation, certification and closing; unused time passes forward.
 All Flex arms use the same discharge automation, 4,000,000 phase heartbeats,
 40,000 proof-automation heartbeats, and True/False preprocessing. Nesting and
 optional postprocessing are off. As in RQ3a, Fix decides candidates with the exact
-SMT encoding only (`flex.automation.nativeFallback` off), with non-linear arithmetic
+SMT encoding only (`flex.automation.synthHeartbeats` = 0), with non-linear arithmetic
 encoded (`flex.smt.encodeNonlinear` on); certification and discharge still use Lean
 automation. Fix escalates Bank → Basic → Standard → Deep.
 Accepted invariants survive stage timeouts. Zap and Fix act where predicates

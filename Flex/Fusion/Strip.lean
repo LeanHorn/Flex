@@ -9,21 +9,27 @@ open Lean Meta
     (like `0 ≤ x →`) are skipped but not counted, matching the original
     `Constraint.imp` behavior where each imp bundled a type binder with its guard. -/
 partial def countScopeVars (κ : KVar) (e : Expr) : KM Nat := do
-  -- let e ← whnf e
-  if e.isForall then
-    let dom := e.bindingDomain!
-    if !(← KM.exprKVars dom).contains κ then
-      let domSort ← (inferType dom >>= whnf : MetaM Expr)
-      withLocalDeclD e.bindingName! dom fun fvar => do
-        let rest ← countScopeVars κ (e.bindingBody!.instantiate1 fvar)
-        if domSort.isProp then
-          -- Prop guard: strip but don't count
-          return rest
-        else
-          -- Value binder: count as scope var
-          return 1 + rest
+  go κ ((← KM.getKVarList).contains κ) e
+where
+  -- `tracked`: whether κ is in the predicate context, computed once per walk. A κ check is then a
+  -- single traversal, `tracked && x.containsMVar κ.mvarId`, with the same answer as
+  -- `(← KM.exprKVars x).contains κ`, which traverses `x` once per κ in the context.
+  go (κ : KVar) (tracked : Bool) (e : Expr) : KM Nat := do
+    -- let e ← whnf e
+    if e.isForall then
+      let dom := e.bindingDomain!
+      if !(tracked && dom.containsMVar κ.mvarId) then
+        let domSort ← (inferType dom >>= whnf : MetaM Expr)
+        withLocalDeclD e.bindingName! dom fun fvar => do
+          let rest ← go κ tracked (e.bindingBody!.instantiate1 fvar)
+          if domSort.isProp then
+            -- Prop guard: strip but don't count
+            return rest
+          else
+            -- Value binder: count as scope var
+            return 1 + rest
+      else return 0
     else return 0
-  else return 0
 
 /-- Collect ALL κ-applications in `e`, returning a list of their argument arrays.
     Skips into inner binders without instantiating, so args may contain loose bvars.
@@ -142,22 +148,25 @@ def exprPartitionKVars (e : Expr) : KM (List KVar × List KVar) := do
     local context). Only AFTER sol1 builds the final sol do we substitute
     each recorded fvar with its synthetic κ-param fvar — that substitution
     is the analog of `solToWitnessExpr`'s param→fvar mapping. -/
-partial def exprSolScoped (κ : KVar) (e : Expr) : KM Expr :=
-  goStrip κ e []
+partial def exprSolScoped (κ : KVar) (e : Expr) : KM Expr := do
+  goStrip κ ((← KM.getKVarList).contains κ) e []
 where
+  -- `tracked`: whether κ is in the predicate context, computed once per walk. A κ check is then a
+  -- single traversal, `tracked && x.containsMVar κ.mvarId`, with the same answer as
+  -- `(← KM.exprKVars x).contains κ`, which traverses `x` once per κ in the context.
   /-- Descend through the outer prefix, accumulating
       `(fvar, paramName)` pairs of bindings we'll substitute on the final sol. -/
-  goStrip (κ : KVar) (e : Expr) (acc : List (FVarId × Name)) : KM Expr := do
+  goStrip (κ : KVar) (tracked : Bool) (e : Expr) (acc : List (FVarId × Name)) : KM Expr := do
     if e.isForall then
       let dom := e.bindingDomain!
-      if (← KM.exprKVars dom).contains κ then
+      if (tracked && dom.containsMVar κ.mvarId) then
         finalize κ e acc
       else
         let domSort ← (inferType dom >>= whnf : MetaM Expr)
         withLocalDeclD e.bindingName! dom fun fvar => do
           let body := e.bindingBody!.instantiate1 fvar
           if domSort.isProp then
-            goStrip κ body acc
+            goStrip κ tracked body acc
           else
             -- See `exprSolScopedPres`: never fold a sort-typed (`Prop`/`Type`)
             -- binder into a κ-param — it would corrupt guards mentioning it.
@@ -166,7 +175,7 @@ where
             match foldAt with
             | some i =>
               let paramName := κ.params[i]!
-              goStrip κ body (acc ++ [(fvar.fvarId!, paramName)])
+              goStrip κ tracked body (acc ++ [(fvar.fvarId!, paramName)])
             | none =>
               -- Stop stripping. Re-close `fvar` so c' is well-formed (no
               -- dangling fvar after we exit this `withLocalDeclD`), then

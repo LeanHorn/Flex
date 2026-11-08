@@ -24,31 +24,34 @@ structure ScopedSolPres where
     Mirrors `exprSolScoped` (Strip.lean) verbatim apart from: the `∧`-routing
     branch, the `(nB,nG,nOr)` prefix counters, and `exprSol1Pres` (preserving)
     in `finalize` instead of `exprSol1` (branch-stripping). -/
-partial def exprSolScopedPres (κ : KVar) (e : Expr) : KM ScopedSolPres :=
-  goStrip κ e [] 0 0 0
+partial def exprSolScopedPres (κ : KVar) (e : Expr) : KM ScopedSolPres := do
+  goStrip κ ((← KM.getKVarList).contains κ) e [] 0 0 0
 where
-  goStrip (κ : KVar) (e : Expr) (acc : List (Expr × Name))
+  -- `tracked`: whether κ is in the predicate context, computed once per walk. A κ check is then a
+  -- single traversal, `tracked && x.containsMVar κ.mvarId`, with the same answer as
+  -- `(← KM.exprKVars x).contains κ`, which traverses `x` once per κ in the context.
+  goStrip (κ : KVar) (tracked : Bool) (e : Expr) (acc : List (Expr × Name))
       (nB nG nOr : Nat) : KM ScopedSolPres := do
     -- ∧ routing: descend the unique κ-branch; κ in both ⇒ LCA, stop here.
     if let some (l, r) := e.and? then
-      let lHas := (← KM.exprKVars l).contains κ
-      let rHas := (← KM.exprKVars r).contains κ
+      let lHas := (tracked && l.containsMVar κ.mvarId)
+      let rHas := (tracked && r.containsMVar κ.mvarId)
       if lHas && !rHas then
-        goStrip κ l acc nB nG (nOr + 1)
+        goStrip κ tracked l acc nB nG (nOr + 1)
       else if rHas && !lHas then
-        goStrip κ r acc nB nG (nOr + 1)
+        goStrip κ tracked r acc nB nG (nOr + 1)
       else
         finalize κ e acc nB nG nOr
     else if e.isForall then
       let dom := e.bindingDomain!
-      if (← KM.exprKVars dom).contains κ then
+      if (tracked && dom.containsMVar κ.mvarId) then
         finalize κ e acc nB nG nOr
       else
         let domSort ← (inferType dom >>= whnf : MetaM Expr)
         withLocalDeclD e.bindingName! dom fun fvar => do
           let body := e.bindingBody!.instantiate1 fvar
           if domSort.isProp then
-            goStrip κ body acc nB (nG + 1) nOr
+            goStrip κ tracked body acc nB (nG + 1) nOr
           else
             -- 2a: a Prop κ-arg (`dom = Sort 0`) at a *universal* slot folds — its
             -- slot equality carries the constraint (e.g. `z2 = True`), giving the
@@ -61,7 +64,7 @@ where
                           else findOuterBinderToParam κ fvar.fvarId! body
             match foldAt with
             | some i =>
-              goStrip κ body (acc ++ [(fvar, κ.params[i]!)]) (nB + 1) nG nOr
+              goStrip κ tracked body (acc ++ [(fvar, κ.params[i]!)]) (nB + 1) nG nOr
             | none =>
               -- 2b: a struct-typed scope binder reaches κ only via projections
               -- (`Foo.field x`), so the bare-fvar check above misses it. Fold the
@@ -74,7 +77,7 @@ where
                 body
               if !projFolds.isEmpty && !bodyNoProj.containsFVar fvar.fvarId! then
                 let acc' := acc ++ projFolds.map (fun (pe, i) => (pe, κ.params[i]!))
-                goStrip κ body acc' (nB + 1) nG nOr
+                goStrip κ tracked body acc' (nB + 1) nG nOr
               else
                 -- stop-strip: re-close fvar; this binder stays below the LCA.
                 let bodyClosed := body.abstract #[fvar]

@@ -17,46 +17,6 @@ open Lean Meta Elab Term
 private def unknowns (count : Nat) (reason : String) : Array PASynthResult :=
   Array.replicate count (.unknown reason)
 
-/-- Exact PA inputs have only nondependent scalar argument and result sorts. -/
-private partial def inputType (type : Expr) : MetaM Expr := do
-  let type ← whnf type
-  if let .forallE _ domain body _ := type then
-    if body.hasLooseBVars then throwError "PA SMT: dependent function input"
-    discard <| CHC.Fragment.valueSort domain
-    return ← mkArrow (← whnf domain) (← inputType body)
-  discard <| CHC.Fragment.valueSort type
-  return type
-
-private def hasFunctionSort : Smt.Term → Bool
-  | .arrowT .. => true
-  | .appT f a => hasFunctionSort f || hasFunctionSort a
-  | .forallT _ t b | .existsT _ t b => hasFunctionSort t || hasFunctionSort b
-  | .letT _ v b => hasFunctionSort v || hasFunctionSort b
-  | _ => false
-
-private def functionSignature : Smt.Term → List Smt.Term
-  | .arrowT a b => a :: functionSignature b
-  | t => [t]
-
-private partial def firstOrderTerm (arities : Std.HashMap String Nat) : Smt.Term → Bool
-  | .symbolT name => arities[name]?.getD 0 == 0
-  | .literalT _ => true
-  | .arrowT .. => false
-  | .forallT name type body | .existsT name type body =>
-    !hasFunctionSort type && firstOrderTerm (arities.insert name 0) body
-  | .letT name value body =>
-    firstOrderTerm arities value && firstOrderTerm (arities.insert name 0) body
-  | term@(.appT ..) =>
-    let (head, args) := application term []
-    match head with
-    | .symbolT name =>
-      (arities[name]?.all (· == args.length)) && args.all (firstOrderTerm arities)
-    | _ => false
-where
-  application : Smt.Term → List Smt.Term → Smt.Term × List Smt.Term
-    | .appT f a, args => application f (a :: args)
-    | f, args => (f, args)
-
 /-- Open only binders and premises shared by every query in the batch. -/
 private partial def withSharedPrefix (queries : Array Expr)
     (k : Array Expr → Array Expr → Array Expr → MetaM α) (scalars : Bool := true) : MetaM α :=
@@ -74,7 +34,7 @@ where
       withLocalDecl name bi domain fun proof =>
         go (queries.map (·.bindingBody!.instantiate1 proof)) inputs (premises.push domain)
     else
-      if scalars then discard <| inputType domain
+      if scalars then discard <| CHC.Fragment.valueSort domain
       let domain ← if scalars then pure domain else whnf domain
       withLocalDecl name bi domain fun input =>
         go (queries.map (·.bindingBody!.instantiate1 input)) (inputs.push input) premises
@@ -94,13 +54,13 @@ private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch :=
       try
         let assumption ← zetaReduce (← instantiateMVars declaration.type)
         for id in (collectFVars {} assumption).fvarIds do
-          discard <| inputType (← inferType (mkFVar id))
+          discard <| CHC.Fragment.valueSort (← inferType (mkFVar id))
         assumptions := assumptions.push (← CHC.Prepare.atom assumption true)
       catch error =>
         if error.isInterrupt then throw error
         omittedAssumptions := true
     else
-      try discard <| inputType declaration.type
+      try discard <| CHC.Fragment.valueSort declaration.type
       catch error =>
         if error.isInterrupt then throw error
         -- A local value of an unsupported type may witness an empty type.
@@ -112,7 +72,7 @@ private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch :=
     for conclusion in conclusions, i in [:conclusions.size] do
       try
         for id in (collectFVars {} conclusion).fvarIds do
-          discard <| inputType (← inferType (mkFVar id))
+          discard <| CHC.Fragment.valueSort (← inferType (mkFVar id))
         supported := supported.push (i, conclusion)
       catch error =>
         if error.isInterrupt then throw error
@@ -124,17 +84,12 @@ private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch :=
         unless inputs.contains input do inputs := inputs.push input
     let mut names : Std.HashMap FVarId String := {}
     let mut script := s!"(set-option :print-success false)\n(set-option :produce-models false)\n(set-option :produce-proofs false)\n(set-option :produce-unsat-cores false)\n(set-option :timeout {timeoutMs})\n(set-logic ALL)\n"
-    let mut arities : Std.HashMap String Nat := {}
     for input in inputs, i in [:inputs.size] do
-      let type ← inputType (← inferType input)
-      let ((sort, constants, freeVariables), _) ←
-        (Smt.Translator.translateExpr type).run {}
-      unless constants.isEmpty && freeVariables.isEmpty do
-        throwError "PA SMT: unsupported input signature dependencies"
+      let sort ← CHC.Fragment.valueSort (← inferType input)
       let name := s!"pa_{i}"
       names := names.insert input.fvarId! name
-      arities := arities.insert name ((functionSignature sort).length - 1)
-      script := script ++ s!"{Smt.Translate.Command.declare name sort}\n"
+      let sort := match sort with | .int => "Int" | .bool => "Bool"
+      script := script ++ s!"(declare-const {name} {sort})\n"
     let symbols := inputs.map fun input => names[input.fvarId!]!
     -- The context and symbol mapping stay fixed for this batch. Commit only
     -- checked translations, so a rejected candidate cannot contaminate the cache.
@@ -149,8 +104,6 @@ private def buildBatch (queries : Array Expr) (timeoutMs : Nat) : MetaM Batch :=
       unless constants.isEmpty && freeVariables.toArray.all names.contains do
         throwError "PA SMT: unsupported constant or free-input dependencies"
       CHC.Fragment.checkTerm term symbols true
-      unless firstOrderTerm arities term do
-        throwError "PA SMT: partial application or higher-order term"
       translation.set next
       terms.modify (·.insert input term)
       return term
@@ -206,7 +159,7 @@ def decodeSmtResponses (response : CHC.Process.Result) (count : Nat)
 
 /-- Check a batch using one bounded Z3 process. Results guide synthesis only;
 the selected predicates still require independent Lean certification. -/
-def smtOracleObserved (timeoutMs : Nat) (observe : PASynthObserver) : PASynthOracle := fun queries => do
+def smtOracle (timeoutMs : Nat := 2000) : PASynthOracle := fun queries => do
   if queries.isEmpty then return #[]
   if timeoutMs == 0 then return unknowns queries.size "SMT timeout must be positive"
   withNewMCtxDepth do
@@ -215,19 +168,11 @@ def smtOracleObserved (timeoutMs : Nat) (observe : PASynthObserver) : PASynthOra
       let queries ← queries.mapM fun query => do zetaReduce (← instantiateMVars query)
       if queries.any (fun q => q.hasMVar || q.hasLooseBVars) then
         return unknowns queries.size "unresolved metavariable or loose binder"
-      observe { stage := "translation", status := "start", queries := queries.size }
-      let started ← IO.monoMsNow
-      let batch ← try CHC.Fragment.withTranslators (buildBatch queries timeoutMs) true
-        finally
-          observe { stage := "translation", status := "end", queries := queries.size, elapsedMs := (← IO.monoMsNow) - started }
+      let batch ← CHC.Fragment.withTranslators (buildBatch queries timeoutMs) true
       if batch.indices.isEmpty then return batch.results
       Core.checkInterrupted
-      observe { stage := "solver", status := "start", queries := batch.indices.size }
-      let started ← IO.monoMsNow
-      let response ← try CHC.Process.run {
-          executable := "z3", args := #["-in", "-smt2"], timeoutMs } batch.script
-        finally
-          observe { stage := "solver", status := "end", queries := batch.indices.size, elapsedMs := (← IO.monoMsNow) - started }
+      let response ← CHC.Process.run {
+        executable := "z3", args := #["-in", "-smt2"], timeoutMs } batch.script
       Core.checkInterrupted
       let answers := decodeSmtResponses response batch.indices.size
       let mut results := batch.results
@@ -248,9 +193,6 @@ def smtOracleObserved (timeoutMs : Nat) (observe : PASynthObserver) : PASynthOra
     finally
       set saved.elab
       CHC.restoreMetaState saved.meta
-
-def smtOracle (timeoutMs : Nat := 2000) : PASynthOracle :=
-  smtOracleObserved timeoutMs (fun _ => pure ())
 
 /-- Expose definitional wrappers without unfolding arithmetic operations. -/
 def unfoldAbbreviations (expression : Expr) : MetaM Expr :=
@@ -398,6 +340,36 @@ private partial def solverSexp : Sexp → Sexp
         xs.zipIdx.all (fun (x, i) => i % 2 == 0 || x == .atom "->") then
       .expr (.atom "->" :: (xs.zipIdx.filterMap fun (x, i) => if i % 2 == 0 then some x else none))
     else .expr xs
+
+private def hasFunctionSort : Smt.Term → Bool
+  | .arrowT .. => true
+  | .appT f a => hasFunctionSort f || hasFunctionSort a
+  | .forallT _ t b | .existsT _ t b => hasFunctionSort t || hasFunctionSort b
+  | .letT _ v b => hasFunctionSort v || hasFunctionSort b
+  | _ => false
+
+private def functionSignature : Smt.Term → List Smt.Term
+  | .arrowT a b => a :: functionSignature b
+  | t => [t]
+
+private partial def firstOrderTerm (arities : Std.HashMap String Nat) : Smt.Term → Bool
+  | .symbolT name => arities[name]?.getD 0 == 0
+  | .literalT _ => true
+  | .arrowT .. => false
+  | .forallT name type body | .existsT name type body =>
+    !hasFunctionSort type && firstOrderTerm (arities.insert name 0) body
+  | .letT name value body =>
+    firstOrderTerm arities value && firstOrderTerm (arities.insert name 0) body
+  | term@(.appT ..) =>
+    let (head, args) := application term []
+    match head with
+    | .symbolT name =>
+      (arities[name]?.all (· == args.length)) && args.all (firstOrderTerm arities)
+    | _ => false
+where
+  application : Smt.Term → List Smt.Term → Smt.Term × List Smt.Term
+    | .appT f a, args => application f (a :: args)
+    | f, args => (f, args)
 
 /-- A higher-order candidate must not invalidate unrelated first-order SMT queries. -/
 private def firstOrderCommands (commands : List Smt.Translate.Command) : Bool := Id.run do

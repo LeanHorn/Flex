@@ -109,7 +109,7 @@ def weakenClause
     let results ← match ← withSpecializedHead head solutions clause (fun args => do
         let conclusions ← candidates.toArray.mapM fun (q, slots) =>
           Expr.instQualifier q ((slots.map fun i => args[i]!).toArray)
-        synth (#[paContextGuard] ++ conclusions)) with
+        synth (#[Lean.mkConst ``False] ++ conclusions)) with
       | some results => pure results
       | none => do
         -- Preserve support for compound clauses supplied outside the flat worklist.

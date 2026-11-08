@@ -173,7 +173,6 @@ private def runFix (ctx : Context) : TacticM Unit := do
         ("scraped_templates", toJson scraped), ("standard_templates", toJson standard),
         ("tagged_templates", toJson tagged),
         ("initial_candidates", toJson (candidates.foldl (fun n (_, count) => n + count) 0))]
-    | .oracle _ => pure ()
     | .roundStarted count => emit ctx "fix_round" "running" [("candidates", toJson count)]
     | .roundFinished before after => emit ctx "fix_round" "completed" [
         ("candidates_before", toJson before), ("candidates_after", toJson after)]

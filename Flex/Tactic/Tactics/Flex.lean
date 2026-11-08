@@ -120,10 +120,12 @@ private def checkTime (ctx : Context) : TermElabM Unit := do
 private def withRemainingTime (ctx : Context) (action : TermElabM α) : TermElabM α := do
   checkTime ctx
   let some deadline := ctx.deadline | return ← action
+  let seconds := max 1 ((deadline - (← IO.monoMsNow) + 999) / 1000)
   withOptions (fun opts =>
-    let previous := flex.automation.deadlineMs.get opts
-    flex.automation.deadlineMs.set opts (if previous == 0 then deadline else min previous deadline))
-    action
+    let opts := if flex.automation.smtTimeout.get opts == 0 then opts else
+      flex.automation.smtTimeout.set opts seconds
+    if flex.automation.synthTimeout.get opts == 0 then opts else
+      flex.automation.synthTimeout.set opts seconds) action
 
 private def withBudget (ctx : Context) (heartbeats : Nat) (act : TacticM α) : TacticM α := do
   let configured := if ctx.setup.config.heartbeats == 0 then heartbeats
@@ -281,7 +283,7 @@ private def proofOracle (ctx : Context) : PAOracle := fun target => withRemainin
 
 private def synthOracle (ctx : Context) : PASynthOracle := fun targets => withRemainingTime ctx do
   let result ← match ctx.setup.synth with
-    | none => Flex.Automation.synthOracleWithObserver (checkTime ctx) (fun event => ctx.setup.onPA (.oracle event)) targets
+    | none => Flex.Automation.synthOracle (checkTime ctx) targets
     | some tactic => (withPAPriority tactic).toSynth targets
   checkTime ctx
   return result

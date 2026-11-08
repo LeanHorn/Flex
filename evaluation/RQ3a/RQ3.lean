@@ -53,12 +53,6 @@ private def recordPA (output : System.FilePath) : PAObserver := fun event => do
   | .roundFinished before after => record "round_end" [
       ("before", toJson before), ("after", toJson after)]
   | .converged count => record "converged" [("candidates", toJson count)]
-  | .oracle event => record ("oracle/" ++ event.stage ++ "/" ++ event.status) [
-      ("elapsed_ms", toJson event.elapsedMs), ("queries", toJson event.queries),
-      ("valid", toJson event.valid), ("invalid", toJson event.invalid),
-      ("unknown", toJson event.unknown), ("reasons", toJson event.reasons),
-      ("guard_shortcut", toJson event.guardShortcut),
-      ("heartbeats_raw", toJson (← IO.getNumHeartbeats))]
 
 private def recordCHC (output : System.FilePath) (attempt backendAttempt : IO.Ref Nat)
     (backend : Flex.Portfolio.Backend) (event : Flex.CHC.Event) : TermElabM Unit := do
@@ -416,10 +410,7 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
             ("fixpoint_timeout_seconds", toJson (flex.fixpointTimeout.get options)),
             ("solver_timeout_seconds", toJson config.solverTimeout),
             ("timeout_policy", toJson "reserved_blocks_v1"),
-            ("oracle_timeout_policy", toJson "configured cap within shared deadline"),
-            ("synth_timeout_seconds", toJson (flex.automation.synthTimeout.get options)),
-            ("proof_smt_timeout_seconds", toJson (flex.automation.smtTimeout.get options)),
-            ("native_synth_heartbeats", toJson (flex.automation.synthHeartbeats.get options)),
+            ("oracle_timeout_policy", toJson "remaining backend allocation"),
             ("case_timeout_seconds", toJson caseSeconds),
             ("phase_heartbeats", toJson heartbeats),
             ("proof_heartbeats", toJson proofHeartbeats),

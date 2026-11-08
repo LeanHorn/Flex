@@ -382,6 +382,12 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
         let opts := opts.setBool `trace.flex.synthesis profilePA
         let opts := flex.automation.proofHeartbeats.set opts proofHeartbeats
         let opts := flex.fixpointTimeout.set opts totalSeconds
+        -- Synthesis decides candidates with the exact SMT encoding alone; undecided
+        -- candidates are dropped. Certification and discharge still use Lean automation.
+        let opts := flex.automation.nativeFallback.set opts false
+        -- Refinement-type constraints use non-linear arithmetic (e.g. `%` by a variable);
+        -- leave it to the solver instead of bailing.
+        let opts := flex.smt.encodeNonlinear.set opts true
         let opts := match spacerExe with
           | some executable => flex.spacer.executable.set opts executable
           | none => opts
@@ -417,6 +423,7 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
             ("smt_uninterpreted_defs", toJson (flex.smt.uninterpretedDefs.get options)),
             ("smt_encode_nonlinear", toJson (flex.smt.encodeNonlinear.get options)),
             ("smt_encode_quantifiers", toJson (flex.smt.encodeQuantifiers.get options)),
+            ("native_fallback", toJson (flex.automation.nativeFallback.get options)),
             ("recursion_limit", toJson recursionLimit)]).pretty
           let target := Lean.mkConst name
           let before ← predicateCount target

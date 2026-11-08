@@ -19,7 +19,10 @@ time is shared among untried backends. A backend allocation covers export, all c
 import, validation, certification and closing; unused time passes forward.
 All Flex arms use the same discharge automation, 4,000,000 phase heartbeats,
 40,000 proof-automation heartbeats, and True/False preprocessing. Nesting and
-optional postprocessing are off. Fix escalates Bank → Basic → Standard → Deep.
+optional postprocessing are off. As in RQ3a, Fix decides candidates with the exact
+SMT encoding only (`flex.automation.nativeFallback` off), with non-linear arithmetic
+encoded (`flex.smt.encodeNonlinear` on); certification and discharge still use Lean
+automation. Fix escalates Bank → Basic → Standard → Deep.
 Accepted invariants survive stage timeouts. Zap and Fix act where predicates
 remain; an open residual proof does not undo an accepted S/E invariant.
 The combined arm has twice the budget: report its coverage with that extra cost.

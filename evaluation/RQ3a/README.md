@@ -26,7 +26,14 @@ positive-test directory membership is not a SAT guarantee. No outcome filtering.
 | `flex` | Zap → Fix → Spacer/Eldarica → discharge | 360 s: two 180 s blocks |
 
 All use the same checked discharge, True/False preprocessing, no nesting, and no
-postprocessing. Fix escalates Bank → Basic → Standard → Deep. The combined arm
+postprocessing. Fix decides candidates with the exact SMT encoding only: the native
+Lean fallback for undecided synthesis queries is off (`flex.automation.nativeFallback`),
+and undecided candidates are dropped. Certification, safety validation and discharge
+still use Lean automation. Non-linear arithmetic is encoded (`flex.smt.encodeNonlinear`
+on; off by default in Flex). `invocation.json` records these settings
+(`native_fallback`, `smt_encode_nonlinear`); earlier runs used the fallback and must not
+be pooled with new ones.
+Fix escalates Bank → Basic → Standard → Deep. The combined arm
 reserves one 180 s block for Zap + Fix and one for S/E, cancelling each at its own
 deadline. `se_zap_fix` uses the same blocks in the opposite order.
 Within the S/E block, remaining time is shared among untried backends. The entire

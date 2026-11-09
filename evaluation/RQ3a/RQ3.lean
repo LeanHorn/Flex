@@ -53,12 +53,6 @@ private def recordPA (output : System.FilePath) : PAObserver := fun event => do
   | .roundFinished before after => record "round_end" [
       ("before", toJson before), ("after", toJson after)]
   | .converged count => record "converged" [("candidates", toJson count)]
-  | .oracle event => record ("oracle/" ++ event.stage ++ "/" ++ event.status) [
-      ("elapsed_ms", toJson event.elapsedMs), ("queries", toJson event.queries),
-      ("valid", toJson event.valid), ("invalid", toJson event.invalid),
-      ("unknown", toJson event.unknown), ("reasons", toJson event.reasons),
-      ("guard_shortcut", toJson event.guardShortcut),
-      ("heartbeats_raw", toJson (← IO.getNumHeartbeats))]
 
 private def recordCHC (output : System.FilePath) (attempt backendAttempt : IO.Ref Nat)
     (backend : Flex.Portfolio.Backend) (event : Flex.CHC.Event) : TermElabM Unit := do
@@ -353,11 +347,6 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
   let initialHeartbeats ← IO.getNumHeartbeats
   try
     tryCatchRuntimeEx (do
-      if (← IO.getEnv "RQ3_MODE").getD "run" == "classify" then
-        let info ← classify (Lean.mkConst name)
-        IO.FS.writeFile (output / "classification.json") info.pretty
-        emit output "result" "classified"
-        return
       let heartbeats ← envNat "FLEX_PARITY_HEARTBEATS" 4000000
       let proofHeartbeats ← envNat "FLEX_PARITY_PROOF_HEARTBEATS" 40000
       let zap := (← IO.getEnv "FLEX_PARITY_ZAP").getD "1" != "0"
@@ -388,6 +377,12 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
         let opts := opts.setBool `trace.flex.synthesis profilePA
         let opts := flex.automation.proofHeartbeats.set opts proofHeartbeats
         let opts := flex.fixpointTimeout.set opts totalSeconds
+        -- Synthesis decides candidates with the exact SMT encoding alone; undecided
+        -- candidates are dropped. Certification and discharge still use Lean automation.
+        let opts := flex.automation.synthHeartbeats.set opts 0
+        -- Refinement-type constraints use non-linear arithmetic (e.g. `%` by a variable);
+        -- leave it to the solver instead of bailing.
+        let opts := flex.smt.encodeNonlinear.set opts true
         let opts := match spacerExe with
           | some executable => flex.spacer.executable.set opts executable
           | none => opts
@@ -416,16 +411,27 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
             ("fixpoint_timeout_seconds", toJson (flex.fixpointTimeout.get options)),
             ("solver_timeout_seconds", toJson config.solverTimeout),
             ("timeout_policy", toJson "reserved_blocks_v1"),
-            ("oracle_timeout_policy", toJson "configured cap within shared deadline"),
-            ("synth_timeout_seconds", toJson (flex.automation.synthTimeout.get options)),
-            ("proof_smt_timeout_seconds", toJson (flex.automation.smtTimeout.get options)),
-            ("native_synth_heartbeats", toJson (flex.automation.synthHeartbeats.get options)),
+            ("oracle_timeout_policy", toJson "remaining backend allocation"),
             ("case_timeout_seconds", toJson caseSeconds),
             ("phase_heartbeats", toJson heartbeats),
             ("proof_heartbeats", toJson proofHeartbeats),
-            ("function_smt", toJson (flex.automation.functionSmt.get options)),
+            ("smt_uninterpreted_defs", toJson (flex.smt.uninterpretedDefs.get options)),
+            ("smt_encode_nonlinear", toJson (flex.smt.encodeNonlinear.get options)),
+            ("smt_encode_quantifiers", toJson (flex.smt.encodeQuantifiers.get options)),
+            ("synth_heartbeats", toJson (flex.automation.synthHeartbeats.get options)),
             ("recursion_limit", toJson recursionLimit)]).pretty
           let target := Lean.mkConst name
+          -- Structural classification shares the trial's process; it precedes the measured tactic.
+          if (← IO.getEnv "RQ3_CLASSIFY").getD "1" != "0" then
+            let classifyStart ← IO.monoMsNow
+            let info ← tryCatchRuntimeEx (some <$> classify target) fun error => do
+              if error.isInterrupt then throw error
+              emit output "classification" "failed" [("error", toJson (← error.toMessageData.toString))]
+              pure none
+            if let some info := info then
+              IO.FS.writeFile (output / "classification.json") info.pretty
+              emit output "classification" "ok"
+                [("elapsed_ms", toJson ((← IO.monoMsNow) - classifyStart))]
           let before ← predicateCount target
           let original ← mkFreshExprMVar (some target) (kind := .syntheticOpaque)
           stage.set "flex"

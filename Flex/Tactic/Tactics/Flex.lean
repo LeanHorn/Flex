@@ -112,19 +112,6 @@ private def guarded (act : TacticM α) (quiet : Bool := true) : TacticM (Except 
   finally
     if quiet then Core.setMessageLog messages
 
-private def checkTime (ctx : Context) : TermElabM Unit := do
-  Core.checkInterrupted
-  if let some deadline := ctx.deadline then
-    if (← IO.monoMsNow) >= deadline then throwError "flex: time budget exhausted"
-
-private def withRemainingTime (ctx : Context) (action : TermElabM α) : TermElabM α := do
-  checkTime ctx
-  let some deadline := ctx.deadline | return ← action
-  withOptions (fun opts =>
-    let previous := flex.automation.deadlineMs.get opts
-    flex.automation.deadlineMs.set opts (if previous == 0 then deadline else min previous deadline))
-    action
-
 private def withBudget (ctx : Context) (heartbeats : Nat) (act : TacticM α) : TacticM α := do
   let configured := if ctx.setup.config.heartbeats == 0 then heartbeats
     else ctx.setup.config.heartbeats
@@ -144,7 +131,7 @@ private def phase (ctx : Context) (name : String) (heartbeats : Nat)
   let status ← IO.mkRef "interrupted"
   try
     let result ← guarded <| withBudget ctx heartbeats do
-      checkTime ctx
+      Flex.Timeout.checkDeadline
       act
     status.set (match result with | .ok _ => "ok" | .error _ => "failed")
     if let .error message := result then trace[flex] "{name}: {message}"
@@ -274,24 +261,24 @@ private def tidy (ctx : Context) (parent : MVarId) : TacticM Unit := do
     let goals ← Flex.Residual.bundle parent (← getUnsolvedGoals)
     setGoals (← goals.filterM fun goal => return !(← goal.isAssignedOrDelayedAssigned))
 
-private def proofOracle (ctx : Context) : PAOracle := fun target => withRemainingTime ctx do
+/-- Stages and backend attempts run under `Flex.Timeout.run`, which passes their deadline to
+the automation below; it checks the deadline and caps its external calls by it. -/
+private def proofOracle (ctx : Context) : PAOracle := fun target => do
   if let some tactic := ctx.setup.proof then
     if let some proof ← Flex.Automation.proveWith tactic target then return some proof
   Flex.Automation.proofOracle target
 
-private def synthOracle (ctx : Context) : PASynthOracle := fun targets => withRemainingTime ctx do
-  let result ← match ctx.setup.synth with
-    | none => Flex.Automation.synthOracleWithObserver (checkTime ctx) (fun event => ctx.setup.onPA (.oracle event)) targets
-    | some tactic => (withPAPriority tactic).toSynth targets
-  checkTime ctx
-  return result
+private def synthOracle (ctx : Context) : PASynthOracle := fun targets =>
+  match ctx.setup.synth with
+  | none => Flex.Automation.synthOracle targets
+  | some tactic => (withPAPriority tactic).toSynth targets
 
 private def close (ctx : Context) : TacticM Unit := do
   unless ctx.setup.config.closeLeaves do return
   let oracle : PAOracle := match ctx.setup.closer with
     | none => proofOracle ctx
     | some tactic => fun target => do
-        checkTime ctx
+        Flex.Timeout.checkDeadline
         Flex.Automation.proveWith tactic target
   let mut remaining := []
   for goal in ← getGoals do
@@ -309,7 +296,7 @@ private def close (ctx : Context) : TacticM Unit := do
   setGoals remaining
 
 private partial def validate (ctx : Context) (target : Expr) : TermElabM PASynthResult := do
-  checkTime ctx
+  Flex.Timeout.checkDeadline
   let target ← instantiateMVars target
   if target.isConstOf ``True then return .valid
   if target.isForall then
@@ -331,7 +318,7 @@ private structure Candidate where
   remainingHeads : Option Nat
 
 private inductive PASearch where
-  | full | sources | functions
+  | full | sources
   deriving BEq
 
 private def runPA (ctx : Context) (scrape : PAScrapeConfig)
@@ -345,14 +332,9 @@ private def runPA (ctx : Context) (scrape : PAScrapeConfig)
     withOptions (fun opts => if directSources then
         opts.set `flex.automation.proofHeartbeats limit else opts) <|
       synthOracle ctx queries
-  let scrape := if search == .functions then
-      { scrape with
-        maxCompoundCandidatesPerKappa := max 24 scrape.maxCompoundCandidatesPerKappa
-        pointwiseFrames := true } else scrape
   withOptions (fun opts =>
-      let opts := if search == .sources && !opts.contains `flex.automation.equationHeartbeats then
-        opts.set `flex.automation.equationHeartbeats (5000 : Nat) else opts
-      if search == .functions then opts.setBool `flex.automation.sourcePredicates true else opts) <|
+      if search == .sources && !opts.contains `flex.automation.equationHeartbeats then
+        opts.set `flex.automation.equationHeartbeats (5000 : Nat) else opts) <|
     fixImpl proveLeaf scrape (some (proofOracle ctx)) (observe := ctx.setup.onPA)
       (synthOracle := some decision) (allowUnprovedHeads := allowUnprovedHeads)
       (onCertification := fun result => report.set result) (directSources := directSources)
@@ -373,21 +355,6 @@ private partial def largeTemplateSearch (type : Expr) (limits : PAScrapeLimits) 
   if permutations > limits.maxInstancesPerKappa then return true
   withLocalDeclD `κ domain fun κ =>
     largeTemplateSearch (type.appArg!.beta #[κ]) limits
-
-private def hasCompoundObservations (type : Expr) : MetaM Bool := do
-  let found ← IO.mkRef false
-  discard <| Meta.transform type (pre := fun e => do
-    if (← found.get) then return .done e
-    let .const name _ := e.getAppFn | return .continue
-    unless (← getConstInfo name) matches .defnInfo _ do return .continue
-    unless ← isProp e do return .continue
-    for arg in e.getAppArgs do
-      if !arg.hasFVar || arg.isFVar || arg.isProj then continue
-      if let .const name _ := arg.getAppFn then
-        if (← getProjectionFnInfo? name).isSome then continue
-      if (← whnf (← inferType arg)).isForall then found.set true
-    return .continue)
-  found.get
 
 private def runBackend (ctx : Context) (backend : Backend)
     (onCandidate : MVarId → TermElabM PASynthResult) : TacticM Candidate := do
@@ -417,21 +384,13 @@ private def runBackend (ctx : Context) (backend : Backend)
         trace[flex] "fix: stateful source candidates validated"
         return candidate
       if let .error message := result then trace[flex] "fix stateful sources: {message}"
-    if ctx.setup.scrape.mode == .deep && ctx.setup.scrape.maxCandidatesPerKappa > 0 &&
-        (← withMainContext do hasCompoundObservations (← getMainTarget)) then
-      let result ← guarded <| runPA ctx ctx.setup.scrape true .functions
-      if let .ok candidate := result then
-        trace[flex] "fix: direct source candidates validated"
-        return candidate
-      if let .error message := result then trace[flex] "fix direct sources: {message}"
     runPA ctx ctx.setup.scrape true
   | .spacer | .eldarica =>
     let name := if backend == .spacer then flex.spacer.executable else flex.eldarica.executable
     let validated ← IO.mkRef false
-    checkTime ctx
-    let remaining ← match ctx.deadline with
-      | some deadline => pure (max 1 (deadline - (← IO.monoMsNow)))
-      | none => pure (UInt64.size - 1)
+    -- The attempt's deadline (this backend's share), not the stage's.
+    let deadline ← Flex.Timeout.deadline?
+    let remaining ← Flex.Timeout.capMs (UInt64.size - 1)
     let timeout := if ctx.setup.config.solverTimeout == 0 then remaining else
       min remaining (ctx.setup.config.solverTimeout * 1000)
     let searchAttempts := if backend == .spacer then 3 else 2
@@ -439,8 +398,8 @@ private def runBackend (ctx : Context) (backend : Backend)
       backend := if backend == .spacer then .spacer else .eldarica
       executable := some (name.get (← getOptions))
       -- Leave the next backend a chance when retries would exhaust the deadline.
-      retrySearch := ctx.deadline.isNone || remaining > searchAttempts * timeout
-      deadlineMs := ctx.deadline
+      retrySearch := deadline.isNone || remaining > searchAttempts * timeout
+      deadlineMs := deadline
       timeoutMs := timeout } (proofOracle ctx) (headsOnly := true)
       (onPhase := fun stage elapsed => do
         let name := match stage with

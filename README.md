@@ -61,10 +61,32 @@ set by `flex.fixpointTimeout`; certification follows a successful search.
 Add `(defs := [fib])` to select definitions explicitly.
 Use `set_option flex.reportQualifiers true` to inspect scraped candidates in the Infoview.
 Disable guarded templates with `(scrapeConfig := { maxGuardedQualifiers := 0 })`.
-By default, `fix` batches integer/Boolean SMT checks in short-lived Z3 processes,
+By default, `fix` batches SMT checks in short-lived Z3 processes,
 rechecks affected clauses after weakening, and uses kernel-checked SMT proofs and
 Lean automation for certification and residual goals. `flex_discharge` runs this
 proof automation separately, leaving unsolved goals for manual proof.
+
+Synthesis checks use one exact SMT encoding (`Flex/SMT/Encode.lean`): `Int`, `Nat`
+(nonnegative `Int`), `Bool`/`Prop`, functions as arrays, and records, `Option`, `List` and
+other non-indexed inductives as monomorphized datatypes, and nonempty opaque types as
+uninterpreted sorts. Definitions become `define-fun`, or
+uninterpreted functions when recursive. A satisfiable query counts as a counterexample only
+when nothing was left uninterpreted; queries the encoding cannot decide fall back to Lean
+automation.
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `flex.smt.uninterpretedDefs` | `false` | Leave every definition uninterpreted. |
+| `flex.smt.encodeNonlinear` | `false` | Encode products of non-literals and division or modulo by a non-literal. |
+| `flex.smt.encodeQuantifiers` | `false` | Encode lambdas and the quantifiers the solver cannot skolemize (see below). |
+| `flex.automation.synthHeartbeats` | `200000` | Heartbeats (thousands) one synthesis batch may spend on Lean automation for the queries SMT leaves undecided; `0` turns this fallback off and their candidates are dropped. Certification is unaffected. |
+
+Queries are first flattened into clauses; clause variables are SMT constants, not quantifiers.
+As in Liquid Fixpoint, existentials in premises are passed to the solver, which skolemizes them,
+and so are universals in a clause's head. Quantifiers at the other polarity, under other
+operators, or in definition bodies need `flex.smt.encodeQuantifiers`. When a construct
+is not encoded, a query that uses it is not sent to the solver, and a definition whose body
+uses it is left uninterpreted.
 
 Optional SMT backends can be selected separately for synthesis and proofs:
 

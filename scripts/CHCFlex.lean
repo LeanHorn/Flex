@@ -49,12 +49,6 @@ private def recordPA (output : System.FilePath) : PAObserver := fun event => do
   | .roundFinished before after => record "round_end" [
       ("before", toJson before), ("after", toJson after)]
   | .converged count => record "converged" [("candidates", toJson count)]
-  | .oracle event => record ("oracle/" ++ event.stage ++ "/" ++ event.status) [
-      ("elapsed_ms", toJson event.elapsedMs), ("queries", toJson event.queries),
-      ("valid", toJson event.valid), ("invalid", toJson event.invalid),
-      ("unknown", toJson event.unknown), ("reasons", toJson event.reasons),
-      ("guard_shortcut", toJson event.guardShortcut),
-      ("heartbeats_raw", toJson (← IO.getNumHeartbeats))]
 
 private def recordCHC (output : System.FilePath) (attempt : IO.Ref Nat)
     (backend : Flex.Portfolio.Backend) (event : Flex.CHC.Event) : TermElabM Unit := do
@@ -215,11 +209,13 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
             ("keep_candidates", toJson config.keepCandidates),
             ("total_timeout_seconds", toJson config.totalTimeout),
             ("solver_timeout_seconds", toJson config.solverTimeout),
-            ("oracle_timeout_policy", toJson "configured cap within shared deadline"),
+            ("oracle_timeout_policy", toJson "remaining shared budget"),
             ("case_timeout_seconds", toJson caseSeconds),
             ("phase_heartbeats", toJson heartbeats),
             ("proof_heartbeats", toJson proofHeartbeats),
-            ("function_smt", toJson (flex.automation.functionSmt.get options)),
+            ("smt_uninterpreted_defs", toJson (flex.smt.uninterpretedDefs.get options)),
+            ("smt_encode_nonlinear", toJson (flex.smt.encodeNonlinear.get options)),
+            ("smt_encode_quantifiers", toJson (flex.smt.encodeQuantifiers.get options)),
             ("recursion_limit", toJson recursionLimit)]).pretty
           let target := Lean.mkConst name
           let before ← predicateCount target

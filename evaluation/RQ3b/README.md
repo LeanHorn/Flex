@@ -19,7 +19,10 @@ time is shared among untried backends. A backend allocation covers export, all c
 import, validation, certification and closing; unused time passes forward.
 All Flex arms use the same discharge automation, 4,000,000 phase heartbeats,
 40,000 proof-automation heartbeats, and True/False preprocessing. Nesting and
-optional postprocessing are off. Fix escalates Bank → Basic → Standard → Deep.
+optional postprocessing are off. As in RQ3a, Fix decides candidates with the exact
+SMT encoding only (`flex.automation.synthHeartbeats` = 0), with non-linear arithmetic
+encoded (`flex.smt.encodeNonlinear` on); certification and discharge still use Lean
+automation. Fix escalates Bank → Basic → Standard → Deep.
 Accepted invariants survive stage timeouts. Zap and Fix act where predicates
 remain; an open residual proof does not undo an accepted S/E invariant.
 The combined arm has twice the budget: report its coverage with that extra cost.
@@ -55,7 +58,8 @@ cd ../flex-benchmarks
 Run inside `tmux` or a server allocation. Start with 4–8 workers, within the
 allocated physical cores and RAM; solvers may use additional threads. Keep the
 worker count fixed, avoid swapping and unrelated work. Use one worker for isolated
-latency. Build and classification time are excluded from query timings.
+latency. Build time is excluded from query timings; classification runs in each
+trial before the measured tactic, so it is excluded from `flex_ms` only.
 
 ```sh
 # Prepare all 1,730 tasks × five arms = 8,650 trials. No evaluation yet.
@@ -136,7 +140,7 @@ event arrays, such as per-predicate PA candidates, are JSON inside CSV cells.
 ## Artifacts and regeneration
 
 Raw records remain in `results.jsonl`, including embedded phase events for new
-runs. Keep `selection.json`, `classification.json`, `settings.json`, `metadata.json`
+runs. Keep `selection.json`, `settings.json`, `metadata.json`
 and `schedule.json` with them. SMT inputs, models, Lean inputs, logs and residuals
 live in `native/` and `runs/`. Copy the complete output directory for an audit;
 CSV analysis needs neither Lean nor solvers. Results are gitignored.

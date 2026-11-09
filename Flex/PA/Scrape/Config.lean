@@ -33,9 +33,6 @@ structure PAScrapeLimits where
   maxAnchoredAttempts : Nat := 256
   maxAnchoredNodes : Nat := 5000
   maxFrameCandidatesPerKappa : Nat := 16
-  /-- Optional broader search; `flex` enables it for compound function observations. -/
-  maxCompoundCandidatesPerKappa : Nat := 0
-  pointwiseFrames : Bool := false
   maxEndpointCandidatesPerKappa : Nat := 16
   maxAccumulatorCandidatesPerKappa : Nat := 16
   maxStatefulCandidatesPerKappa : Nat := 16

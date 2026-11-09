@@ -247,7 +247,14 @@ def tables(output):
     selection=json.loads((output/'selection.json').read_text())
     cases={(s,c['case']):c for s,cs in selection['cases'].items() for c in cs}
     cp=output/'classification.json'
+    # Earlier runs classified in a separate pass; new runs classify inside each trial.
     classes={(r['study'],r['case']):r for r in json.loads(cp.read_text())} if cp.exists() else {}
+    for record in read(output):
+        key=(record['study'],record['case'])
+        artifact=record.get('artifacts')
+        path=(output/artifact/'classification.json') if artifact else None
+        if key not in classes and path and path.exists():
+            classes[key]={'study':key[0],'case':key[1],'status':'classified',**json.loads(path.read_text())}
     settings=json.loads((output/'settings.json').read_text())
     rows=[];phases=[];events=[];phase_rows=[]
     for record in read(output):

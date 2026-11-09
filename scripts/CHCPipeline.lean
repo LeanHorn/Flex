@@ -138,7 +138,6 @@ private def runPA (ctx : Context) (close : Bool := true) : TacticM Unit := do
         ("initial_candidates", toJson (candidates.foldl (fun n (_, count) => n + count) 0)),
         ("candidates", Json.arr (candidates.map fun (name, count) => Json.mkObj [
           ("name", toJson name.toString), ("count", toJson count)]))]
-    | .oracle _ => pure ()
     | .roundStarted count =>
       rounds.modify (· + 1)
       emit ctx "fix_round" "running" [
@@ -150,17 +149,15 @@ private def runPA (ctx : Context) (close : Bool := true) : TacticM Unit := do
     | .converged count =>
       emit ctx "fix_converged" "converged" [
         ("rounds", toJson (← rounds.get)), ("surviving_candidates", toJson count)]
-  let checkBudget : TermElabM Unit := do
-    checkTime ctx
-    if (← IO.monoMsNow) - start >= ctx.paSeconds * 1000 then
-      throwError "PA wall-clock budget exhausted"
-  let oracle : PASynthOracle := fun targets => do
-    checkBudget
+  -- Synthesis stops at the pilot deadline or after the PA budget, whichever comes first.
+  let synthDeadline := some (min ctx.deadline (start + ctx.paSeconds * 1000))
+  let oracle : PASynthOracle := fun targets => Flex.Timeout.withDeadline synthDeadline do
+    Flex.Timeout.checkDeadline
     calls.modify (· + targets.size)
     batches.modify (· + 1)
     let queryStart ← IO.monoMsNow
     try
-      let decisions ← Flex.Automation.synthOracle checkBudget targets
+      let decisions ← Flex.Automation.synthOracle targets
       for decision in decisions do
         match decision with
         | .valid => accepted.modify (· + 1)

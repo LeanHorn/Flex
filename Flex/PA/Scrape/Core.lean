@@ -106,10 +106,22 @@ def visit (cfg : PAScrapeConfig) (depth : Nat) : ScrapeM Bool := do
 def reject : ScrapeM Unit :=
   modify fun s => { s with rejected := s.rejected + 1 }
 
+/-- Rewrite raw `Int.le`/`Int.lt`/`Nat.le`/`Nat.lt` applications (exposed by unfolding) into
+the `≤`/`<` notation that arithmetic automation recognizes; definitionally equal. -/
+def normalizeOrder (e : Expr) : MetaM Expr :=
+  Meta.transform e (post := fun e => do
+    let mk (cls : Name) (ty : Expr) (inst : Name) :=
+      mkApp4 (.const cls [.zero]) ty (.const inst []) (e.getArg! 0) (e.getArg! 1)
+    if e.isAppOfArity ``Int.le 2 then return .done (mk ``LE.le (.const ``Int []) ``Int.instLEInt)
+    if e.isAppOfArity ``Int.lt 2 then return .done (mk ``LT.lt (.const ``Int []) ``Int.instLTInt)
+    if e.isAppOfArity ``Nat.le 2 then return .done (mk ``LE.le (.const ``Nat []) ``instLENat)
+    if e.isAppOfArity ``Nat.lt 2 then return .done (mk ``LT.lt (.const ``Nat []) ``instLTNat)
+    return .continue)
+
 /-- Capture the caller's context and abstract clause-local data parameters. -/
 def addPredicate (cfg : PAScrapeConfig) (origin : String) (source : Source)
     (p : Expr) : ScrapeM Unit := do
-  let p ← instantiateMVars p
+  let p ← normalizeOrder (← instantiateMVars p)
   if !isResolved p then reject; return
   unless ← isProp p do reject; return
   if p.isConstOf ``True || p.isConstOf ``False ||

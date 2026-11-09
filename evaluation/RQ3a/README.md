@@ -26,7 +26,14 @@ positive-test directory membership is not a SAT guarantee. No outcome filtering.
 | `flex` | Zap → Fix → Spacer/Eldarica → discharge | 360 s: two 180 s blocks |
 
 All use the same checked discharge, True/False preprocessing, no nesting, and no
-postprocessing. Fix escalates Bank → Basic → Standard → Deep. The combined arm
+postprocessing. Fix decides candidates with the exact SMT encoding only: the native
+Lean fallback for undecided synthesis queries is off (`flex.automation.synthHeartbeats` = 0),
+and undecided candidates are dropped. Certification, safety validation and discharge
+still use Lean automation. Non-linear arithmetic is encoded (`flex.smt.encodeNonlinear`
+on; off by default in Flex). `invocation.json` records these settings
+(`synth_heartbeats`, `smt_encode_nonlinear`); earlier runs used the fallback and must not
+be pooled with new ones.
+Fix escalates Bank → Basic → Standard → Deep. The combined arm
 reserves one 180 s block for Zap + Fix and one for S/E, cancelling each at its own
 deadline. `se_zap_fix` uses the same blocks in the opposite order.
 Within the S/E block, remaining time is shared among untried backends. The entire
@@ -100,11 +107,13 @@ python3 -B ../Flex/evaluation/RQ3a/benchmark.py \
 For the two-arm comparison already measured, use `--configs zap_fix se` (1,088
 trials). To investigate one arm, use `--configs se` or `--configs zap_fix`.
 `--diagnostic` retains detailed failure traces; use the same tracing setting for
-all compared runs. `--skip-classification` omits graph analysis for a diagnostic
-run; input sizes and predicate/proof measurements are still recorded.
+all compared runs. `--skip-classification` omits the graph analysis for a
+diagnostic run; input sizes and predicate/proof measurements are still recorded.
 
-Inputs and build artifacts are frozen before trials. Classification is outside
-trial timings and does not exclude queries. Each configuration starts from the
+Inputs and build artifacts are frozen before trials. Each trial classifies its
+query's predicate graph (acyclic/cyclic/mixed) in the same Lean process, before the
+measured tactic: it is excluded from `flex_ms` and phase times, included in `wall_ms`,
+and never excludes queries. Each configuration starts from the
 original VC. One trial is run per query/configuration in a seeded, rotated order.
 For repetition variability, use separate output folders and report each run;
 medians below are across queries, not repeated measurements of one query.
@@ -202,7 +211,7 @@ recorded explicitly. Budget exhaustion is not evidence that a VC is unprovable.
 | `source/`, `compiled/` | Frozen source and compiled Flex artifacts |
 | `results.jsonl`, `results.csv` | Per-query results, times, metrics and provenance |
 | `statistics.csv`, `comparisons.csv`, `summary.json` | Timing distributions, paired comparisons and coverage |
-| `classification.json`, `phases.csv` | Graph analysis and individual phase measurements |
+| `runs/…/classification.json`, `phases.csv` | Per-trial graph analysis and individual phase measurements |
 | `runs/` | Lean inputs, failure logs, solver queries/models and residuals |
 | `report.pdf`, `figures/` | Disjoint coverage and proof-completion curves |
 

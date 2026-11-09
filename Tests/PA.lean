@@ -56,8 +56,6 @@ namespace PABatchTests
 
 open Lean Meta Elab Term
 
-private def fixedFunction (x : Int) : Int := x
-
 private def queries (terms : Array (TSyntax `term)) : TermElabM (Array Expr) :=
   terms.mapM fun term => do instantiateMVars (← elabTerm term none)
 
@@ -80,35 +78,6 @@ run_elab do
     #[.valid, .invalid]
   expect #[← `(∀ x : Int, 0 ≤ x → 0 ≤ x % 3),
            ← `(∀ x : Int, 0 ≤ x → x / 3 ≤ x)] #[.valid, .valid]
-  expect #[← `(∀ f : Int → Int, ∀ x : Int, f x = 0 → f x ≤ 0),
-           ← `(∀ f : Int → Int, ∀ x : Int, f x = 0 → 0 ≤ x),
-           ← `(∀ f : Int → Int, ∀ x : Int, f x = 0 → f (x + 1) = 0)]
-    #[.valid, .invalid, .invalid]
-  expect #[← `(∀ f : Int → Bool → Prop, f 0 true → f 0 true),
-           ← `(∀ f : Int → Bool → Prop, f 0 true → f 0 false)] #[.valid, .invalid]
-  expect #[← `(∀ f : Prop → Bool, ∀ p : Prop, p → f p = f True),
-           ← `(∀ f : Prop → Bool, ∀ p : Prop, p → f p = f False)] #[.valid, .invalid]
-  withLocalDeclD `f (← mkArrow (mkConst ``Int) (mkConst ``Int)) fun f => do
-    withLocalDeclD `x (mkConst ``Int) fun x => do
-      let query ← mkAppM ``LE.le #[mkIntLit 0, x]
-      unless (← Flex.PA.smtOracle 2000 #[query]) == #[.invalid] do
-        throwError "unused first-order function made an exact context incomplete"
-      withLocalDeclD `h (← mkEq (mkApp f x) (mkIntLit 0)) fun _ => do
-        unless (← Flex.PA.smtOracle 2000 #[query, ← mkEq (mkApp f x) (mkIntLit 0)]) ==
-            #[.invalid, .valid] do
-          throwError "first-order function assumption was lost"
-  withLocalDeclD `f (← mkArrow (mkConst ``Int) (mkConst ``Int)) fun f => do
-    withLocalDeclD `h (← mkEq f f) fun _ => do
-      let result ← Flex.PA.smtOracle 2000 #[mkConst ``False]
-      unless result.all (fun | .unknown _ => true | _ => false) do
-        throwError "omitted function equality was treated as an exact assumption"
-  for term in #[← `(fixedFunction 0 = 1), ← `(∀ f g : Int → Int, f = g),
-      ← `(∀ f : Int → Int → Int, f 0 = f 1),
-      ← `(∀ f : (Int → Int) → Int, f (fun x => x) = 0),
-      ← `(∀ f : (p : Prop) → p → Int, f True True.intro = 0)] do
-    let result ← Flex.PA.smtOracle 2000 (← queries #[term])
-    unless result.all (fun | .unknown _ => true | _ => false) do
-      throwError "exact SMT accepted a higher-order or dependent input"
   withLocalDeclD `x (mkConst ``Int) fun x => do
     withLocalDeclD `h (← mkEq x (mkIntLit 3)) fun _ => do
       let result ← Flex.PA.smtOracle 2000 #[← mkAppM ``LE.le #[mkIntLit 0, x]]
@@ -124,12 +93,12 @@ run_elab do
     let result ← Flex.PA.smtOracle 2000 #[← mkEq x (mkIntLit 3)]
     unless result == #[.valid] do throwError "PA SMT omitted a local definition"
   let result ← Flex.PA.smtOracle 2000 (← queries
-    #[← `(∀ x : Int, x = 0 → ∀ n : Nat, n = n),
+    #[← `(∀ x : Int, x = 0 → ∀ s : String, s = s),
       ← `(∀ x : Int, x = 0 → 0 ≤ x)])
   unless result.size == 2 && result[1]! == .valid &&
       (match result[0]! with | .unknown _ => true | _ => false) do
     throwError "unsupported candidate contaminated its batch"
-  withLocalDeclD `h (← elabTerm (← `(∀ n : Nat, n = n)) none) fun _ => do
+  withLocalDeclD `h (← elabTerm (← `(∀ s : String, s = s)) none) fun _ => do
     let result ← Flex.PA.smtOracle 2000 #[mkConst ``False]
     unless result.all (fun | .unknown _ => true | _ => false) do
       throwError "SMT treated an incomplete local context as a counterexample"
@@ -137,23 +106,27 @@ run_elab do
     let result ← Flex.PA.smtOracle 2000 #[mkConst ``False]
     unless result.all (fun | .unknown _ => true | _ => false) do
       throwError "SMT ignored a potentially empty local data type"
-  withLocalDeclD `n (mkConst ``Nat) fun n => do
+  withLocalDeclD `n (mkConst ``String) fun n => do
     let result ← Flex.PA.smtOracle 2000 #[← mkEq n n, mkConst ``True]
     unless result.size == 2 && result[1]! == .valid &&
         (match result[0]! with | .unknown _ => true | _ => false) do
       throwError "unsupported free-input sort contaminated another candidate"
-  let result ← Flex.PA.smtOracle 2000 (← queries #[← `(∀ x : Nat, x = x)])
+  let result ← Flex.PA.smtOracle 2000 (← queries #[← `(∀ x : String, x = x)])
   unless result.all (fun | .unknown _ => true | _ => false) do
     throwError "PA SMT accepted an unsupported sort"
+  -- A nonstandard operator instance is unfolded and encoded exactly.
   let result ← Flex.PA.smtOracle 2000 (← queries #[← `(
     let _ : HAdd Int Int Int := ⟨fun _ _ => 0⟩
-    ∀ x : Int, x + 1 = x)])
-  unless result.all (fun | .unknown _ => true | _ => false) do
-    throwError "PA SMT erased a nonstandard operator instance"
+    ∀ x : Int, x + 1 = x), ← `(
+    let _ : HAdd Int Int Int := ⟨fun _ _ => 0⟩
+    ∀ x : Int, x + 1 = 0)])
+  unless result == #[.invalid, .valid] do
+    throwError "PA SMT misencoded a nonstandard operator instance: {repr result}"
   let caller ← mkFreshExprMVar (some (mkConst ``Int))
   discard <| Flex.PA.smtOracle 2000 #[← mkEq caller (mkIntLit 0)]
   if ← caller.mvarId!.isAssigned then throwError "PA SMT assigned a caller metavariable"
 
+set_option flex.smt.encodeQuantifiers true in
 run_elab do
   -- Zap's shared seed keeps its witnesses scoped inside the premise.
   expect #[← `(∀ A C : Int, (∃ a b : Int, a = 1 + b ∧ A = a ∧ C = b) → A = C + 1),
@@ -201,7 +174,7 @@ run_elab do
 
 end PABatchTests
 
-namespace PASimplifiedSmtTests
+namespace PAExactSmtTests
 
 open Lean Meta Elab Term
 
@@ -212,19 +185,20 @@ private structure Buffer where
 private def originates (old current : Int → Int) (lo hi : Int) : Prop :=
   ∀ i, lo ≤ i → i ≤ hi → ∃ j, lo ≤ j ∧ j ≤ hi ∧ current i = old j
 
-set_option flex.automation.sourcePredicates true in
+set_option flex.smt.encodeQuantifiers true in
 run_elab do
   let q ← elabTermAndSynthesize (← `(∀ f : Int → Int, ∀ lo hi : Int,
     originates f f lo hi)) none
   let unfolded ← Flex.PA.unfoldSourcePredicates q
   unless ← isDefEq q unfolded do throwError "source unfolding changed the proposition"
-  unless (← Flex.PA.simplifiedSmtOracle 2000 #[q]) == #[.valid] do
+  unless (← Flex.PA.smtOracle 2000 #[q]) == #[.valid] do
     throwError "SMT could not use a nonrecursive source predicate"
-  let unsupported ← elabTermAndSynthesize (← `(∀ f g : Int → Int, f = g)) none
-  let results ← Flex.PA.simplifiedSmtOracle 2000 #[unsupported, q]
-  unless results[1]! == .valid && results[0]! != .valid do
-    throwError "a function-valued query contaminated an independent valid query"
+  let functions ← elabTermAndSynthesize (← `(∀ f g : Int → Int, f = g)) none
+  let results ← Flex.PA.smtOracle 2000 #[functions, q]
+  unless results == #[.invalid, .valid] do
+    throwError "function equality was not decided exactly: {repr results}"
 
+set_option flex.smt.encodeQuantifiers true in
 run_elab do
   let terms ← #[← `(∀ b : Buffer, 0 ≤ b.bound → 0 ≤ b.bound + 1),
     ← `(∀ b : Buffer, 0 ≤ b.bound → b.bound < 0),
@@ -232,27 +206,27 @@ run_elab do
     ← `(∀ b : Buffer, (∀ i : Int, 0 ≤ i → b.values i = i) → b.values 1 = 2)].mapM
       fun term => elabTerm term none
   synthesizeSyntheticMVarsNoPostponing
-  let results ← Flex.PA.simplifiedSmtOracle 2000 (← terms.mapM instantiateMVars)
-  unless results.map (fun | .valid => true | _ => false) == #[true, false, true, false] do
-    throwError "simplified SMT lost record fields or shared assertions between queries: {repr results}"
+  let results ← Flex.PA.smtOracle 2000 (← terms.mapM instantiateMVars)
+  unless results[0:3].toArray == #[.valid, .invalid, .valid] && results[3]! != .valid do
+    throwError "exact SMT lost record fields or shared assertions between queries: {repr results}"
   let terms ← #[← `(∀ x : Int, x ≤ x), ← `(∀ α : Type, Nonempty α),
     ← `(∀ x : Int, x ≤ x + 1)].mapM fun term => elabTerm term none
   synthesizeSyntheticMVarsNoPostponing
-  let results ← Flex.PA.simplifiedSmtOracle 2000 (← terms.mapM instantiateMVars)
+  let results ← Flex.PA.smtOracle 2000 (← terms.mapM instantiateMVars)
   unless results.map (fun | .valid => true | _ => false) == #[true, false, true] do
     throwError "an unsupported candidate contaminated its batch: {repr results}"
   let term ← elabTerm (← `(∀ (α : Type) (x : Int),
     (Nonempty α ∧ x ≤ 5) → x ≤ 6)) none
   synthesizeSyntheticMVarsNoPostponing
-  unless (← Flex.PA.simplifiedSmtOracle 2000 #[← instantiateMVars term]) == #[.valid] do
+  unless (← Flex.PA.smtOracle 2000 #[← instantiateMVars term]) == #[.valid] do
     throwError "an unsupported assumption hid a supported conjunct"
   let caller ← mkFreshExprMVar (some (mkConst ``Int))
-  let results ← Flex.PA.simplifiedSmtOracle 2000 #[← mkEq caller (mkIntLit 0)]
+  let results ← Flex.PA.smtOracle 2000 #[← mkEq caller (mkIntLit 0)]
   unless results.all (fun | .unknown _ => true | _ => false) do
-    throwError "simplified SMT accepted an unresolved metavariable"
-  if ← caller.mvarId!.isAssigned then throwError "simplified SMT assigned a caller metavariable"
+    throwError "exact SMT accepted an unresolved metavariable"
+  if ← caller.mvarId!.isAssigned then throwError "exact SMT assigned a caller metavariable"
 
-end PASimplifiedSmtTests
+end PAExactSmtTests
 
 namespace PAScrapeTests
 
@@ -966,38 +940,6 @@ run_elab do
 private def region (a : Int → Int) (l m r p : Int) : Prop :=
   ∀ x, l ≤ x → x < m → a x ≤ a p ∧ m ≤ r
 
-run_elab do
-  let source ← elabTerm (← `(fun (i j : Int) (a : Int → Int) (lo hi : Int) =>
-    region (update a i (a hi)) lo i (hi + 1) i)) none
-  synthesizeSyntheticMVarsNoPostponing
-  lambdaTelescope (← instantiateMVars source) fun xs property => do
-    let candidates ← PAScrape.Structured.compoundCandidates #[property] xs
-    let expected := mkAppN (mkConst ``region) #[xs[2]!, xs[3]!, xs[0]!, xs[1]!, xs[4]!]
-    unless candidates.contains expected do throwError "missing compound-argument candidate"
-    for q in candidates do
-      check q
-      if q.hasMVar || q.hasLooseBVars then throwError "unresolved compound candidate"
-      unless (collectFVars {} q).fvarIds.all (fun id => xs.contains (mkFVar id)) do
-        throwError "compound candidate retained a temporary binder"
-    unless (← PAScrape.Structured.compoundCandidates #[property] xs 0).isEmpty &&
-        (← PAScrape.Structured.compoundCandidates #[property] xs 1).size == 1 do
-      throwError "compound candidate limit ignored"
-    unless (← PAScrape.Structured.compoundCandidates #[property, property] xs) == candidates do
-      throwError "duplicate source changed compound candidates"
-    let r ← mkFreshExprMVar (some (← mkForallFVars xs (mkSort .zero)))
-    let body ← mkForallFVars xs (← mkArrow (mkAppN r xs) property)
-    let old ← scrapePAQualifiersWithReport body
-      { mode := .deep, maxCompoundCandidatesPerKappa := 0 }
-    let new ← scrapePAQualifiersWithReport body
-      { mode := .deep, maxCompoundCandidatesPerKappa := 24 }
-    unless !old.anchored.isEmpty && new.anchored.any (·.origin == "compound arguments") do
-      throwError "missing ordinary or supplemental anchor"
-    unless old.qualifiers == new.qualifiers do throwError "compound pass changed ordinary templates"
-    for candidate in old.anchored do
-      unless new.anchored.any (fun q => q.kvar == candidate.kvar &&
-          q.slots == candidate.slots && q.qualifier == candidate.qualifier) do
-        throwError "compound pass displaced an ordinary anchor"
-
 -- Shared checks allow caller locals but reject unresolved or ill-typed candidates.
 open PAScrape.Internal in
 run_elab do
@@ -1337,16 +1279,18 @@ run_elab do
   let queries ← stxs.mapM (fun stx => elabTerm stx none)
   synthesizeSyntheticMVarsNoPostponing
   let queries ← queries.mapM instantiateMVars
-  let opaqueResults ← Flex.PA.observationSmtOracle 2000 queries
-  unless opaqueResults.size == 3 && opaqueResults[0]! == .valid &&
-      opaqueResults[2]! == .valid && opaqueResults[1]! != .valid do
-    throwError "opaque function batch lost congruence or mixed assertions: {repr opaqueResults}"
-  let results ← Flex.PA.functionSmtOracle 2000 queries
-  unless results.size == 3 && results[0]! == .valid && results[2]! == .valid do
-    throwError "function-valued batch lost a valid candidate: {repr results}"
-  if results[1]! == .valid then throwError "function batch mixed candidate assertions"
+  -- Function-valued inputs are arrays and `related` is a definition: all answers are exact.
+  let results ← Flex.PA.smtOracle 2000 queries
+  unless results == #[.valid, .invalid, .valid] do
+    throwError "function-valued batch was not decided exactly: {repr results}"
+  -- As an uninterpreted symbol, `related` still supports congruence, but `sat` is inconclusive.
+  let results ← withOptions (·.setBool `flex.smt.uninterpretedDefs true) <|
+    Flex.PA.smtOracle 2000 queries
+  unless results.size == 3 && results[0]! == .valid && results[2]! == .valid &&
+      (match results[1]! with | .unknown _ => true | _ => false) do
+    throwError "uninterpreted definitions were not treated as abstractions: {repr results}"
   let x ← mkFreshExprMVar (some (mkConst ``Int))
-  let result ← Flex.PA.functionSmtOracle 2000 #[← mkEq x (mkIntLit 0)]
+  let result ← Flex.PA.smtOracle 2000 #[← mkEq x (mkIntLit 0)]
   if result[0]! == .valid || (← x.mvarId!.isAssigned) then
     throwError "function batch accepted or assigned an unresolved input"
 end PAFunctionBatchTests
@@ -1397,14 +1341,6 @@ end PAListPrefixTests
 namespace PAFrameTests
 open Lean Meta Elab Term Tactic
 
--- Whole-function equality is not inductive here; equality at the untouched index is.
-example : ∃ k : (Int → Int) → (Int → Int) → Int → Int → Prop,
-    (∀ f i j, k f f i j) ∧
-    (∀ f g i j v, k f g i j → i ≠ j → k f (fun x => if x = j then v else g x) i j) ∧
-    (∀ f g i j, k f g i j → f i = g i) := by
-  fix (scrape := standard) (scrapeConfig := { pointwiseFrames := true })
-    (synth := grind only) (proof := grind only)
-
 run_elab do
   let source ← elabTerm (← `(fun r : (Int → Int) → (Int → Int) → Int → Int → Prop =>
     ∀ f : Int → Int, r f f 0 0)) none
@@ -1446,60 +1382,28 @@ run_elab do
     throwError "rejected frame modified the original goal"
 end PAFrameTests
 
-namespace PAObservationTests
+namespace PAExactTheoryTests
 open Lean Meta Elab Term
 
--- Equality labels preserve chains; opaque division supplies no invented arithmetic facts.
+private def decide (input : TSyntax `term) : TermElabM PASynthResult := do
+  let target ← elabTerm input none
+  synthesizeSyntheticMVarsNoPostponing
+  return (← Flex.PA.smtOracle 2000 #[← instantiateMVars target])[0]!
+
+-- Lists are datatypes; division by a variable is non-linear, encoded only on request.
 run_elab do
-  for (input, valid) in #[
-      (← `(∀ a b c d : List Int, a = b → b = c → c = d → a = d), true),
-      (← `(∀ x y d : Int, x = y → x / d = y / d), true),
-      (← `(∀ x d : Int, x / d = 0), false)] do
-    let target ← elabTerm input none
-    synthesizeSyntheticMVarsNoPostponing
-    let target ← instantiateMVars target
-    forallTelescope target fun parameters conclusion => do
-      let mut assumptions := #[]
-      for parameter in parameters do
-        let type ← inferType parameter
-        if ← isProp type then assumptions := assumptions.push type
-      let queries ← Flex.PA.Observation.projectQueries assumptions #[conclusion]
-      let proof ← proveLeafWith (← `(tactic| grind)) queries[0]!
-      unless proof.isSome == valid do throwError "incorrect projected equality semantics"
-      if let some proof := proof then checkWithKernel proof
+  unless (← decide (← `(∀ a b c d : List Int, a = b → b = c → c = d → a = d))) == .valid do
+    throwError "list equality chain was not valid"
+  let bail ← decide (← `(∀ x y d : Int, x = y → x / d = y / d))
+  unless (match bail with | .unknown _ => true | _ => false) do
+    throwError "non-linear division was encoded with flex.smt.encodeNonlinear off: {repr bail}"
+  withOptions (·.setBool `flex.smt.encodeNonlinear true) do
+    unless (← decide (← `(∀ x y d : Int, x = y → x / d = y / d))) == .valid do
+      throwError "division congruence was not valid"
+    unless (← decide (← `(∀ x d : Int, x / d = 0))) == .invalid do
+      throwError "division by a variable was not decided exactly"
 
-end PAObservationTests
-
-namespace PASchedulingTests
-open Lean Meta Elab Term
-
-run_elab do
-  let events ← IO.mkRef (#[] : Array PASynthEvent)
-  let oracle := Flex.Automation.synthOracleWithObserver (pure ())
-    (fun event => events.modify (·.push event))
-  withLocalDeclD `x (mkConst ``Int) fun x => do
-    let zero ← mkNumeral (mkConst ``Int) 0
-    let positive ← mkAppM ``LT.lt #[zero, x]
-    let negative ← mkAppM ``LE.le #[x, zero]
-    withLocalDeclD `hp positive fun _ => withLocalDeclD `hn negative fun _ => do
-      let unsupported ← instantiateMVars (← elabTerm (← `(∀ n : Nat, n = n)) none)
-      let results ← oracle #[paContextGuard, unsupported]
-      unless results == #[.valid, .valid] do throwError "shared guard failed"
-      unless (← events.get).any (·.guardShortcut) do throwError "guard did not short-circuit"
-      if (← events.get).any (·.stage == "native fallback") then
-        throwError "proved guard retried native candidates"
-  let unrelated ← instantiateMVars (← elabTerm (← `(∀ x : Int, x < x → False)) none)
-  let results ← oracle #[unrelated, mkConst ``False]
-  unless results == #[.valid, .invalid] do
-    throwError "quantified query was mistaken for a shared-context guard"
-  withOptions (fun opts => opts.set `flex.automation.synthTimeout (0 : Nat)
-      |>.set `flex.automation.synthHeartbeats (1000 : Nat)) do
-    let easy ← instantiateMVars (← elabTerm (← `((1 : Int) = 1)) none)
-    let results ← oracle #[mkConst ``False, easy]
-    unless results[1]! == .valid && results[0]! != .valid do
-      throwError "cheap native sweep missed a later candidate"
-
-end PASchedulingTests
+end PAExactTheoryTests
 
 namespace PAAffineTests
 open Lean Meta Elab Term
@@ -1570,3 +1474,29 @@ run_elab do
       (← elabTermAndSynthesize expected none)
 
 end PAAffineTests
+
+namespace PABudgetTests
+open Lean Meta Elab Term
+
+run_elab do
+  let easy ← instantiateMVars (← elabTerm (← `((1 : Int) = 1)) none)
+  -- A small shared budget still gives a later candidate the cheap native pass.
+  withOptions (fun opts => opts.set `flex.automation.synthTimeout (0 : Nat)
+      |>.set `flex.automation.synthHeartbeats (1000 : Nat)) do
+    let results ← Flex.Automation.synthOracle #[mkConst ``False, easy]
+    unless results[1]! == .valid && results[0]! != .valid do
+      throwError "cheap native pass missed a later candidate"
+  -- No budget: no native fallback.
+  withOptions (fun opts => opts.set `flex.automation.synthTimeout (0 : Nat)
+      |>.set `flex.automation.synthHeartbeats (0 : Nat)) do
+    let results ← Flex.Automation.synthOracle #[easy]
+    unless results.all (fun | .unknown _ => true | _ => false) do
+      throwError "native fallback ran with a zero heartbeat budget"
+  -- An expired enclosing deadline stops synthesis instead of starting it.
+  let expired ← try
+      discard <| Flex.Timeout.withDeadline (some 1) (Flex.Automation.synthOracle #[easy])
+      pure false
+    catch _ => pure true
+  unless expired do throwError "synthesis ran past its deadline"
+
+end PABudgetTests

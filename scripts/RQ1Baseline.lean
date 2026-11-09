@@ -161,10 +161,8 @@ private def runFix (ctx : Context) : TacticM Unit := do
   let mode := if ctx.variant.endsWith "basic" then PAScrapeMode.basic
     else if ctx.variant.endsWith "standard" then PAScrapeMode.standard else PAScrapeMode.deep
   let start ← IO.monoMsNow
-  let checkBudget : TermElabM Unit := do
-    checkTime ctx
-    if (← IO.monoMsNow) - start >= ctx.paSeconds * 1000 then
-      throwError "RQ1 PA budget exhausted"
+  -- Synthesis stops at the case deadline or after the PA budget, whichever comes first.
+  let synthDeadline := some (min ctx.deadline (start + ctx.paSeconds * 1000))
   let observe : PAObserver := fun event => match event with
     | .stageStarted mode => emit ctx "fix_stage" "start" [("mode", toJson (toString mode))]
     | .stageFinished mode accepted => emit ctx "fix_stage" "end" [
@@ -173,13 +171,13 @@ private def runFix (ctx : Context) : TacticM Unit := do
         ("scraped_templates", toJson scraped), ("standard_templates", toJson standard),
         ("tagged_templates", toJson tagged),
         ("initial_candidates", toJson (candidates.foldl (fun n (_, count) => n + count) 0))]
-    | .oracle _ => pure ()
     | .roundStarted count => emit ctx "fix_round" "running" [("candidates", toJson count)]
     | .roundFinished before after => emit ctx "fix_round" "completed" [
         ("candidates_before", toJson before), ("candidates_after", toJson after)]
     | .converged count => emit ctx "fix_converged" "candidate" [("candidates", toJson count)]
   onPredicates <| fixImpl proveLeaf { mode } (some Flex.Automation.proofOracle)
-    observe (some (Flex.Automation.synthOracle checkBudget))
+    observe (some fun targets =>
+      Flex.Timeout.withDeadline synthDeadline (Flex.Automation.synthOracle targets))
 
 private def runSolver (ctx : Context) (backend : Backend)
     (remainingHeads : IO.Ref (Option Nat)) (provedHeads : IO.Ref Nat) : TacticM Unit := do

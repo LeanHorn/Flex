@@ -139,7 +139,7 @@ private def SourceRule.generate (properties arguments : Array Expr) (cap : Nat)
   | .relational => Regions.relationalCandidates properties arguments cap
 
 inductive ObservationMode where
-  | relate | quantify | arguments | anchored | compound | source (rule : SourceRule)
+  | relate | quantify | arguments | anchored | source (rule : SourceRule)
   deriving BEq
 
 private def ObservationMode.isSource : ObservationMode → Bool
@@ -234,16 +234,15 @@ private def normalizeOffsets (property : Expr) : MetaM Expr := do
 
 /-- Repeated inputs suggest frame equalities; PA must check that later transitions preserve them. -/
 partial def frameClauses (cfg : PAScrapeConfig) (raw : Expr) (depth : Nat := 0)
-    (pointwise : Bool := false)
     : ScrapeM Unit := do
   unless ← visit cfg depth do return
   if (← get).anchoredAttempts >= cfg.maxAnchoredAttempts then return
   let e := raw.consumeMData.headBeta
   if let .letE _ _ value body _ := e then
-    frameClauses cfg (body.instantiate1 value) (depth + 1) pointwise
+    frameClauses cfg (body.instantiate1 value) (depth + 1)
   else if let .forallE name type body bi := e then
-    frameClauses cfg type (depth + 1) pointwise
-    withLocalDecl name bi type fun x => frameClauses cfg (body.instantiate1 x) (depth + 1) pointwise
+    frameClauses cfg type (depth + 1)
+    withLocalDecl name bi type fun x => frameClauses cfg (body.instantiate1 x) (depth + 1)
   else if let .mvar kvar := e.getAppFn then
     unless ← isProp e do return
     let args := e.getAppArgs
@@ -253,36 +252,19 @@ partial def frameClauses (cfg : PAScrapeConfig) (raw : Expr) (depth : Nat := 0)
       for j in [i + 1:args.size] do
         let frames := (← get).anchored.filter fun q => q.kvar == kvar && q.origin == "argument frames"
         if frames.size >= cfg.maxFrameCandidatesPerKappa then return
-        if !pointwise && frames.any (·.slots == [i, j]) then continue
+        if frames.any (·.slots == [i, j]) then continue
         if (← get).anchoredAttempts >= cfg.maxAnchoredAttempts then return
         modify fun s => { s with anchoredAttempts := s.anchoredAttempts + 1 }
         unless arg == args[j]! do continue
         let type ← instantiateMVars (← inferType arg)
         if type.hasFVar || !isResolved type then continue
         if ((← whnf type).isSort && !type.isProp) || (← isProp type) then continue
-        unless pointwise do
-          let qualifier ← withLocalDeclsDND #[(`x, type), (`y, type)] fun xs => do
-            mkLambdaFVars xs (← mkEq xs[0]! xs[1]!)
-          modify fun s => { s with
-            anchored := s.anchored.push ⟨kvar, qualifier, [i, j], "argument frames"⟩ }
-          continue
-        -- A changing function may preserve individual reads even when whole-value equality fails.
-        let .forallE _ domain range _ ← whnf type | continue
-        if range.hasLooseBVars || domain.hasFVar || (← isProp domain) then continue
-        for input in args, index in [:args.size] do
-          let frames := (← get).anchored.filter fun q => q.kvar == kvar && q.origin == "argument frames"
-          if frames.any (·.slots == [i, j, index]) then continue
-          if frames.size >= cfg.maxFrameCandidatesPerKappa ||
-              (← get).anchoredAttempts >= cfg.maxAnchoredAttempts then break
-          unless input.hasFVar && isResolved input do continue
-          modify fun s => { s with anchoredAttempts := s.anchoredAttempts + 1 }
-          unless ← isDefEq domain (← inferType input) do continue
-          let qualifier ← withLocalDeclsDND #[(`f, type), (`g, type), (`x, domain)] fun xs => do
-            mkLambdaFVars xs (← mkEq (mkApp xs[0]! xs[2]!) (mkApp xs[1]! xs[2]!))
-          modify fun s => { s with
-            anchored := s.anchored.push ⟨kvar, qualifier, [i, j, index], "argument frames"⟩ }
+        let qualifier ← withLocalDeclsDND #[(`x, type), (`y, type)] fun xs => do
+          mkLambdaFVars xs (← mkEq xs[0]! xs[1]!)
+        modify fun s => { s with
+          anchored := s.anchored.push ⟨kvar, qualifier, [i, j], "argument frames"⟩ }
   else
-    for arg in e.getAppArgs do frameClauses cfg arg (depth + 1) pointwise
+    for arg in e.getAppArgs do frameClauses cfg arg (depth + 1)
 
 /-- Alias equations propose candidates only; PA still checks every resulting predicate. -/
 private def anchoredObservation (cfg : PAScrapeConfig) (property relation : Expr)
@@ -329,17 +311,6 @@ private def observationPredicates (cfg : PAScrapeConfig) (mode : ObservationMode
       let stable := (← get).stableSlots[kvar]?.getD #[]
       let candidates ← rule.generate properties relation.getAppArgs budget stable
       for candidate in candidates do anchorPredicate cfg origin candidate relation
-    return
-  if mode == .compound then
-    for relation in found.relations do
-      if (← get).anchoredAttempts >= cfg.maxAnchoredAttempts then return
-      let .mvar kvar := relation.getAppFn | continue
-      let count := ((← get).anchored.filter fun q =>
-        q.kvar == kvar && q.origin == "compound arguments").size
-      let budget := min 24 (min (cfg.maxCompoundCandidatesPerKappa - count)
-        (cfg.maxAnchoredAttempts - (← get).anchoredAttempts))
-      for candidate in ← Structured.compoundCandidates found.predicates relation.getAppArgs budget do
-        anchorPredicate cfg "compound arguments" candidate relation
     return
   let fixed := (← get).fixed
   let observations := if mode == .anchored then
@@ -425,7 +396,7 @@ private def observationPredicates (cfg : PAScrapeConfig) (mode : ObservationMode
 
 partial def observationClauses (cfg : PAScrapeConfig) (mode : ObservationMode) (raw : Expr)
     (premises : Array Expr := #[]) (depth : Nat := 0) : ScrapeM Unit := do
-  if mode == .anchored || mode == .compound || mode.isSource then
+  if mode == .anchored || mode.isSource then
     if (← get).anchoredAttempts >= cfg.maxAnchoredAttempts then return
   else if (← get).observations.size >= cfg.maxObservationQualifiers ||
       (← get).observationPairs >= cfg.maxObservationPairs then return

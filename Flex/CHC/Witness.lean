@@ -1,6 +1,5 @@
 import Flex.CHC.Export
 import Flex.CHC.Backend
-import Smt2Lean.Model
 
 namespace Flex.CHC
 
@@ -55,51 +54,41 @@ private def checkRelations (problem : ExportedProblem) : MetaM Unit := do
         unless (← Fragment.valueSort (← inferType argument)) == sort do
           throwError "CHC witnesses: inconsistent SMT sort metadata for '{relation.symbol}'"
 
-/-- The shared importer represents every SMT Bool as Lean Prop. -/
-private def importedType (relation : Relation) : Expr :=
-  relation.argumentSorts.foldr (fun sort result =>
-    let domain := match sort with
-      | .int => mkConst ``Int
-      | .bool => mkSort .zero
-    .forallE .anonymous domain result .default) (mkSort .zero)
-
-private def checkValue (relation : Relation) (value : Expr) : MetaM Unit := do
-  requireClosed value s!"candidate for '{relation.symbol}'"
-  checkWithKernel value
-  unless ← isDefEq (← inferType value) relation.leanType do
+private def checkValue (problem : ExportedProblem) (relation : Relation) (value : Expr)
+    : MetaM Unit := do
+  let closed ← mkLambdaFVars problem.parameters value (usedOnly := false)
+  requireClosed closed s!"candidate for '{relation.symbol}'"
+  checkWithKernel closed
+  unless ← isDefEq (← inferType closed) (← mkForallFVars problem.parameters relation.leanType) do
     throwError "CHC witnesses: candidate type does not match '{relation.symbol}'"
-
-private def usesSymbol (symbol : String) : Smt.Term → Bool
-  | .literalT _ => false
-  | .symbolT name => name == symbol
-  | .arrowT a b | .appT a b => usesSymbol symbol a || usesSymbol symbol b
-  | .forallT name a b | .existsT name a b | .letT name a b =>
-    usesSymbol symbol a || (name != symbol && usesSymbol symbol b)
 
 /-- Only predicates absent from every exported assertion may be completed. -/
 private def completeUnused (problem : ExportedProblem) (relation : Relation) : MetaM Witness := do
-  if problem.commands.any (fun
-      | .assert term => usesSymbol relation.symbol term
-      | _ => false) then
+  if problem.usedRelations.contains relation.symbol then
     throwError "CHC witnesses: missing model definition '{relation.symbol}' used by a clause"
   let value ← forallTelescopeReducing relation.leanType fun parameters _ =>
     mkLambdaFVars parameters (mkConst ``True) (usedOnly := false)
-  checkValue relation value
+  checkValue problem relation value
   return { symbol := relation.symbol, mvarId := relation.kvar.mvarId, value, defaulted := true }
 
-/-- Restore Bool arguments as `b = true`, retaining Prop and unused parameters. -/
-private def adapt (relation : Relation) (definition : Smt2Lean.ReconstructedDefinition)
-    : MetaM Witness := do
-  unless ← isDefEq definition.type (importedType relation) do
+/-- Decode a relation's model definition. The leading parameters are the problem's parameters;
+the rest are the κ's arguments, restored at their Lean types (`Bool` ones as `b = true`). -/
+private def adapt (problem : ExportedProblem) (relation : Relation) (definition : SMT.Macro)
+    (macros : Std.HashMap String SMT.Macro) : MetaM Witness := do
+  let sorts := problem.parameterSorts ++ relation.argumentSorts
+  unless definition.params.size == sorts.size &&
+      (definition.params.zip sorts).all (fun ((_, s), t) => s.toString == t.smt) do
     throwError "CHC witnesses: model signature does not match '{relation.symbol}'"
   let value ← forallTelescopeReducing relation.leanType fun parameters _ => do
-    let arguments ← parameters.mapM fun parameter => do
-      if (← whnf (← inferType parameter)).isConstOf ``Bool then
-        mkEq parameter (mkConst ``Bool.true)
-      else
-        pure parameter
-    mkLambdaFVars parameters (definition.value.beta arguments) (usedOnly := false)
-  checkValue relation value
+    let actuals := problem.parameters ++ parameters
+    let mut locals : Std.HashMap String SMT.Value := {}
+    for (name, _) in definition.params, actual in actuals do
+      locals := locals.insert name (← SMT.normalize actual (← inferType actual))
+    let body ← (SMT.decodeTerm definition.body).run { symbols := problem.symbols, macros, locals }
+    unless body.type.isProp do
+      throwError "CHC witnesses: model of '{relation.symbol}' is not a formula"
+    mkLambdaFVars parameters body.expr (usedOnly := false)
+  checkValue problem relation value
   return { symbol := relation.symbol, mvarId := relation.kvar.mvarId, value }
 
 private def successfulModel (result : SolverResult) : MetaM Unit := do
@@ -113,28 +102,29 @@ private def successfulModel (result : SolverResult) : MetaM Unit := do
   | _ => throwError "CHC witnesses: process did not successfully return a model"
 
 /-- Import predicates in existential order, completing omitted unused ones with True.
-SMTLib-to-Lean expands helpers. Caller state is restored without assigning witnesses. -/
+Models are decoded by `Flex.SMT.Decode`, which expands model helper functions at their uses.
+Caller state is restored without assigning witnesses. -/
 def importWitnesses (problem : ExportedProblem) (result : SolverResult) : MetaM (Array Witness) := do
   let saved ← Meta.saveState
   try
     checkRelations problem
     successfulModel result
-    -- Kernel checking needs temporary declarations in an unlocked environment.
-    let response ← withoutModifyingEnv do
-      let environment ← getEnv
-      Smt2Lean.Model.importResponse result.process.stdout environment "flex-chc-model"
-    unless response.status == some .sat && response.diagnostics.isEmpty do
-      throwError "CHC witnesses: expected a sat model without solver errors"
-    let some definitions := response.definitions
-      | throwError "CHC witnesses: missing model definitions"
-    let mut byName : Std.HashMap String Smt2Lean.ReconstructedDefinition := {}
-    for definition in definitions do
-      if byName.contains definition.name then
-        throwError "CHC witnesses: duplicate model definition '{definition.name}'"
-      byName := byName.insert definition.name definition
+    let .sat commands := result.outcome | throwError "CHC witnesses: missing model"
+    let mut byName : Std.HashMap String SMT.Macro := {}
+    for command in commands do
+      let parsed ← match SMT.Sexp.parseAll command.text with
+        | .ok #[sexp] => pure sexp
+        | .ok _ => throwError "CHC witnesses: expected one model command"
+        | .error e => throwError "CHC witnesses: model syntax: {e}"
+      let (name, definition, _) ← match SMT.parseDefineFun parsed with
+        | .ok d => pure d
+        | .error e => throwError "CHC witnesses: {e}"
+      if byName.contains name then
+        throwError "CHC witnesses: duplicate model definition '{name}'"
+      byName := byName.insert name definition
     problem.relations.mapM fun relation => do
       match byName[relation.symbol]? with
-      | some definition => adapt relation definition
+      | some definition => adapt problem relation definition byName
       | none => completeUnused problem relation
   finally restoreMetaState saved
 
@@ -149,7 +139,7 @@ def assignWitnesses (problem : ExportedProblem) (witnesses : Array Witness) : Me
     for relation in problem.relations, witness in witnesses do
       unless witness.symbol == relation.symbol && witness.mvarId == relation.kvar.mvarId do
         throwError "CHC witnesses: candidate identity or order does not match '{relation.symbol}'"
-      checkValue relation witness.value
+      checkValue problem relation witness.value
     restoreMetaState saved
     for witness in witnesses do witness.mvarId.assign witness.value
   catch error =>

@@ -1,4 +1,6 @@
 import Flex
+-- Flex does not import Mathlib; these examples use its simp lemmas.
+import Mathlib.Data.Real.Basic
 import Flex.Tactic.Tactics.Spacer
 import Flex.Tactic.Tactics.Eldarica
 

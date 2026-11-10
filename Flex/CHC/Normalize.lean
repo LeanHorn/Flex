@@ -1,5 +1,6 @@
 import Flex.CHC.Export
 import Lean.Meta.Tactic.Replace
+import Smt.Recognizers
 
 namespace Flex.CHC
 

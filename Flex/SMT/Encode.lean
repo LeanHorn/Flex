@@ -52,6 +52,9 @@ structure Config where
   uninterpretedDefs : Bool := false
   encodeNonlinear : Bool := false
   encodeQuantifiers : Bool := false
+  /-- Emit Horn clauses (`encodeHornClause`): every variable is a clause binder, and nothing
+  may be uninterpreted, since CHC solvers read uninterpreted symbols as predicates or reject them. -/
+  horn : Bool := false
   deriving Inhabited, Repr
 
 def Config.ofOptions (options : Options) : Config where
@@ -93,6 +96,8 @@ structure State where
   counter : Nat := 0
   /-- Whether the current encoding uses an abstraction. -/
   abstracted : Bool := false
+  /-- Horn relation symbols applied so far. -/
+  usedRelations : Std.HashSet String := {}
   deriving Inhabited
 
 /-- Where a formula ends up in the solver's input: asserted (`pos`), under a negation (`neg`),
@@ -109,6 +114,8 @@ def Polarity.flip : Polarity → Polarity
 structure Context where
   config : Config
   polarity : Polarity := .both
+  /-- Local predicate symbols encoded as Horn relation applications. -/
+  relations : Std.HashMap FVarId String := {}
 
 abbrev EncodeM := ReaderT Context (StateRefT State MetaM)
 
@@ -203,6 +210,7 @@ partial def encodeSort (type : Expr) : EncodeM String := do
       -- An opaque type is exactly an uninterpreted sort, provided it is nonempty, as every
       -- SMT sort is: a possibly empty type could make a universal premise vacuous.
       if ← isOpaqueType reduced then
+        if (← read).config.horn then unsupported m!"opaque sort {type} in a Horn clause"
         -- Instances are usually declared for the type as written, not its reduced form.
         let nonempty ← [type, reduced].anyM fun t => do
           try pure (← synthInstance? (← mkAppM ``Nonempty #[t])).isSome catch _ => pure false
@@ -359,9 +367,13 @@ partial def encodeFVar (id : FVarId) : EncodeM String := do
   if let some name := (← get).names[id]? then
     if (← get).lossyNames.contains name then markAbstracted
     return name
+  if let some symbol := (← read).relations[id]? then
+    modify fun s => { s with usedRelations := s.usedRelations.insert symbol }
+    return symbol
   let decl ← id.getDecl
   if let some value := decl.value? then return ← encode value
   if ← isProof (mkFVar id) then unsupported m!"proof term {decl.userName}"
+  if (← read).config.horn then unsupported m!"free variable {decl.userName} in a Horn clause"
   let sort ← encodeSort decl.type
   let lossy := (← get).lossySorts.contains sort
   let name ← fresh decl.userName.toString
@@ -507,20 +519,28 @@ partial def encodeAppAt (e fn : Expr) (args : Array Expr) : EncodeM String := do
         arithmetic op int (← encode (arg 0)) (← encode (arg 1))
       else encodeConstApp e name levels args
     | _, _ => encodeConstApp e name levels args
-  | .fvar _ | .proj .. | .app .. | .mdata .. =>
-    -- Function-valued terms are arrays; each argument is one read.
-    let mut result ← encode fn
-    let mut type ← inferType fn
-    for argument in args do
-      let .forallE _ _ body _ ← whnf type | unsupported m!"application {e}"
-      if body.hasLooseBVars then unsupported m!"dependent application {e}"
-      if (← isProof argument) || (← isType argument) then unsupported m!"application {e}"
-      result := s!"(select {result} {← encode argument})"
-      type := body
-    if (← isNatType (← inferType e)) then markAbstracted
-    return result
+  | .fvar id =>
+    if let some symbol := (← read).relations[id]? then
+      modify fun s => { s with usedRelations := s.usedRelations.insert symbol }
+      let encoded ← args.mapM fun a => encode a
+      return if encoded.isEmpty then symbol else s!"({symbol} {" ".intercalate encoded.toList})"
+    encodeReads e fn args
+  | .proj .. | .app .. | .mdata .. => encodeReads e fn args
   | .mvar _ => unsupported m!"metavariable in {e}"
   | _ => unsupported m!"application {e}"
+
+/-- Function-valued terms are arrays; each argument is one read. -/
+partial def encodeReads (e fn : Expr) (args : Array Expr) : EncodeM String := do
+  let mut result ← encode fn
+  let mut type ← inferType fn
+  for argument in args do
+    let .forallE _ _ body _ ← whnf type | unsupported m!"application {e}"
+    if body.hasLooseBVars then unsupported m!"dependent application {e}"
+    if (← isProof argument) || (← isType argument) then unsupported m!"application {e}"
+    result := s!"(select {result} {← encode argument})"
+    type := body
+  if (← isNatType (← inferType e)) then markAbstracted
+  return result
 
 /-- Linear arithmetic directly; non-linear operations only when enabled. Lean's `x / 0 = 0` and
 `x % 0 = x` are kept exactly; SMT-LIB leaves division by zero unspecified. -/
@@ -608,7 +628,15 @@ partial def encodeDefinitionApp (e : Expr) (name : Name) (levels : List Level)
     consumed := consumed + 1
   -- With fewer arguments than parameters, the instance returns an array.
   let key := mkAppN (.const name levels) (static.map (·.getD (mkSort .zero)))
-  let definition ← encodeDefinition key name levels info static
+  let definition ← try encodeDefinition key name levels info static
+    catch error =>
+      -- Horn clauses admit no uninterpreted symbols. A non-recursive definition whose body
+      -- does not encode in general may still encode at this call, e.g. `a % b` at `b := 4`.
+      if error.isInterrupt || error.isRuntime || !(← read).config.horn then throw error
+      unless info matches .defnInfo _ do throw error
+      if info.all.length > 1 || (← isRecursiveDefinition name) then throw error
+      let some unfolded ← unfoldDefinition? e | throw error
+      return ← encode unfolded
   if definition.abstracted then markAbstracted
   if let some literal := definition.literal? then return literal
   let encodedValues ← values.mapM fun a => encode a
@@ -663,6 +691,8 @@ partial def encodeDefinition (key : Expr) (name : Name) (levels : List Level) (i
           declare s!"(define-fun {symbol} ({" ".intercalate formals.toList}) {resultSort} {body})"
           pure { symbol, abstracted := abstracted || lossy }
       | none =>
+        if (← read).config.horn then
+          unsupported m!"uninterpreted definition {name} in a Horn clause"
         declare s!"(declare-fun {symbol} ({" ".intercalate paramSorts.toList}) {resultSort})"
         pure { symbol, abstracted := true }
     modify fun s => { s with definitions := s.definitions.insert key definition }
@@ -698,6 +728,58 @@ initialize registerTraceClass `flex.smt
 partial def conjuncts (e : Expr) : Array Expr :=
   let e := e.consumeMData
   if e.isAppOfArity ``And 2 then conjuncts (e.getArg! 0) ++ conjuncts (e.getArg! 1) else #[e]
+
+/-- An encoded Horn clause `∀ binders, premises → head`. -/
+structure HornClause where
+  /-- `(symbol sort)` pairs. -/
+  binders : Array String
+  premises : Array String
+  head : String
+  deriving Inhabited
+
+/-- Render as one `assert`: nested implications, or with `conjoined` one `and` of premises. -/
+def HornClause.render (clause : HornClause) (conjoined : Bool := false) : String :=
+  let body :=
+    if clause.premises.isEmpty then clause.head
+    else if conjoined then
+      let guard := if clause.premises.size == 1 then clause.premises[0]!
+        else s!"(and {" ".intercalate clause.premises.toList})"
+      s!"(=> {guard} {clause.head})"
+    else clause.premises.foldr (fun p body => s!"(=> {p} {body})") clause.head
+  let body := if clause.binders.isEmpty then body
+    else s!"(forall ({" ".intercalate clause.binders.toList}) {body})"
+  s!"(assert {body})"
+
+/-- Encode a clause `∀ xs, p₁ → … → pₙ → head` as a Horn clause, with `Config.horn` set and κs
+bound in `Context.relations`. Variables become universal binders (`Nat` ones guarded by
+`0 ≤ x`). A premise conjunct that cannot be encoded is dropped, which only strengthens the
+clause, so any solution of the encoding still solves the original; it marks the encoding
+abstracted. The head must encode. -/
+partial def encodeHornClause (clause : Expr) : EncodeM HornClause :=
+  go clause #[] #[]
+where
+  go (clause : Expr) (binders premises : Array String) : EncodeM HornClause := do
+    match (← instantiateMVars clause).consumeMData with
+    | .forallE name domain body bi =>
+      if ← isProp domain then
+        if body.hasLooseBVar 0 then unsupported m!"proof-dependent premise"
+        let mut premises := premises
+        for conjunct in conjuncts domain do
+          try premises := premises.push (← withPolarity .both (encode conjunct))
+          catch error =>
+            if error.isInterrupt || error.isRuntime then throw error
+            trace[flex.smt] "omitted premise: {error.toMessageData}"
+            markAbstracted
+        go (body.lowerLooseBVars 1 1) binders premises
+      else
+        let sort ← encodeSort domain
+        let nat ← isNatType domain
+        withLocalDecl name bi domain fun x => do
+          let symbol ← fresh name.toString
+          let premises := if nat then premises.push s!"(>= {symbol} 0)" else premises
+          withBinder x symbol <|
+            go (body.instantiate1 x) (binders.push s!"({symbol} {sort})") premises
+    | head => return { binders, premises, head := ← withPolarity .both (encode head) }
 
 /-- Run an encoding, starting from an empty state. -/
 def EncodeM.run' (config : Config) (k : EncodeM α) : MetaM α := do

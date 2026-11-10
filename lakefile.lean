@@ -18,12 +18,18 @@ require auto from git
 require smt from git
   "https://github.com/ufmg-smite/lean-smt.git" @ "79ef7b3d5e06608d031d75b6d015949b90016875"
 
--- CHC model import uses the same cvc5 parser as the SMT integration.
+-- CHC export validation (via smt2lean) uses the same cvc5 parser as the SMT integration.
 require cvc5 from git
   "https://github.com/abdoo8080/lean-cvc5.git" @ "41e47796d4d15712e6064b064ca5d251a1283955"
 
 require smt2lean from git
   "https://github.com/LeanHorn/SMTLib-to-Lean.git" @ "89667053aa420284b6794b6d6caabd551c1f7c79"
+
+-- Pin mathlib at the root: smt2lean's manifest still pins mathlib v4.33.0, and
+-- without this override `lake update` resolves to it, mismatching our toolchain
+-- (and breaking `lake exe cache get`). Drop once smt2lean moves to v4.34.0.
+require mathlib from git
+  "https://github.com/leanprover-community/mathlib4.git" @ "v4.34.0"
 
 @[default_target]
 lean_lib «Flex» where

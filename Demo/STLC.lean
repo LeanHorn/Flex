@@ -1,4 +1,6 @@
 import Flex
+-- Flex does not import Mathlib; these examples use its simp lemmas.
+import Mathlib.Data.Real.Basic
 
 /-! STLC programs, refinement inference, and declarative typing examples. -/
 

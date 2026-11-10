@@ -72,12 +72,13 @@ private def completeUnused (problem : ExportedProblem) (relation : Relation) : M
 the rest are the κ's arguments, restored at their Lean types (`Bool` ones as `b = true`). -/
 private def adapt (problem : ExportedProblem) (relation : Relation) (definition : SMT.Macro)
     (macros : Std.HashMap String SMT.Macro) : MetaM Witness := do
-  let sorts := problem.parameterSorts ++ relation.argumentSorts
+  let sorts := problem.parameterSorts ++ relation.argumentSorts ++ problem.abstractions.map (·.sort)
   unless definition.params.size == sorts.size &&
       (definition.params.zip sorts).all (fun ((_, s), t) => (SMT.Sexp.parseAll t).toOption == some #[s]) do
     throwError "CHC witnesses: model signature does not match '{relation.symbol}'"
   let value ← forallTelescopeReducing relation.leanType fun parameters _ => do
-    let actuals := problem.parameters ++ parameters
+    -- Abstractions are bound to the definitions they stand for.
+    let actuals := problem.parameters ++ parameters ++ problem.abstractions.map (·.value)
     let mut locals : Std.HashMap String SMT.Value := {}
     for (name, _) in definition.params, actual in actuals do
       locals := locals.insert name (← SMT.normalize actual (← inferType actual))

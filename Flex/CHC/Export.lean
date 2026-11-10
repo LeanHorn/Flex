@@ -37,6 +37,9 @@ structure ExportedProblem where
   parameterSorts : Array String := #[]
   /-- The encoder's declared symbols, for decoding models. -/
   symbols : SMT.Symbols := {}
+  /-- Definitions abstracted to variables (`SMT.Abstraction`). Every relation takes them as
+  trailing arguments; models bind them to the definitions themselves. -/
+  abstractions : Array SMT.Abstraction := #[]
   /-- Alternate SMT presentation (one conjunction of premises per clause); the Lean clauses and
   relation slots are unchanged. -/
   canonicalClauses : Bool := false
@@ -45,7 +48,7 @@ structure ExportedProblem where
 /-- Serialize the script. -/
 def ExportedProblem.toSMTLib (problem : ExportedProblem) : String :=
   let relations := problem.relations.map fun r =>
-    let sorts := problem.parameterSorts ++ r.argumentSorts
+    let sorts := problem.parameterSorts ++ r.argumentSorts ++ problem.abstractions.map (·.sort)
     s!"(declare-fun {r.symbol} ({" ".intercalate sorts.toList}) Bool)"
   let clauses := problem.clauses.map (·.render problem.canonicalClauses)
   "\n".intercalate (#["(set-logic HORN)"] ++ problem.declarations ++ relations ++ clauses ++
@@ -168,7 +171,8 @@ private def validate (problem : ExportedProblem) : MetaM Unit := do
     for expected in problem.relations do
       let some actual := parsed.relations.find? (·.name == expected.symbol)
         | throw (.error s!"CHC export: missing relation '{expected.symbol}'")
-      let expectedSorts := problem.parameterSorts ++ expected.argumentSorts
+      let expectedSorts := problem.parameterSorts ++ expected.argumentSorts ++
+        problem.abstractions.map (·.sort)
       unless actual.argumentSorts.size == expectedSorts.size do
         throw (.error s!"CHC export: wrong arity for '{expected.symbol}'")
       for actualSort in actual.argumentSorts, expectedSort in expectedSorts do
@@ -254,6 +258,15 @@ def exportConstraints (kvars : List KVar) (body : Expr) : MetaM ExportedProblem 
         return (parameterSorts, relations, clauses)
       let ((parameterSorts, relations, encoded), state) ←
         (encodeAll.run { config, relations := relationSymbols }).run {}
+      -- Abstractions are found while encoding; encode again, binding them in every clause and
+      -- passing them to every relation. Caches make the second pass reuse the same symbols.
+      let ((parameterSorts, relations, encoded), state) ← do
+        if state.abstractions.isEmpty then pure ((parameterSorts, relations, encoded), state) else
+        let abstractions := state.abstractions.map fun a => (a.symbol, a.sort)
+        let result ← (encodeAll.run { config, relations := relationSymbols, abstractions }).run state
+        unless result.2.abstractions.size == state.abstractions.size do
+          throwError "CHC export: abstractions changed between encoding passes"
+        pure result
       let problem : ExportedProblem := {
         relations
         declarations := state.declarations
@@ -261,7 +274,8 @@ def exportConstraints (kvars : List KVar) (body : Expr) : MetaM ExportedProblem 
         usedRelations := state.usedRelations
         clauseCount := encoded.size
         parameters, parameterSorts
-        symbols := state.symbols }
+        symbols := state.symbols
+        abstractions := state.abstractions }
       validate problem
       return problem
   finally restoreMetaState saved

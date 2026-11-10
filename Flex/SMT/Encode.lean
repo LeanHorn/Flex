@@ -77,6 +77,20 @@ structure Definition where
   abstracted : Bool
   /-- Nullary definitions whose body is a numeral are inlined. -/
   literal? : Option String := none
+  /-- An abstraction (see `Abstraction`): a variable, read with `select`. -/
+  array : Bool := false
+  deriving Inhabited
+
+/-- In Horn clauses, a definition that cannot be a `define-fun` (recursive, an axiom, or a body
+that does not encode) is abstracted to a universally quantified variable: bound in every clause
+and passed to every relation, so invariants may mention it. Clauses that hold for every
+interpretation hold for the definition itself, so this is sound. -/
+structure Abstraction where
+  symbol : String
+  /-- An `Array` sort over the value parameters, or the result sort if there are none. -/
+  sort : String
+  /-- The Lean function it stands for: the definition applied to its static arguments. -/
+  value : Expr
   deriving Inhabited
 
 structure State where
@@ -99,6 +113,10 @@ structure State where
   abstracted : Bool := false
   /-- Horn relation symbols applied so far. -/
   usedRelations : Std.HashSet String := {}
+  /-- Horn abstractions, in creation order. -/
+  abstractions : Array Abstraction := #[]
+  /-- Whether the current encoding reads an abstraction. -/
+  usesAbstraction : Bool := false
   deriving Inhabited
 
 /-- Where a formula ends up in the solver's input: asserted (`pos`), under a negation (`neg`),
@@ -117,6 +135,9 @@ structure Context where
   polarity : Polarity := .both
   /-- Local predicate symbols encoded as Horn relation applications. -/
   relations : Std.HashMap FVarId String := {}
+  /-- Abstractions (symbol, sort) that every Horn clause binds and every relation application
+  receives as trailing arguments. -/
+  abstractions : Array (String × String) := #[]
 
 abbrev EncodeM := ReaderT Context (StateRefT State MetaM)
 
@@ -561,7 +582,7 @@ partial def encodeAppAt (e fn : Expr) (args : Array Expr) : EncodeM String := do
   | .fvar id =>
     if let some symbol := (← read).relations[id]? then
       modify fun s => { s with usedRelations := s.usedRelations.insert symbol }
-      let encoded ← args.mapM fun a => encode a
+      let encoded := (← args.mapM fun a => encode a) ++ (← read).abstractions.map (·.1)
       return if encoded.isEmpty then symbol else s!"({symbol} {" ".intercalate encoded.toList})"
     encodeReads e fn args
   | .proj .. | .app .. | .mdata .. => encodeReads e fn args
@@ -676,7 +697,10 @@ partial def encodeDefinitionApp (e : Expr) (name : Name) (levels : List Level)
   if definition.abstracted then markAbstracted
   if let some literal := definition.literal? then return literal
   let encodedValues ← values.mapM fun a => encode a
-  let head := if encodedValues.isEmpty then definition.symbol
+  if definition.array then modify fun s => { s with usesAbstraction := true }
+  let head :=
+    if definition.array then encodedValues.foldl (fun a v => s!"(select {a} {v})") definition.symbol
+    else if encodedValues.isEmpty then definition.symbol
     else s!"({definition.symbol} {" ".intercalate encodedValues.toList})"
   selects e head args[consumed:].toArray
 
@@ -698,8 +722,10 @@ partial def encodeDefinition (key : Expr) (name : Name) (levels : List Level) (i
       match info with
       | .defnInfo _ =>
         let saved := (← get).abstracted
+        let savedUses := (← get).usesAbstraction
         modify fun s => { s with
-          abstracted := false, pendingDefinitions := s.pendingDefinitions.insert key }
+          abstracted := false, usesAbstraction := false
+          pendingDefinitions := s.pendingDefinitions.insert key }
         let attempt ← try
             let value ← instantiateValueLevelParams info levels
             let body := (value.beta arguments).headBeta
@@ -709,13 +735,16 @@ partial def encodeDefinition (key : Expr) (name : Name) (levels : List Level) (i
               return n
             -- A definition may be used at either polarity.
             let encoded ← withPolarity .both (encode body)
+            -- A `define-fun` body cannot mention a clause-bound abstraction.
+            if (← get).usesAbstraction then throwError "its body uses an abstraction"
             pure (some (names, encoded, (← get).abstracted))
           catch error =>
             if error.isInterrupt then throw error
             trace[flex.smt] "{name} is uninterpreted: {error.toMessageData}"
             pure none
         modify fun s => { s with
-          abstracted := saved, pendingDefinitions := s.pendingDefinitions.erase key }
+          abstracted := saved, usesAbstraction := savedUses
+          pendingDefinitions := s.pendingDefinitions.erase key }
         pure attempt
       | _ => pure none
     let definition ← match interpreted? with
@@ -728,9 +757,13 @@ partial def encodeDefinition (key : Expr) (name : Name) (levels : List Level) (i
           pure { symbol, abstracted := abstracted || lossy }
       | none =>
         if (← read).config.horn then
-          unsupported m!"uninterpreted definition {name} in a Horn clause"
-        declare s!"(declare-fun {symbol} ({" ".intercalate paramSorts.toList}) {resultSort})"
-        pure { symbol, abstracted := true }
+          let sort := paramSorts.foldr (fun p acc => s!"(Array {p} {acc})") resultSort
+          let value ← mkLambdaFVars params (mkAppN (.const name levels) arguments)
+          modify fun s => { s with abstractions := s.abstractions.push { symbol, sort, value } }
+          pure { symbol, abstracted := true, array := true }
+        else do
+          declare s!"(declare-fun {symbol} ({" ".intercalate paramSorts.toList}) {resultSort})"
+          pure { symbol, abstracted := true }
     modify fun s => { s with definitions := s.definitions.insert key definition }
     return definition
 
@@ -815,7 +848,10 @@ where
           let premises := if nat then premises.push s!"(>= {symbol} 0)" else premises
           withBinder x symbol <|
             go (body.instantiate1 x) (binders.push s!"({symbol} {sort})") premises
-    | head => return { binders, premises, head := ← withPolarity .both (encode head) }
+    | head =>
+      let head ← withPolarity .both (encode head)
+      let abstractions := (← read).abstractions.map fun (symbol, sort) => s!"({symbol} {sort})"
+      return { binders := binders ++ abstractions, premises, head }
 
 /-- Run an encoding, starting from an empty state. -/
 def EncodeM.run' (config : Config) (k : EncodeM α) : MetaM α := do

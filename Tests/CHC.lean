@@ -353,3 +353,36 @@ run_elab do
   let script := (← exportConstraints prepared.kvars (← prepared.exportGoal.getType)).toSMTLib
   unless (script.splitOn "(* ").length > 1 && (script.splitOn "(mod ").length > 1 do
     throwError "non-linear terms were not exported:\n{script}"
+
+/-! Definitions that cannot be a `define-fun` are abstracted to universally quantified variables,
+passed to every relation; models bind them back to the definitions. -/
+
+private def tri : Nat → Int
+  | 0 => 0
+  | n + 1 => tri n + (n + 1)
+
+private axiom band : Int → Int → Int
+
+private def even' (x : Int) : Prop := ∃ y, y + y = x
+
+-- Calls an abstracted definition, so it is abstracted too.
+private def evenTri (n : Nat) : Prop := even' (tri n)
+
+run_elab do
+  -- The abstraction is a clause binder and a trailing relation argument.
+  let goal ← mkFreshExprMVar (← elaborate (← `(∃ k : Int → Prop,
+    (∀ x, x = tri 3 → k x) ∧ (∀ x, k x → x = tri 3))))
+  let prepared ← prepareGoal goal.mvarId!
+  let problem ← exportConstraints prepared.kvars (← prepared.exportGoal.getType)
+  let script := problem.toSMTLib
+  unless problem.abstractions.size == 1 && (script.splitOn "(declare-fun k_0 (Int (Array Int Int)) Bool)").length == 2 do
+    throwError "unexpected abstraction:\n{script}"
+  if !(← z3Available) then return
+  -- recursive definition
+  expectSolved (← `(∃ k : Int → Prop, (∀ x, x = tri 3 → k x) ∧ (∀ x, k x → x = tri 3)))
+  -- axiom
+  expectSolved (← `(∃ k : Int → Prop,
+    (∀ x y, band x y = 5 → k (band x y)) ∧ (∀ z, k z → z = 5)))
+  -- quantified body, and a definition calling an abstracted one
+  expectSolved (← `(∃ k : Int → Prop, (∀ x, even' x → k x) ∧ (∀ x, k x → even' x)))
+  expectSolved (← `(∃ k : Nat → Prop, (∀ n, evenTri n → k n) ∧ (∀ n, k n → evenTri n)))

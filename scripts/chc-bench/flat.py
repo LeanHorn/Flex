@@ -23,7 +23,7 @@ visit(vc)
 ext = [e if os.path.exists(M + e.replace(".", "/") + ".lean") or not e.startswith("Mathlib") else "Mathlib.Data.Real.Basic" for e in ext]
 src = open(vc).read()
 ns = re.findall(r"^namespace (\S+)", src, re.M)
-d = re.findall(r"^def (\S+)", src, re.M)[-1]
+d = re.findall(r"^(?:(?:noncomputable|private|protected)\s+)*def (\S+)", src, re.M)[-1]
 name = ".".join(ns + [d]) if ns else d
 probe = open(os.path.join(os.path.dirname(__file__), "probe.lean")).read()
 hdr = "\n".join(f"import {e}" for e in dict.fromkeys(ext + ["Flex"]))

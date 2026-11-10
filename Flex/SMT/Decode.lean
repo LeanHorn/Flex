@@ -365,6 +365,10 @@ partial def decodeApp (term : Sexp) : DecodeM Value := do
   | _, _ =>
     let symbols := (← read).symbols
     if let some c := symbols.constructors[head]? then return ← construct c args
+    -- Testers as Eldarica prints them, `(is-C x)`; z3 prints `((_ is C) x)`.
+    if head.startsWith "is-" && symbols.constructors.contains (head.drop 3).toString then
+      let #[x] := args | fail m!"tester {head} takes one argument"
+      return ← tester (head.drop 3).toString x
     if let some s := symbols.selectors[head]? then
       let #[x] := args | fail m!"selector {head} takes one argument"
       return ← select s x

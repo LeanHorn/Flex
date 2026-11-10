@@ -275,6 +275,11 @@ run_elab do
     (exists ((o {option}) (v {vec}))
       (! (and ((_ is {some_}) o) (= ({val} o) x!0) (= ({len} v) x!0) (= v ({mk} x!0 true))) :weight 0))))"
   let witnesses ← importWitnesses problem (response model)
+  -- Eldarica writes testers as `(is-C x)`.
+  let eldarica := model.replace s!"((_ is {some_}) o)" s!"({"|is-" ++ (some_.drop 1).toString} o)"
+  let fromEldarica ← importWitnesses problem (response eldarica)
+  unless ← isDefEq fromEldarica[0]!.value witnesses[0]!.value do
+    throwError "`is-C` testers decode differently: {fromEldarica[0]!.value}"
   let expected ← elaborate (← `(fun x : Int => ∃ (o : Option Int) (v : Vec),
     (∃ y, o = some y) ∧ (match o with | some y => y | _ => default : Int) = x ∧ v.1 = x ∧
       v = ⟨x, @decide True (Classical.propDecidable True)⟩))

@@ -53,10 +53,11 @@ def ExportedProblem.toSMTLib (problem : ExportedProblem) : String :=
 
 namespace Fragment
 
-/-- The encoder's configuration for Horn clauses. -/
+/-- The encoder's configuration for Horn clauses. Non-linear arithmetic is always encoded; whether
+the solver copes is up to the solver. -/
 def hornConfig : MetaM SMT.Config := do
   return { SMT.Config.ofOptions (← getOptions) with
-    horn := true, uninterpretedDefs := false, encodeQuantifiers := false }
+    horn := true, uninterpretedDefs := false, encodeQuantifiers := false, encodeNonlinear := true }
 
 /-- Whether a closed type has an SMT sort in Horn clauses, checked in a throwaway encoding. -/
 def checkSort (type : Expr) : MetaM Unit := do

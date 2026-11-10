@@ -19,7 +19,7 @@ run_elab do
   for (input, stage) in #[
       (← `(∃ k : String → Prop, k ""), Stage.prepare),
       (← `(∃ k : Fin 3 → Prop, k 0), Stage.prepare),
-      (← `(∃ k : Int → Prop, k 0 ∧ (∀ x, k x → x / (x + 1) = 0)), Stage.exporting)] do
+      (← `(∃ k : Int → Prop, k 0 ∧ (∀ x, k x → toString x = "0")), Stage.exporting)] do
     let goal ← mkFreshExprMVar (← elaborate input)
     let result ← solveGoal goal.mvarId! { executable := some "/__flex_export_rejection_no_solver__" }
     let .failed failure := result | throwError "unsupported CHC was accepted"
@@ -344,3 +344,12 @@ run_elab do
     BitVec.slt (BitVec.ofNat 8 255) (BitVec.ofInt 8 1) = true))
   unless ← isDefEq witnesses[0]!.value expected do
     throwError "unexpected decoding: {witnesses[0]!.value}"
+
+-- Non-linear arithmetic is encoded in Horn clauses (Spacer may still answer `unknown`).
+run_elab do
+  let goal ← mkFreshExprMVar (← elaborate (← `(∃ k : Int → Int → Prop,
+    (∀ x y : Int, x = 3 → y = 4 → k x y) ∧ (∀ x y, k x y → x * y = 12 ∧ (x * y) % y = 0))))
+  let prepared ← prepareGoal goal.mvarId!
+  let script := (← exportConstraints prepared.kvars (← prepared.exportGoal.getType)).toSMTLib
+  unless (script.splitOn "(* ").length > 1 && (script.splitOn "(mod ").length > 1 do
+    throwError "non-linear terms were not exported:\n{script}"

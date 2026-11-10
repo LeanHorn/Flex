@@ -206,6 +206,7 @@ def solveGoal (goal : MVarId) (config : Config := {})
           let (problem, fallback) ← match solver.outcome with
             | .unknown _ | .timedOut =>
               if config.backend == .eldarica && config.eldaricaLargeBlockEncoding then
+                unless config.modelFallback do throw error
                 let some fallback := config.modelFallback? | throw error
                 pure (problem, fallback)
               else if config.backend == .spacer && !config.spacerInlining then
@@ -216,6 +217,7 @@ def solveGoal (goal : MVarId) (config : Config := {})
                 if problem.canonicalClauses then throw error
                 pure (← problem.withCanonicalClauses, config)
             | _ =>
+              unless config.modelFallback do throw error
               let some fallback := config.modelFallback? | throw error
               pure (problem, fallback)
           -- Preserve every attempt; retries never weaken constraints or import checks.

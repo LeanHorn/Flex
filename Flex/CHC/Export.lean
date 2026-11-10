@@ -54,13 +54,22 @@ def ExportedProblem.toSMTLib (problem : ExportedProblem) : String :=
   "\n".intercalate (#["(set-logic HORN)"] ++ problem.declarations ++ relations ++ clauses ++
     #["(check-sat)"]).toList ++ "\n"
 
+register_option flex.chc.encodeQuantifiers : Bool := {
+  defValue := false
+  descr := "Encode quantifiers in Horn clauses (premises, heads, definition bodies) for solvers \
+    that accept them, such as Eldarica. When off, quantified premises are dropped, quantified \
+    heads fail export, and definitions with quantified bodies are abstracted."
+}
+
 namespace Fragment
 
 /-- The encoder's configuration for Horn clauses. Non-linear arithmetic is always encoded; whether
-the solver copes is up to the solver. -/
+the solver copes is up to the solver. Quantifiers only with `flex.chc.encodeQuantifiers`. -/
 def hornConfig : MetaM SMT.Config := do
-  return { SMT.Config.ofOptions (← getOptions) with
-    horn := true, uninterpretedDefs := false, encodeQuantifiers := false, encodeNonlinear := true }
+  let options ← getOptions
+  return { SMT.Config.ofOptions options with
+    horn := true, uninterpretedDefs := false, encodeNonlinear := true
+    encodeQuantifiers := flex.chc.encodeQuantifiers.get options }
 
 /-- Whether a closed type has an SMT sort in Horn clauses, checked in a throwaway encoding. -/
 def checkSort (type : Expr) : MetaM Unit := do
@@ -163,7 +172,11 @@ private def encodeArgumentSorts (relation : Relation) : SMT.EncodeM Relation := 
       throwError "CHC export: predicate '{relation.kvar.name}' argument {i + 1} : {type}: {error.toMessageData}"
   return { relation with argumentSorts := sorts }
 
+/-- Check the script's shape and relation signatures with an independent parser. Skipped when
+quantifiers are encoded: the parser only accepts them as leading binders or relation-free guards,
+not inside heads or definitions. Certification checks imported witnesses either way. -/
 private def validate (problem : ExportedProblem) : MetaM Unit := do
+  if flex.chc.encodeQuantifiers.get (← getOptions) then return
   (Smt2Lean.Chc.parseAndInspectProblem problem.toSMTLib (name := "flex-chc") fun parsed => do
     unless parsed.constants.isEmpty && parsed.functions.isEmpty &&
         parsed.relations.size == problem.relations.size && parsed.clauses.size == problem.clauseCount do

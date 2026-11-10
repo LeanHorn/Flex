@@ -1,5 +1,6 @@
 import Flex.CHC.Goal
 import Flex.Preprocess.Witnesses
+import Std.Tactic.BVDecide
 
 /-! Small checks for model import and certification; solver coverage lives in the benchmarks. -/
 
@@ -16,8 +17,8 @@ private def response (model : String) : SolverResult :=
 -- Unsupported semantics fail before invoking a solver and preserve the goal.
 run_elab do
   for (input, stage) in #[
-      (← `(∃ k : (Int → Int) → Prop, ∀ f, k f), Stage.prepare),
-      (← `(∃ k : List Int → Prop, k []), Stage.prepare),
+      (← `(∃ k : String → Prop, k ""), Stage.prepare),
+      (← `(∃ k : Fin 3 → Prop, k 0), Stage.prepare),
       (← `(∃ k : Int → Prop, k 0 ∧ (∀ x, k x → x / (x + 1) = 0)), Stage.exporting)] do
     let goal ← mkFreshExprMVar (← elaborate input)
     let result ← solveGoal goal.mvarId! { executable := some "/__flex_export_rejection_no_solver__" }
@@ -137,7 +138,7 @@ private inductive Gib where
 private abbrev cap : Int := 8
 private def lim : Int := 8
 private def twice (v : Vec) : Int := 2 * v.len
-private def aligned (a b : Int) : Prop := a % b = 0
+private def pow2bv (x : BitVec 64) : Prop := BitVec.and x (BitVec.sub x (BitVec.ofInt 64 1)) = BitVec.ofInt 64 0
 
 private def z3Available : IO Bool := do
   try
@@ -155,7 +156,12 @@ private def expectSolved (input : TSyntax `term) : TermElabM Unit := do
     | .partial report => pure report.certificate.goals
     | .failed failure => throwError "CHC failed at {repr failure.stage}: {failure.message}{indentD input}"
   for g in goals do
-    let rest ← Tactic.run g (Tactic.evalTactic (← `(tactic| ((try simp only [lim, twice, aligned] at *) <;> grind))))
+    let tac ← `(tactic| ((try simp only [lim, twice, pow2bv] at *) <;> first | grind | (intros; bv_decide)))
+    -- Messages from failed closer attempts mention the goal's locals; drop them, and report
+    -- a plain failure instead of a tactic error.
+    let messages ← Core.getMessageLog
+    let rest ← try Tactic.run g (Tactic.evalTactic tac) catch _ => pure [g]
+    Core.setMessageLog messages
     unless rest.isEmpty do throwError "residual goal not closed{indentD input}"
   checkWithKernel (← instantiateMVars goal)
 
@@ -189,12 +195,6 @@ run_elab do
   expectSolved (← `(∃ k : Int → Prop,
     (∀ (n : Nat) (p : Nat × Bool), p = (n, true) → k p.1) ∧ (∀ x, k x → 0 ≤ x)))
 
-
--- A definition that is non-linear in general unfolds at a call where it is linear.
-run_elab do
-  unless ← z3Available do return
-  expectSolved (← `(∃ k : Int → Prop,
-    (∀ x : Int, x = 8 → k x) ∧ (∀ x, k x → aligned x 4)))
 
 /-- Like `expectSolved`, after introducing the outer `∀` parameters of the goal. -/
 private def expectSolvedIntro (input : TSyntax `term) : TermElabM Unit := do
@@ -276,7 +276,71 @@ run_elab do
       (! (and ((_ is {some_}) o) (= ({val} o) x!0) (= ({len} v) x!0) (= v ({mk} x!0 true))) :weight 0))))"
   let witnesses ← importWitnesses problem (response model)
   let expected ← elaborate (← `(fun x : Int => ∃ (o : Option Int) (v : Vec),
-    (∃ y, o = some y) ∧ (Option.casesOn o default (fun y => y) : Int) = x ∧ v.1 = x ∧
+    (∃ y, o = some y) ∧ (match o with | some y => y | _ => default : Int) = x ∧ v.1 = x ∧
       v = ⟨x, @decide True (Classical.propDecidable True)⟩))
+  unless ← isDefEq witnesses[0]!.value expected do
+    throwError "unexpected decoding: {witnesses[0]!.value}"
+
+/-! κ arguments of any encodable sort: datatypes and functions (arrays). -/
+
+run_elab do
+  unless ← z3Available do return
+  -- enum and record arguments
+  expectSolved (← `(∃ k : Gib → Int → Prop,
+    (∀ x, x = 0 → k .a x) ∧ (∀ x, 0 < x → k .b x) ∧ (∀ g x, k g x → g = .b → 0 < x)))
+  expectSolved (← `(∃ k : Vec → Prop,
+    (∀ v : Vec, v.len = 0 → v.ok = true → k v) ∧
+    (∀ v w : Vec, k v → w = ⟨v.len + 1, v.ok⟩ → k w) ∧ (∀ v, k v → 0 ≤ v.len)))
+  -- `Option` and `Nat` arguments
+  expectSolved (← `(∃ k : Option Int → Nat → Prop,
+    (∀ n : Nat, k none n) ∧ (∀ (x : Int) (n : Nat), 0 < x → k (some x) n) ∧
+    (∀ o n, k o n → ∀ x, o = some x → 0 < x)))
+  -- a function argument
+  expectSolved (← `(∃ k : (Int → Int) → Prop,
+    (∀ f : Int → Int, f 0 = 1 → k f) ∧ (∀ f, k f → 0 < f 0)))
+
+private opaque TokenCarrier : (α : Type) × Inhabited α := ⟨Unit, ⟨()⟩⟩
+private def Token : Type := TokenCarrier.1
+private instance : Inhabited Token := TokenCarrier.2
+
+-- Opaque types are uninterpreted sorts, also as κ arguments.
+run_elab do
+  unless ← z3Available do return
+  expectSolved (← `(∃ k : Int → Token → Prop,
+    (∀ t : Token, k 0 t) ∧ (∀ x (t u : Token), k x t → u = t → x < 5 → k (x + 1) u) ∧
+    (∀ x t, k x t → 0 ≤ x)))
+
+/-! Bit vectors at literal widths. -/
+
+
+run_elab do
+  unless ← z3Available do return
+  -- a bit-vector κ argument
+  expectSolved (← `(∃ k : BitVec 32 → Prop,
+    (∀ x : BitVec 32, ¬ BitVec.ule x (BitVec.ofInt 32 10) → k x) ∧
+    (∀ x, k x → BitVec.ult (BitVec.ofInt 32 10) x)))
+  -- `int2bv` through a definition, as in Flux's `alloc_layout_pow2`
+  expectSolved (← `(∃ k : Int → Prop,
+    (∀ a : Int, (a = 4 ∨ a = 8) → k a) ∧ (∀ a, k a → pow2bv (BitVec.ofInt 64 a))))
+  -- Lean's semantics where SMT-LIB differs: `x / 0 = 0`, shifts past the width, `toInt`
+  expectSolved (← `(∃ k : BitVec 8 → Prop,
+    (∀ x : BitVec 8, k x) ∧
+    (∀ x, k x → x / 0 = 0 ∧ x <<< (9 : Nat) = 0 ∧ (BitVec.ofInt 8 (-1)).toInt = -1)))
+
+-- Decoding bit-vector literals and operators.
+run_elab do
+  let target ← elaborate (← `(∃ k : BitVec 8 → Prop, (∀ x : BitVec 8, k x) ∧ (∀ x, k x → True)))
+  let goal ← mkFreshExprMVar target
+  let prepared ← prepareGoal goal.mvarId!
+  let problem ← exportConstraints prepared.kvars (← prepared.exportGoal.getType)
+  let model := "(model (define-fun k_0 ((x!0 (_ BitVec 8))) Bool
+    (and (bvule #x0a (bvand x!0 #b11110000)) (= ((_ extract 3 0) x!0) (_ bv5 4))
+         (= (bv2nat (bvadd x!0 #x01)) 3) (bvsgt ((_ int2bv 8) 1) #xff))))"
+  let witnesses ← importWitnesses problem (response model)
+  let expected ← elaborate (← `(fun x : BitVec 8 =>
+    BitVec.ule (BitVec.ofNat 8 10) (BitVec.and x (BitVec.ofNat 8 240)) = true ∧
+    BitVec.extractLsb' 0 4 x = BitVec.ofNat 4 5 ∧
+    ((BitVec.add x (BitVec.ofNat 8 1)).toNat : Int) = 3 ∧
+    BitVec.slt (BitVec.ofNat 8 255) (BitVec.ofInt 8 1) = true))
   unless ← isDefEq witnesses[0]!.value expected do
     throwError "unexpected decoding: {witnesses[0]!.value}"

@@ -11,23 +11,13 @@ def restoreMetaState (saved : Meta.SavedState) : MetaM Unit := do
   set saved.meta
   modifyThe Core.State fun _ => saved.core.toState
 
-/-- Integer and Boolean value sorts; arrays (non-dependent functions) only for parameters. -/
-inductive ValueSort where
-  | int | bool
-  | array (index element : ValueSort)
-  deriving BEq, Repr, Inhabited
-
-def ValueSort.smt : ValueSort → String
-  | .int => "Int"
-  | .bool => "Bool"
-  | .array i e => s!"(Array {i.smt} {e.smt})"
-
 /-- Map solver symbols to Lean witness slots, retaining unused arguments and Bool/Prop types. -/
 structure Relation where
   symbol : String
   kvar : KVar
   leanType : Lean.Expr
-  argumentSorts : Array ValueSort
+  /-- SMT sorts of the κ's arguments, as the encoder declares them. -/
+  argumentSorts : Array String := #[]
   deriving Inhabited
 
 /-- A Horn problem in SMT-LIB, with metadata for model reconstruction. Clause terms come from
@@ -40,11 +30,11 @@ structure ExportedProblem where
   /-- Relation symbols occurring in some clause. -/
   usedRelations : Std.HashSet String := {}
   clauseCount : Nat
-  /-- Free variables of the body, quantified outside the κs: Int/Bool/Prop values and functions
-  between them (as arrays). Every relation takes them as leading arguments and every clause binds
-  them, so κs may depend on them. -/
+  /-- Free variables of the body, quantified outside the κs, of any sort the encoder supports.
+  Every relation takes them as leading arguments and every clause binds them, so κs may depend
+  on them. -/
   parameters : Array Expr := #[]
-  parameterSorts : Array ValueSort := #[]
+  parameterSorts : Array String := #[]
   /-- The encoder's declared symbols, for decoding models. -/
   symbols : SMT.Symbols := {}
   /-- Alternate SMT presentation (one conjunction of premises per clause); the Lean clauses and
@@ -56,19 +46,21 @@ structure ExportedProblem where
 def ExportedProblem.toSMTLib (problem : ExportedProblem) : String :=
   let relations := problem.relations.map fun r =>
     let sorts := problem.parameterSorts ++ r.argumentSorts
-    s!"(declare-fun {r.symbol} ({" ".intercalate (sorts.map (·.smt)).toList}) Bool)"
+    s!"(declare-fun {r.symbol} ({" ".intercalate sorts.toList}) Bool)"
   let clauses := problem.clauses.map (·.render problem.canonicalClauses)
   "\n".intercalate (#["(set-logic HORN)"] ++ problem.declarations ++ relations ++ clauses ++
     #["(check-sat)"]).toList ++ "\n"
 
 namespace Fragment
 
-/-- Accept Int, Bool, and Prop values. -/
-def valueSort (type : Expr) : MetaM ValueSort := do
-  let type ← whnf type
-  if type.isConstOf ``Int then return .int
-  if type.isConstOf ``Bool || type.isProp then return .bool
-  throwError "CHC export: unsupported value type {type}; expected Int, Bool, or Prop"
+/-- The encoder's configuration for Horn clauses. -/
+def hornConfig : MetaM SMT.Config := do
+  return { SMT.Config.ofOptions (← getOptions) with
+    horn := true, uninterpretedDefs := false, encodeQuantifiers := false }
+
+/-- Whether a closed type has an SMT sort in Horn clauses, checked in a throwaway encoding. -/
+def checkSort (type : Expr) : MetaM Unit := do
+  SMT.EncodeM.run' (← hornConfig) (discard <| SMT.encodeSort type)
 
 end Fragment
 
@@ -97,10 +89,10 @@ private def checkPredicateType (name : Name) (type : Expr) : MetaM Unit := do
       let domain ← inferType parameter
       if domain.hasFVar then
         throwError "CHC preparation: predicate '{name}' has a dependent argument {i + 1}"
-      try discard <| Fragment.valueSort domain
+      try Fragment.checkSort domain
       catch error =>
-        if error.isInterrupt then throw error
-        throwError "CHC preparation: predicate '{name}' argument {i + 1} has unsupported type {domain}; expected Int, Bool, or Prop"
+        if error.isInterrupt || error.isRuntime then throw error
+        throwError "CHC preparation: predicate '{name}' argument {i + 1} has unsupported type {domain}: {error.toMessageData}"
 
 /-- Validate the existential prefix before creating predicate witness slots. -/
 partial def checkPredicatePrefix (input : Expr) : MetaM Unit := do
@@ -143,19 +135,29 @@ private def relation (kvar : KVar) (index : Nat) : MetaM Relation := do
   let type ← instantiateMVars (← kvar.mvarId.getType)
   if type.hasFVar || type.hasMVar || type.hasLooseBVars || type.hasLevelMVar then
     throwError "CHC export: predicate '{kvar.name}' has an open or unresolved signature"
-  let sorts ← forallTelescopeReducing type fun parameters result => do
+  forallTelescopeReducing type fun parameters result => do
     unless result.isProp do
       throwError "CHC export: predicate '{kvar.name}' must return Prop"
     unless parameters.size == kvar.paramTypes.length && parameters.size == kvar.params.length do
       throwError "CHC export: parameter metadata disagrees with predicate '{kvar.name}'"
-    parameters.mapIdxM fun i parameter => do
+    for parameter in parameters, i in [:parameters.size] do
       let parameterType ← inferType parameter
       if parameterType.hasFVar then
         throwError "CHC export: dependent predicate parameters are unsupported"
       unless ← isDefEq parameterType kvar.paramTypes[i]! do
         throwError "CHC export: parameter {i + 1} has inconsistent metadata for '{kvar.name}'"
-      Fragment.valueSort parameterType
-  return { symbol := s!"k_{index}", kvar, leanType := type, argumentSorts := sorts }
+  return { symbol := s!"k_{index}", kvar, leanType := type }
+
+/-- Encode a relation's argument sorts, declaring any datatypes they need. -/
+private def encodeArgumentSorts (relation : Relation) : SMT.EncodeM Relation := do
+  let types ← forallTelescopeReducing relation.leanType fun parameters _ =>
+    parameters.mapM fun p => inferType p
+  let sorts ← types.mapIdxM fun i type => do
+    try SMT.encodeSort type
+    catch error =>
+      if error.isInterrupt || error.isRuntime then throw error
+      throwError "CHC export: predicate '{relation.kvar.name}' argument {i + 1} : {type}: {error.toMessageData}"
+  return { relation with argumentSorts := sorts }
 
 private def validate (problem : ExportedProblem) : MetaM Unit := do
   (Smt2Lean.Chc.parseAndInspectProblem problem.toSMTLib (name := "flex-chc") fun parsed => do
@@ -170,9 +172,9 @@ private def validate (problem : ExportedProblem) : MetaM Unit := do
         throw (.error s!"CHC export: wrong arity for '{expected.symbol}'")
       for actualSort in actual.argumentSorts, expectedSort in expectedSorts do
         unless (match expectedSort with
-            | .int => actualSort.isInteger
-            | .bool => actualSort.isBoolean
-            | .array .. => !actualSort.isInteger && !actualSort.isBoolean) do
+            | "Int" => actualSort.isInteger
+            | "Bool" => actualSort.isBoolean
+            | _ => !actualSort.isInteger && !actualSort.isBoolean) do
           throw (.error s!"CHC export: wrong argument sort for '{expected.symbol}'")
   ).runIO
 
@@ -183,46 +185,36 @@ def ExportedProblem.withCanonicalClauses (problem : ExportedProblem) : MetaM Exp
   return problem
 
 
-/-- A parameter's sort: a value sort, or a non-dependent function between them as an array. -/
-private partial def parameterSort (type : Expr) : MetaM ValueSort := do
-  match ← whnf type with
-  | .forallE _ domain body _ =>
-    if body.hasLooseBVars then throwError "dependent function"
-    return .array (← parameterSort domain) (← parameterSort body)
-  | _ => Fragment.valueSort type
-
 /-- The body's free variables, in context order, as Horn parameters. -/
 private def collectParameters (kvars : List KVar) (body : Expr)
-    : MetaM (Array Expr × Array ValueSort) := do
+    : MetaM (Array Expr) := do
   let lctx ← getLCtx
   let ids := (collectFVars {} body).fvarIds.qsort fun a b =>
     match lctx.find? a, lctx.find? b with
     | some x, some y => x.index < y.index
     | _, _ => false
   let mut parameters := #[]
-  let mut sorts := #[]
   for id in ids do
     let decl ← id.getDecl
     let type ← instantiateMVars decl.type
-    let sort ← try parameterSort type
-      catch error =>
-        if error.isInterrupt || error.isRuntime then throw error
-        throwError "CHC export: free variable '{decl.userName}' : {type} in the body; only Int, Bool, or Prop parameters and functions between them are supported"
     if type.hasFVar then
       throwError "CHC export: free variable '{decl.userName}' has a dependent type"
     for kvar in kvars do
       unless (← kvar.mvarId.getDecl).lctx.contains id do
         throwError "CHC export: free variable '{decl.userName}' is not in the context of '{kvar.name}'"
+    try Fragment.checkSort type
+    catch error =>
+      if error.isInterrupt || error.isRuntime then throw error
+      throwError "CHC export: free variable '{decl.userName}' : {type} in the body has no SMT sort: {error.toMessageData}"
     parameters := parameters.push (mkFVar id)
-    sorts := sorts.push sort
-  return (parameters, sorts)
+  return parameters
 
-/-- Export Horn clauses through the exact SMT encoder. κ arguments are Int/Bool/Prop; clause
-variables may range over anything the encoder supports (records and other datatypes, `Nat`,
-functions as arrays). Unencodable premises are dropped, which only strengthens a clause; an
-unencodable head fails the export. Free Int/Bool/Prop variables of the body, which must be in
-every κ's context, become parameters (see `ExportedProblem.parameters`); other free variables
-fail the export. No witnesses are assigned. -/
+/-- Export Horn clauses through the exact SMT encoder. κ arguments, clause variables, and free
+variables of the body may range over anything the encoder supports (`Int`, `Bool`/`Prop`, `Nat`
+as `Int`, records and other datatypes, functions as arrays). Unencodable premises are dropped,
+which only strengthens a clause; an unencodable head fails the export. Free variables, which
+must be in every κ's context, become parameters (see `ExportedProblem.parameters`). No
+witnesses are assigned. -/
 def exportConstraints (kvars : List KVar) (body : Expr) : MetaM ExportedProblem := do
   let saved ← Meta.saveState
   try
@@ -232,7 +224,7 @@ def exportConstraints (kvars : List KVar) (body : Expr) : MetaM ExportedProblem 
       seen := seen.insert kvar.mvarId
     let relations ← kvars.toArray.mapIdxM fun i kvar => relation kvar i
     let body ← zetaReduce (← instantiateMVars body)
-    let (parameters, parameterSorts) ← collectParameters kvars body
+    let parameters ← collectParameters kvars body
     if body.hasLooseBVars then throwError "CHC export: loose bound variable in the body"
     unless ← isProp body do throwError "CHC export: expected a proposition"
     let context : KContext := { kvars := kvars.foldl (fun ctx k => ctx.insert k.mvarId k) {} }
@@ -245,10 +237,12 @@ def exportConstraints (kvars : List KVar) (body : Expr) : MetaM ExportedProblem 
         ({} : Std.HashMap MVarId Expr)
       let relationSymbols := (relations.zip symbols).foldl
         (fun map (r, symbol) => map.insert symbol.fvarId! r.symbol) ({} : Std.HashMap FVarId String)
-      let config := { SMT.Config.ofOptions (← getOptions) with
-        horn := true, uninterpretedDefs := false, encodeQuantifiers := false }
-      let encodeAll : SMT.EncodeM (Array SMT.HornClause) :=
-        clauses.toArray.mapIdxM fun i original => do
+      let config ← Fragment.hornConfig
+      let encodeAll : SMT.EncodeM (Array String × Array Relation × Array SMT.HornClause) := do
+        -- Sorts first, so their datatypes are declared before any clause uses them.
+        let parameterSorts ← parameters.mapM fun p => do SMT.encodeSort (← inferType p)
+        let relations ← relations.mapM encodeArgumentSorts
+        let clauses ← clauses.toArray.mapIdxM fun i original => do
           try
             let input := original.replace fun e => if e.isMVar then replacements[e.mvarId!]? else none
             if input.hasMVar then throwError "unregistered or unresolved metavariable"
@@ -256,7 +250,9 @@ def exportConstraints (kvars : List KVar) (body : Expr) : MetaM ExportedProblem 
           catch error =>
             if error.isInterrupt || error.isRuntime then throw error
             throwError "CHC export: clause {i + 1}: {error.toMessageData}"
-      let (encoded, state) ← (encodeAll.run { config, relations := relationSymbols }).run {}
+        return (parameterSorts, relations, clauses)
+      let ((parameterSorts, relations, encoded), state) ←
+        (encodeAll.run { config, relations := relationSymbols }).run {}
       let problem : ExportedProblem := {
         relations
         declarations := state.declarations

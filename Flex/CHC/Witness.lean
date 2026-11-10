@@ -50,9 +50,6 @@ private def checkRelations (problem : ExportedProblem) : MetaM Unit := do
           throwError "CHC witnesses: inconsistent parameter metadata for '{relation.symbol}'"
       unless parameters.size == relation.argumentSorts.size do
         throwError "CHC witnesses: inconsistent arity for '{relation.symbol}'"
-      for argument in parameters, sort in relation.argumentSorts do
-        unless (← Fragment.valueSort (← inferType argument)) == sort do
-          throwError "CHC witnesses: inconsistent SMT sort metadata for '{relation.symbol}'"
 
 private def checkValue (problem : ExportedProblem) (relation : Relation) (value : Expr)
     : MetaM Unit := do
@@ -77,7 +74,7 @@ private def adapt (problem : ExportedProblem) (relation : Relation) (definition 
     (macros : Std.HashMap String SMT.Macro) : MetaM Witness := do
   let sorts := problem.parameterSorts ++ relation.argumentSorts
   unless definition.params.size == sorts.size &&
-      (definition.params.zip sorts).all (fun ((_, s), t) => s.toString == t.smt) do
+      (definition.params.zip sorts).all (fun ((_, s), t) => (SMT.Sexp.parseAll t).toOption == some #[s]) do
     throwError "CHC witnesses: model signature does not match '{relation.symbol}'"
   let value ← forallTelescopeReducing relation.leanType fun parameters _ => do
     let actuals := problem.parameters ++ parameters
@@ -87,7 +84,7 @@ private def adapt (problem : ExportedProblem) (relation : Relation) (definition 
     let body ← (SMT.decodeTerm definition.body).run { symbols := problem.symbols, macros, locals }
     unless body.type.isProp do
       throwError "CHC witnesses: model of '{relation.symbol}' is not a formula"
-    mkLambdaFVars parameters body.expr (usedOnly := false)
+    mkLambdaFVars parameters (← instantiateMVars body.expr) (usedOnly := false)
   checkValue problem relation value
   return { symbol := relation.symbol, mvarId := relation.kvar.mvarId, value }
 
@@ -126,7 +123,11 @@ def importWitnesses (problem : ExportedProblem) (result : SolverResult) : MetaM 
       match byName[relation.symbol]? with
       | some definition => adapt problem relation definition byName
       | none => completeUnused problem relation
-  finally restoreMetaState saved
+  finally
+    -- Keep auxiliary declarations (selector matchers) that decoded witnesses refer to.
+    let env ← getEnv
+    restoreMetaState saved
+    setEnv env
 
 /-- Validate the complete, ordered bundle before assigning any witnesses.
 Discard validation state; restore entry state on failure. Leaves the body open. -/

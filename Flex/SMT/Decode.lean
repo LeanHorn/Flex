@@ -1,4 +1,5 @@
 import Flex.SMT.Encode
+import Lean.Elab.Term
 
 /-!
 # Decoding solver models
@@ -111,6 +112,10 @@ structure Symbols where
 
 def State.symbols (state : State) : Symbols := Id.run do
   let mut table : Symbols := {}
+  -- Uninterpreted sorts (opaque types); datatypes are added below with their canonical types.
+  for (type, sort) in state.sorts.toList do
+    unless sort.startsWith "(" || sort == "Int" || sort == "Bool" do
+      table := { table with sorts := table.sorts.insert (unquote sort) type }
   for (type, datatype) in state.datatypes.toList do
     table := { table with sorts := table.sorts.insert (unquote datatype.symbol) type }
     for (ctor, symbol, selectors) in datatype.constructors do
@@ -191,6 +196,9 @@ partial def decodeSort (sort : Sexp) : DecodeM Expr := do
     return type
   | .list #[.atom "Array", index, element] =>
     return .forallE `i (← decodeSort index) (← decodeSort element) .default
+  | .list #[.atom "_", .atom "BitVec", .atom w] =>
+    let some w := w.toNat? | fail m!"bad bit vector width {w}"
+    return mkApp (mkConst ``BitVec) (mkNatLit w)
   | _ => fail m!"unsupported sort {sort}"
 
 private def chain (args : Array Value) (op : Value → Value → DecodeM Expr) : DecodeM Value := do
@@ -202,6 +210,35 @@ private def chain (args : Array Value) (op : Value → Value → DecodeM Expr) :
 private def requireInt (v : Value) : DecodeM Expr := do
   unless v.type == int do fail m!"expected an Int, got {v.expr}"
   return v.expr
+
+private def requireBitVec (v : Value) : DecodeM Expr := do
+  unless (← whnf v.type).isAppOfArity ``BitVec 1 do fail m!"expected a bit vector, got {v.expr}"
+  return v.expr
+
+private def bitVecWidth (v : Value) : DecodeM Nat := do
+  let some w ← bitVecWidth? v.type | fail m!"bit vector of unknown width {v.expr}"
+  return w
+
+/-- `BitVec.ofNat w n`, as a bit-vector value. -/
+private def bitVecLit (w n : Nat) : Value :=
+  { expr := mkApp2 (mkConst ``BitVec.ofNat) (mkNatLit w) (mkNatLit (n % 2 ^ w)),
+    type := mkApp (mkConst ``BitVec) (mkNatLit w) }
+
+/-- `#xFF`/`#b1010` literals. -/
+private def bitVecAtom? (s : String) : Option Value := do
+  if s.startsWith "#x" then
+    let digits := (s.drop 2).toString
+    let n ← digits.foldl (fun acc c => acc.bind fun n =>
+      if c.isDigit then some (16 * n + (c.toNat - '0'.toNat))
+      else if 'a' ≤ c.toLower && c.toLower ≤ 'f' then some (16 * n + (c.toLower.toNat - 'a'.toNat + 10))
+      else none) (some 0)
+    return bitVecLit (4 * digits.length) n
+  if s.startsWith "#b" then
+    let digits := (s.drop 2).toString
+    let n ← digits.foldl (fun acc c => acc.bind fun n =>
+      if c == '0' then some (2 * n) else if c == '1' then some (2 * n + 1) else none) (some 0)
+    return bitVecLit digits.length n
+  none
 
 private def requireProp (v : Value) : DecodeM Expr := do
   unless v.type.isProp do fail m!"expected a formula, got {v.expr}"
@@ -215,6 +252,7 @@ partial def decodeTerm (term : Sexp) : DecodeM Value := do
   | .atom "false" => return formula (mkConst ``False)
   | .atom s =>
     if let some n := s.toNat? then return integer (mkIntLit n)
+    if let some v := bitVecAtom? s then return v
     if let some v := (← read).locals[s]? then return v
     if let some c := (← read).symbols.constructors[s]? then return ← construct c #[]
     if (← read).macros.contains s then return ← expand s #[]
@@ -235,6 +273,13 @@ partial def decodeCompound (term : Sexp) : DecodeM Value := do
     if q != "exists" && q != "forall" then decodeApp term
     else quantifier (q == "exists") binders.toList body
   | .list #[.list #[.atom "_", .atom "is", .atom c], x] => tester c (← decodeTerm x)
+  | .list #[.atom "_", .atom bv, .atom w] =>
+    if bv.startsWith "bv" then
+      if let (some n, some w) := ((bv.drop 2).toString.toNat?, w.toNat?) then
+        return bitVecLit w n
+    fail m!"unsupported indexed term {term}"
+  | .list #[.list #[.atom "_", .atom op, .atom i], x] => indexed op #[i] x
+  | .list #[.list #[.atom "_", .atom op, .atom i, .atom j], x] => indexed op #[i, j] x
   | _ => decodeApp term
 
 partial def decodeApp (term : Sexp) : DecodeM Value := do
@@ -281,6 +326,39 @@ partial def decodeApp (term : Sexp) : DecodeM Value := do
   | "div", #[a, b] => return integer (mkIntDiv (← requireInt a) (← requireInt b))
   | "mod", #[a, b] => return integer (mkIntMod (← requireInt a) (← requireInt b))
   | "abs", #[a] => return integer (mkIntNatCast (mkApp (mkConst ``Int.natAbs) (← requireInt a)))
+  | "bvnot", #[a] => return { a with expr := ← mkAppM ``BitVec.not #[← requireBitVec a] }
+  | "bvneg", #[a] => return { a with expr := ← mkAppM ``BitVec.neg #[← requireBitVec a] }
+  | "bvand", _ | "bvor", _ | "bvxor", _ | "bvadd", _ | "bvmul", _ =>
+    let op := match head with
+      | "bvand" => ``BitVec.and | "bvor" => ``BitVec.or | "bvxor" => ``BitVec.xor
+      | "bvadd" => ``BitVec.add | _ => ``BitVec.mul
+    let xs ← args.mapM requireBitVec
+    let some first := xs[0]? | fail m!"empty {head}"
+    let e ← xs[1:].foldlM (fun acc x => mkAppM op #[acc, x]) first
+    return { expr := e, type := args[0]!.type }
+  | "bvsub", #[a, b] | "bvudiv", #[a, b] | "bvurem", #[a, b] | "concat", #[a, b] =>
+    let op := match head with
+      | "bvsub" => ``BitVec.sub | "bvudiv" => ``BitVec.smtUDiv | "bvurem" => ``BitVec.umod
+      | _ => ``BitVec.append
+    let e ← mkAppM op #[← requireBitVec a, ← requireBitVec b]
+    return { expr := e, type := ← inferType e }
+  | "bvshl", #[a, b] | "bvlshr", #[a, b] | "bvashr", #[a, b] =>
+    let op := match head with
+      | "bvshl" => ``BitVec.shiftLeft | "bvlshr" => ``BitVec.ushiftRight | _ => ``BitVec.sshiftRight
+    let amount ← mkAppM ``BitVec.toNat #[← requireBitVec b]
+    return { a with expr := ← mkAppM op #[← requireBitVec a, amount] }
+  | "bvult", #[a, b] | "bvule", #[a, b] | "bvslt", #[a, b] | "bvsle", #[a, b]
+  | "bvugt", #[a, b] | "bvuge", #[a, b] | "bvsgt", #[a, b] | "bvsge", #[a, b] =>
+    let (op, swap) := match head with
+      | "bvult" => (``BitVec.ult, false) | "bvule" => (``BitVec.ule, false)
+      | "bvslt" => (``BitVec.slt, false) | "bvsle" => (``BitVec.sle, false)
+      | "bvugt" => (``BitVec.ult, true) | "bvuge" => (``BitVec.ule, true)
+      | "bvsgt" => (``BitVec.slt, true) | _ => (``BitVec.sle, true)
+    let (x, y) := if swap then (b, a) else (a, b)
+    normalize (← mkAppM op #[← requireBitVec x, ← requireBitVec y]) (mkConst ``Bool)
+  | "bv2nat", #[a] | "bv2int", #[a] | "ubv_to_int", #[a] =>
+    normalize (← mkAppM ``BitVec.toNat #[← requireBitVec a]) (mkConst ``Nat)
+  | "sbv_to_int", #[a] => return integer (← mkAppM ``BitVec.toInt #[← requireBitVec a])
   | "select", #[array, index] =>
     let .forallE _ domain codomain _ ← whnf array.type | fail m!"select on a non-array {array.expr}"
     normalize (mkApp array.expr (← index.at domain)) codomain
@@ -292,6 +370,25 @@ partial def decodeApp (term : Sexp) : DecodeM Value := do
       return ← select s x
     if (← read).macros.contains head then return ← expand head args
     fail m!"unsupported function {head}"
+
+/-- Indexed operators: `((_ int2bv w) i)`, `((_ extract i j) x)`, `((_ zero_extend k) x)`, … -/
+partial def indexed (op : String) (indices : Array String) (x : Sexp) : DecodeM Value := do
+  let some ns := indices.mapM (·.toNat?) | fail m!"bad indices for {op}"
+  let x ← decodeTerm x
+  let bv (w : Nat) (e : Expr) : Value := { expr := e, type := mkApp (mkConst ``BitVec) (mkNatLit w) }
+  match op, ns with
+  | "int2bv", #[w] | "int_to_bv", #[w] => return bv w (mkApp2 (mkConst ``BitVec.ofInt) (mkNatLit w) (← requireInt x))
+  | "extract", #[i, j] =>
+    if i < j then fail m!"bad extract indices"
+    let w := i - j + 1
+    return bv w (← mkAppM ``BitVec.extractLsb' #[mkNatLit j, mkNatLit w, ← requireBitVec x])
+  | "zero_extend", #[k] =>
+    let w := (← bitVecWidth x) + k
+    return bv w (← mkAppM ``BitVec.zeroExtend #[mkNatLit w, ← requireBitVec x])
+  | "sign_extend", #[k] =>
+    let w := (← bitVecWidth x) + k
+    return bv w (← mkAppM ``BitVec.signExtend #[mkNatLit w, ← requireBitVec x])
+  | _, _ => fail m!"unsupported indexed operator {op}"
 
 partial def arith (op : Expr → Expr → Expr) (args : Array Value) : DecodeM Value := do
   let xs ← args.mapM requireInt
@@ -332,28 +429,37 @@ partial def tester (symbol : String) (x : Value) : DecodeM Value := do
       result := mkApp2 (.const ``Exists [← getLevel t]) t (← mkLambdaFVars #[v] result)
     return formula result
 
-/-- A selector: a projection on structure-like types, else a case split that is `default` on
-the other constructors (SMT leaves those values unspecified). -/
+/-- `fun y => match y with | C .. v .. => v | _ => default`, elaborated, so that automation
+sees an ordinary matcher (with equation lemmas) rather than a raw `casesOn`. -/
+partial def selectorFunction (type : Expr) (ctor : Name) (field : Nat) (fieldType : Expr) : MetaM Expr := do
+  let info ← getConstInfoCtor ctor
+  let params ← (List.replicate info.numParams ()).toArray.mapM fun _ => `(_)
+  let fields ← (List.range info.numFields).toArray.mapM fun j =>
+    if j == field then `(v) else `(_)
+  let stx ← `(fun y => match y with | @$(mkCIdent ctor) $(params ++ fields)* => v | _ => default)
+  let expected := Expr.forallE `y type fieldType .default
+  let go : Elab.TermElabM Expr := do
+    let e ← Elab.Term.elabTermEnsuringType stx expected
+    Elab.Term.synthesizeSyntheticMVarsNoPostponing
+    instantiateMVars e
+  let e ← go.run'
+  if e.hasMVar then throwError "model decoding: could not build the selector {ctor} #{field}"
+  return e
+
+/-- A selector: a projection on structure-like types, else a `match` that is `default` on the
+other constructors (SMT leaves those values unspecified). The `match` adds an auxiliary matcher
+declaration to the environment. -/
 partial def select (s : Selector) (x : Value) : DecodeM Value := do
   let x ← x.at s.type
   let (_, fields) ← ctorFields s.type s.ctor
   let fieldType := fields[s.field]!.2
-  let .const ind levels := s.type.getAppFn | fail m!"bad datatype {s.type}"
-  if (← getConstInfoInduct ind).ctors.length == 1 && !(← getConstInfoInduct ind).isRec then
-    return ← normalize (.proj ind s.field x) fieldType
+  let .const ind _ := s.type.getAppFn | fail m!"bad datatype {s.type}"
   let info ← getConstInfoInduct ind
-  let u ← getLevel fieldType
-  let motive := Expr.lam `x s.type fieldType .default
-  let some inst ← synthInstance? (mkApp (.const ``Inhabited [u]) fieldType)
-    | fail m!"selector on {ind} needs an Inhabited instance for {fieldType}"
-  let default := mkApp2 (.const ``Inhabited.default [u]) fieldType inst
-  let minors ← info.ctors.toArray.mapM fun ctor => do
-    let (_, fs) ← ctorFields s.type ctor
-    let decls := fs.map fun (n, t) => (n, fun (_ : Array Expr) => pure t)
-    withLocalDeclsD decls fun xs =>
-      mkLambdaFVars xs (if ctor == s.ctor then xs[s.field]! else default)
-  let casesOn := mkAppN (.const (mkCasesOnName ind) (u :: levels)) s.type.getAppArgs
-  normalize (mkAppN (mkApp2 casesOn motive x) minors) fieldType
+  if info.ctors.length == 1 && !info.isRec then
+    return ← normalize (.proj ind s.field x) fieldType
+  let f ← try selectorFunction s.type s.ctor s.field fieldType
+    catch e => fail m!"selector {s.ctor} #{s.field}: {e.toMessageData}"
+  normalize (mkApp f x).headBeta fieldType
 
 /-- Expand a model-defined function at its arguments. -/
 partial def expand (name : String) (args : Array Value) : DecodeM Value := do

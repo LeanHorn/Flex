@@ -52,8 +52,9 @@ structure Config where
   uninterpretedDefs : Bool := false
   encodeNonlinear : Bool := false
   encodeQuantifiers : Bool := false
-  /-- Emit Horn clauses (`encodeHornClause`): every variable is a clause binder, and nothing
-  may be uninterpreted, since CHC solvers read uninterpreted symbols as predicates or reject them. -/
+  /-- Emit Horn clauses (`encodeHornClause`): every variable is a clause binder, and no function
+  may be uninterpreted, since CHC solvers read uninterpreted functions as predicates or reject
+  them. Uninterpreted sorts (opaque types) are fine. -/
   horn : Bool := false
   deriving Inhabited, Repr
 
@@ -148,6 +149,12 @@ private def unsupported (what : MessageData) : EncodeM α :=
 private def isNatType (type : Expr) : MetaM Bool := do
   return (← whnf type).isConstOf ``Nat
 
+/-- The width of `BitVec w` for a literal `w`. -/
+def bitVecWidth? (type : Expr) : MetaM (Option Nat) := do
+  let type ← whnf (← instantiateMVars type)
+  unless type.isAppOfArity ``BitVec 1 do return none
+  (evalNat (← instantiateMVars type.appArg!)).run
+
 /-! ## Sorts -/
 
 /-- Whether `type` is stuck on an opaque constant or axiom (possibly through projections), so that
@@ -207,10 +214,10 @@ partial def encodeSort (type : Expr) : EncodeM String := do
         (← get).lossySorts.contains index || (← get).lossySorts.contains element
       pure (s!"(Array {index} {element})", lossy)
     | _ =>
+      if let some width ← bitVecWidth? reduced then pure (s!"(_ BitVec {width})", false) else
       -- An opaque type is exactly an uninterpreted sort, provided it is nonempty, as every
       -- SMT sort is: a possibly empty type could make a universal premise vacuous.
       if ← isOpaqueType reduced then
-        if (← read).config.horn then unsupported m!"opaque sort {type} in a Horn clause"
         -- Instances are usually declared for the type as written, not its reduced form.
         let nonempty ← [type, reduced].anyM fun t => do
           try pure (← synthInstance? (← mkAppM ``Nonempty #[t])).isSome catch _ => pure false
@@ -514,6 +521,38 @@ partial def encodeAppAt (e fn : Expr) (args : Array Expr) : EncodeM String := do
     | ``Nat.succ, 1 => return s!"(+ {← encode (arg 0)} 1)"
     | ``Int.toNat, 1 => let a ← encode (arg 0); return s!"(ite (>= {a} 0) {a} 0)"
     | ``Int.natAbs, 1 => let a ← encode (arg 0); return s!"(ite (>= {a} 0) {a} (- {a}))"
+    -- Bit vectors, at literal widths. `int2bv` and `bv2nat` are z3's conversions.
+    | ``BitVec.ofInt, 2 | ``BitVec.ofNat, 2 =>
+      let some w ← (evalNat (← instantiateMVars (arg 0))).run | unsupported m!"bit vector width in {e}"
+      return s!"((_ int2bv {w}) {← encode (arg 1)})"
+    | ``BitVec.toNat, 2 => return s!"(bv2nat {← encode (arg 1)})"
+    | ``BitVec.toInt, 2 =>
+      let w ← bitVecWidthOf e (arg 1)
+      let x ← encode (arg 1)
+      return s!"(ite (bvslt {x} (_ bv0 {w})) (- (bv2nat {x}) {2 ^ w}) (bv2nat {x}))"
+    | ``BitVec.not, 2 => return s!"(bvnot {← encode (arg 1)})"
+    | ``BitVec.neg, 2 => return s!"(bvneg {← encode (arg 1)})"
+    | ``BitVec.and, 3 | ``BitVec.or, 3 | ``BitVec.xor, 3 | ``BitVec.add, 3 | ``BitVec.sub, 3
+    | ``BitVec.mul, 3 | ``BitVec.umod, 3 | ``BitVec.ult, 3 | ``BitVec.ule, 3 | ``BitVec.slt, 3
+    | ``BitVec.sle, 3 | ``BitVec.smtUDiv, 3 =>
+      let op := match name with
+        | ``BitVec.and => "bvand" | ``BitVec.or => "bvor" | ``BitVec.xor => "bvxor"
+        | ``BitVec.add => "bvadd" | ``BitVec.sub => "bvsub" | ``BitVec.mul => "bvmul"
+        | ``BitVec.umod => "bvurem" | ``BitVec.ult => "bvult" | ``BitVec.ule => "bvule"
+        | ``BitVec.slt => "bvslt" | ``BitVec.sle => "bvsle" | _ => "bvudiv"
+      return s!"({op} {← encode (arg 1)} {← encode (arg 2)})"
+    | ``BitVec.udiv, 3 =>
+      -- Lean's `x / 0 = 0`; SMT-LIB's `bvudiv x 0` is all ones.
+      let w ← bitVecWidthOf e (arg 1)
+      let y ← encode (arg 2)
+      return s!"(ite (= {y} (_ bv0 {w})) (_ bv0 {w}) (bvudiv {← encode (arg 1)} {y}))"
+    | ``BitVec.shiftLeft, 3 | ``BitVec.ushiftRight, 3 | ``BitVec.sshiftRight, 3 =>
+      -- Natural shift amounts; a shift by `w` or more is the same as a shift by `w`.
+      let w ← bitVecWidthOf e (arg 1)
+      let s ← encode (arg 2)
+      let op := match name with
+        | ``BitVec.shiftLeft => "bvshl" | ``BitVec.ushiftRight => "bvlshr" | _ => "bvashr"
+      return s!"({op} {← encode (arg 1)} ((_ int2bv {w}) (ite (>= {s} {w}) {w} {s})))"
     | _, 2 =>
       if let some (op, int) := arithmeticOperation? name then
         arithmetic op int (← encode (arg 0)) (← encode (arg 1))
@@ -528,6 +567,11 @@ partial def encodeAppAt (e fn : Expr) (args : Array Expr) : EncodeM String := do
   | .proj .. | .app .. | .mdata .. => encodeReads e fn args
   | .mvar _ => unsupported m!"metavariable in {e}"
   | _ => unsupported m!"application {e}"
+
+/-- The literal width of a bit-vector operand. -/
+partial def bitVecWidthOf (e operand : Expr) : EncodeM Nat := do
+  let some w ← bitVecWidth? (← inferType operand) | unsupported m!"bit vector width in {e}"
+  return w
 
 /-- Function-valued terms are arrays; each argument is one read. -/
 partial def encodeReads (e fn : Expr) (args : Array Expr) : EncodeM String := do
@@ -628,15 +672,7 @@ partial def encodeDefinitionApp (e : Expr) (name : Name) (levels : List Level)
     consumed := consumed + 1
   -- With fewer arguments than parameters, the instance returns an array.
   let key := mkAppN (.const name levels) (static.map (·.getD (mkSort .zero)))
-  let definition ← try encodeDefinition key name levels info static
-    catch error =>
-      -- Horn clauses admit no uninterpreted symbols. A non-recursive definition whose body
-      -- does not encode in general may still encode at this call, e.g. `a % b` at `b := 4`.
-      if error.isInterrupt || error.isRuntime || !(← read).config.horn then throw error
-      unless info matches .defnInfo _ do throw error
-      if info.all.length > 1 || (← isRecursiveDefinition name) then throw error
-      let some unfolded ← unfoldDefinition? e | throw error
-      return ← encode unfolded
+  let definition ← encodeDefinition key name levels info static
   if definition.abstracted then markAbstracted
   if let some literal := definition.literal? then return literal
   let encodedValues ← values.mapM fun a => encode a

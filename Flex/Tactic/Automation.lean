@@ -251,7 +251,9 @@ private def attempt (tactic : TSyntax `tactic) (target : Expr)
       Core.withCurrHeartbeats do
         try
           let candidate ← proveLeafWith tactic target (onError := fun error => do
-            failure.set (some (← error.toMessageData.toString)))
+            -- Formatting an error is costly; only the obligation log reads it.
+            if flex.logObligations.get (← getOptions) then
+              failure.set (some (← error.toMessageData.toString)))
           Core.checkInterrupted
           let candidate ← candidate.mapM instantiateMVars
           let oracleEnvironment ← getEnv

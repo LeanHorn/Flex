@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare native and Lean-exported CHCs, or evaluate a Spacer-first portfolio.
 
-Invoked through benchmark_chc.py --corpus PATH. Results and solver transcripts
+Invoked as a library by the evaluation harnesses. Results and solver transcripts
 go into a fresh --output directory; the generated corpus is never modified.
 """
 
@@ -662,7 +662,7 @@ def main() -> int:
         "native_results": str(args.native_results.resolve()) if args.native_results else None,
         "source_hashes": {str(p.relative_to(ROOT)): digest(p) for p in [
             ROOT / "lake-manifest.json", ROOT / "lakefile.lean",
-            ROOT / "scripts/CHCParity.lean", Path(__file__), ROOT / "scripts/benchmark_chc.py",
+            ROOT / "scripts/CHCParity.lean", Path(__file__),
             *sorted((ROOT / "Flex").rglob("*.lean")),
             ROOT / "native/chc_process.cpp"]},
         "method": ("Export once, then Spacer followed by Eldarica if needed; no native baseline "

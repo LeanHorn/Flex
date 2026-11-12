@@ -29,14 +29,13 @@ ROOT = HERE.parents[1]
 
 # Removed from the Flex export: this packaging folder and internal notes.
 FLEX_EXCLUDE = ["scripts/artifact", "evaluation/CLEANUP.txt"]
-SMT2LEAN_EXCLUDE = ["benchmarks"]
+SMT2LEAN_EXCLUDE = ["benchmarks", "tests/smt/lh_mergesort.smt2"]  # upstream build paths
 SMT2LEAN_DIR = "vendor/SMTLib-to-Lean"
 
 # Strings that must not appear anywhere in the archive (case-insensitive).
 DENY = re.compile(r"leanhorn|jam-khan|jamkhan|jamkabeer|kabeer|petros|markopoulos|lehmann|"
                   r"hku\.hk|uchile|/home/[a-z]|/Users/[a-z]", re.I)
-# Upstream third-party test files that carry their original author's build paths verbatim.
-ALLOW = [re.compile(r"/Users/(rjhala|benjamin)/")]
+ALLOW: list[re.Pattern] = []
 
 TEXT_SUFFIXES = {".lean", ".md", ".txt", ".py", ".sh", ".json", ".toml", ".yml", ".yaml",
                  ".csv", ".fq", ".smt2", ".hs", ".rs", ".cpp", ".h", ".jsonl", ""}

@@ -1,7 +1,7 @@
 """flat.py VC.lean ROOT OUT [extra-set-option ...]: inline local imports and append a probe."""
 import os, re, sys
 vc, root, out = sys.argv[1:4]; extra = sys.argv[4:]
-M = "/Users/petros/Documents/UCSD/Work/lean-fixpoint/.lake/packages/mathlib/"
+M = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".lake", "packages", "mathlib", "")
 seen, ext, body = set(), [], []
 def mod_path(m):
     p = os.path.join(root, *m.split(".")) + ".lean"

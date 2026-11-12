@@ -52,3 +52,7 @@ lean-noquals/
 
 # Local scraping specification and PDF
 /Flex/PA/Notes/
+
+# Lake setup-file / run outputs
+*.run.json
+*.setup.json

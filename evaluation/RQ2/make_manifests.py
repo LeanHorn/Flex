@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 
@@ -63,6 +64,11 @@ def flatten(root: Path, target: str) -> tuple[str, list[str], list[str], list[st
     return text, external, order, rewrites
 
 
+def rel(path, base):
+    """Provenance path relative to the manifest's folder, so manifests stay portable."""
+    return os.path.relpath(Path(path).resolve(), Path(base).resolve())
+
+
 def flux(args):
     cases = []
     for project in args.project:
@@ -90,9 +96,9 @@ def flux(args):
             cases.append({"case": case, "suite": root.name, "format": "lean_statement",
                           "generated": str(output.relative_to(args.output)),
                           "declaration": f"{namespaces[0]}.{names[0]}",
-                          "vc_file": str(vc), "vc_sha256": digest(vc),
+                          "vc_file": rel(vc, args.output), "vc_sha256": digest(vc),
                           "inlined_modules": modules, "opaque_rewrites": rewrites})
-    return cases, {"projects": [str(p.resolve()) for p in args.project]}
+    return cases, {"projects": [rel(p, args.output) for p in args.project]}
 
 
 def liquidhaskell(args):
@@ -118,9 +124,9 @@ def liquidhaskell(args):
                           + f"\n-- ===== FixpointImport =====\n{helper_body}\n\n-- ===== {entry['case']} =====\n{body}\n")
         cases.append({"case": case, "suite": "liquid-haskell", "format": "lean_statement",
                       "generated": str(output.relative_to(args.output)), "declaration": "FixpointGoal",
-                      "lean_file": str(source), "lean_sha256": digest(source),
+                      "lean_file": rel(source, args.output), "lean_sha256": digest(source),
                       "selection_outcome": entry.get("selection_outcome")})
-    return cases, {"corpus": str(corpus), "helper": str(helper), "helper_sha256": digest(helper)}
+    return cases, {"corpus": rel(corpus, args.output), "helper": rel(helper, args.output), "helper_sha256": digest(helper)}
 
 
 def main():

@@ -166,6 +166,16 @@ def capture(command: list[str], *, timeout: float = 60) -> str:
     return result.stdout.strip()
 
 
+def git_info(args: list[str], repo: Path = ROOT) -> str | None:
+    """`git -C repo ARGS` for provenance; None when repo is not a git checkout (e.g. an archive)."""
+    try:
+        result = subprocess.run(["git", "-C", str(repo), *args], text=True, capture_output=True,
+                                timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
 def binary_info(executable: str, version_args: list[str]) -> dict:
     resolved = shutil.which(executable)
     if resolved is None:
@@ -643,8 +653,8 @@ def main() -> int:
                                        for case in cases]})
     metadata = {
         "started_at": datetime.now(timezone.utc).isoformat(), "platform": platform.platform(),
-        "corpus": str(args.corpus), "git_head": capture(["git", "rev-parse", "HEAD"]),
-        "git_status": capture(["git", "status", "--porcelain"]),
+        "corpus": str(args.corpus), "git_head": git_info(["rev-parse", "HEAD"]),
+        "git_status": git_info(["status", "--porcelain"]),
         "toolchain": (ROOT / "lean-toolchain").read_text().strip(),
         "dependencies": json.loads((ROOT / "lake-manifest.json").read_text()),
         "arguments": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},

@@ -36,8 +36,8 @@ def prepare(manifest, output):
             case[field] = str(dest)
     rq3.save(output / 'manifest.json', source)
     selection = {'method': source['method'], 'cases': {'scraping': cases},
-                 'benchmarks_commit': rq3.common.capture([
-                     'git', '-C', str(ROOT.parent/'flex-benchmarks'), 'rev-parse', 'HEAD'])}
+                 'benchmarks_commit': rq3.common.git_info(
+                     ['rev-parse', 'HEAD'], ROOT.parent/'flex-benchmarks')}
     rq3.save(output / 'selection.json', selection)
     return selection
 
@@ -199,7 +199,7 @@ def main():
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else {
         'started_at': rq3.now(), 'complete': False, 'phase': 'build',
         'planned_runs': len(selection['cases']['scraping']),
-        'flex_commit': rq3.common.capture(['git', 'rev-parse', 'HEAD']),
+        'flex_commit': rq3.common.git_info(['rev-parse', 'HEAD']),
         'benchmarks_commit': selection['benchmarks_commit'],
         'timing': 'One trial per input; three workers by default. Builds, startup and '
                   'classification excluded from flex_ms; Imp VC preparation recorded separately.'}

@@ -245,7 +245,7 @@ def main():
     if args.refresh_failures:
         import corpus
         repo=args.refresh_failures.resolve()
-        revision=subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD'],text=True).strip()
+        revision=corpus.git_revision(repo)
         for i,case in enumerate(cases):
             if case['inventory_status']=='translated': continue
             source=repo/case['repo_path']

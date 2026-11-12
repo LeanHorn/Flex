@@ -20,7 +20,21 @@ def sha(path):
 
 
 def tracked(repo):
-    return subprocess.check_output(['git', '-C', str(repo), 'ls-files'], text=True).splitlines()
+    """Committed files; outside a git checkout (an archive), every file outside hidden folders."""
+    try:
+        return subprocess.check_output(['git', '-C', str(repo), 'ls-files'], text=True,
+                                       stderr=subprocess.DEVNULL).splitlines()
+    except (OSError, subprocess.CalledProcessError):
+        return sorted(str(p.relative_to(repo)) for p in Path(repo).rglob('*') if p.is_file()
+                      and not any(part.startswith('.') for part in p.relative_to(repo).parts))
+
+
+def git_revision(repo):
+    try:
+        return subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True,
+                                       stderr=subprocess.DEVNULL).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
 
 
 def flatten(path, repo):
@@ -223,8 +237,7 @@ def build(repo, output, count, seed, study='both'):
     chosen = {'a': select(a, 'a', count, seed) if a else [],
               'b': select(b, 'b', count, seed) if b else []}
     prepare_a(chosen['a'], repo, output)
-    return {'seed': seed, 'benchmarks_commit': subprocess.check_output(
-                ['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
+    return {'seed': seed, 'benchmarks_commit': git_revision(repo),
             'pool_counts': {'a': dict(Counter(c['suite'] for c in a)),
                             'b_tasks': len(b)},
             'method': ('Full published corpus when count=0. RQ3b pilots round-robin suites '

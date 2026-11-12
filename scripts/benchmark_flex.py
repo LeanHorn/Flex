@@ -227,7 +227,7 @@ def main() -> int:
     args.smt_timeout = args.flex_timeout
     metadata = {
         "started_at": datetime.now(timezone.utc).isoformat(), "complete": False,
-        "git_head": common.capture(["git", "rev-parse", "HEAD"]),
+        "git_head": common.git_info(["rev-parse", "HEAD"]),
         "arguments": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
         "configurations": {name: CONFIGURATIONS[name] for name in configurations},
         "pipeline": "main flex; True/False preprocessing and residual automation; no nesting or postprocessing",

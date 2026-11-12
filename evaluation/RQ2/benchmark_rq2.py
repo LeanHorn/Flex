@@ -394,8 +394,8 @@ def main():
             **{k: v for k, v in vars(args).items() if isinstance(v, (str, int, bool))},
             "variants": args.variants,
             "platform": platform.platform(), "timing_workers": args.workers,
-            "git_head": common.capture(["git", "rev-parse", "HEAD"]),
-            "git_diff_sha256": hashlib.sha256(common.capture(["git", "diff"]).encode()).hexdigest(),
+            "git_head": common.git_info(["rev-parse", "HEAD"]),
+            "git_diff_sha256": hashlib.sha256((common.git_info(["diff"]) or "").encode()).hexdigest(),
             "postprocess": False, "nesting": False, "backends": [], "closeLeaves": False,
             "preprocess": "separate, identical limits for classification and trials", "splitFree": False,
             "metrics_version": 2})

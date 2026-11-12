@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 
-from chc_parity import ROOT, binary_info, capture, digest, lean_setup, terminate_case, write_json
+from chc_parity import ROOT, binary_info, capture, git_info, digest, lean_setup, terminate_case, write_json
 from rq1_corpus import inventory, snapshot_suite, summarize, imports
 
 
@@ -383,8 +383,8 @@ def main() -> None:
                 parser.error(f"duplicate reused result: {key}")
             reused[key] = row
     metadata = {"started_at": now(), "complete": False, "source": str(args.source),
-                "source_revision": subprocess.check_output(["git", "-C", str(args.source), "rev-parse", "HEAD"], text=True).strip(),
-                "flex_revision": capture(["git", "rev-parse", "HEAD"]), "source_hashes": hashes,
+                "source_revision": git_info(["rev-parse", "HEAD"], args.source),
+                "flex_revision": git_info(["rev-parse", "HEAD"]), "source_hashes": hashes,
                 "reused_runs": len(reused),
                 "config": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
                 "policy": "Specification imports only; no User/Proof, handwritten witnesses or per-VC qualifiers. "
@@ -401,7 +401,7 @@ def main() -> None:
             "results_sha256": digest(args.reuse_completed / "results.jsonl"),
             "keys": [list(key) for key in reused],
             "startup_ms": "unavailable for reused records; Lean elapsed time and heartbeats retained"}
-    (args.output / "source.patch").write_text(capture(["git", "diff", "HEAD"]))
+    (args.output / "source.patch").write_text(git_info(["diff", "HEAD"]) or "")
     frozen = args.output / "runner-source"
     frozen.mkdir()
     for name in ("benchmark_rq1.py", "rq1_corpus.py", "RQ1Baseline.lean"):

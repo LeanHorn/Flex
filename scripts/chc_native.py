@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 
-from chc_parity import ROOT, binary_info, capture, digest, inventory, write_json, write_text
+from chc_parity import ROOT, binary_info, capture, git_info, digest, inventory, write_json, write_text
 
 ARGUMENTS = {
     "spacer": ["-in", "-smt2", "-model", "fp.engine=spacer",
@@ -272,7 +272,7 @@ def main() -> int:
         metadata = previous
     else:
         metadata = {"started_at": datetime.now(timezone.utc).isoformat(), "complete": False,
-                    "configuration": config, "git_head": capture(["git", "rev-parse", "HEAD"]),
+                    "configuration": config, "git_head": git_info(["rev-parse", "HEAD"]),
                     "driver_sha256": digest(Path(__file__)),
                     "method": "Original SMT bytes unchanged; solver requests include model production. Identical source contents run once per backend, with explicit per-task mapping. No Lean startup or proof checking."}
     write_json(metadata_path, metadata)

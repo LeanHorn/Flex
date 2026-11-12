@@ -30,7 +30,7 @@ import statistics
 import subprocess
 import time
 
-from chc_parity import (ROOT, binary_info, capture, case_source, digest, inventory,
+from chc_parity import (ROOT, binary_info, capture, git_info, case_source, digest, inventory,
                         lean_setup, with_imports, write_json)
 
 
@@ -545,8 +545,8 @@ def main() -> int:
         "subset_sha256": hashlib.sha256(json.dumps(subset, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
         "toolchain": (ROOT / "lean-toolchain").read_text().strip(),
         "dependencies": json.loads((ROOT / "lake-manifest.json").read_text()),
-        "git_head": capture(["git", "rev-parse", "HEAD"]),
-        "git_status": capture(["git", "status", "--porcelain"]),
+        "git_head": git_info(["rev-parse", "HEAD"]),
+        "git_status": git_info(["status", "--porcelain"]),
         "source_hashes": {str(p.relative_to(ROOT)): digest(p) for p in [Path(__file__).resolve(),
             ROOT / "scripts/chc_parity.py", HARNESS, ROOT / "scripts/CHCParity.lean",
             ROOT / "lakefile.lean", ROOT / "lake-manifest.json", ROOT / "native/chc_process.cpp",

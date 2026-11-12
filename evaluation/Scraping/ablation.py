@@ -474,7 +474,7 @@ def main():
         active = {}
         source_meta = load(args.after / 'metadata.json')
         meta.update(phase='trials', complete=False, trials_started_at=meta.get('trials_started_at', rq3.now()),
-                    flex_commit=rq3.common.capture(['git', 'rev-parse', 'HEAD'])
+                    flex_commit=rq3.common.git_info(['rev-parse', 'HEAD'])
                         if args.fresh_runtime else source_meta.get('flex_commit'),
                     screening_flex_commit=source_meta.get('flex_commit'),
                     benchmarks_commit=source_meta.get('benchmarks_commit'), resource_tool=resource_kind)

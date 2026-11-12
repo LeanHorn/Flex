@@ -345,8 +345,8 @@ def main(study='a'):
     command, env, header = build_setup(args,selection)
     meta_path = args.output/'metadata.json'
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else {
-        'started_at':now(), 'complete':False, 'flex_commit':common.capture(['git','rev-parse','HEAD']),
-        'flex_diff':common.capture(['git','diff','--stat']), 'benchmarks_commit':selection['benchmarks_commit'],
+        'started_at':now(), 'complete':False, 'flex_commit':common.git_info(['rev-parse','HEAD']),
+        'flex_diff':common.git_info(['diff','--stat']), 'benchmarks_commit':selection['benchmarks_commit'],
         'platform':platform.platform(), 'python':sys.version, 'lean':common.capture([command[0],'--version']),
         'spacer':common.binary_info(args.z3,['--version']), 'eldarica':common.binary_info(args.eldarica,['-h']),
         'workers': args.workers, 'logical_cpus': os.cpu_count(),

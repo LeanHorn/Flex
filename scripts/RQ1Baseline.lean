@@ -14,6 +14,7 @@ namespace RQ1Baseline
 
 private structure Context where
   caseName : String
+  declaration : Name
   variant : String
   output : System.FilePath
   deadline : Nat
@@ -179,14 +180,23 @@ private def runFix (ctx : Context) : TacticM Unit := do
     observe (some fun targets =>
       Flex.Timeout.withDeadline synthDeadline (Flex.Automation.synthOracle targets))
 
-private def runSolver (ctx : Context) (backend : Backend)
+/-- Solver-alone variants `spacer` and `eldarica`: exactly one solver call per CHC, with no
+retries and no model fallback. Each uses the configuration that proved the most RQ1 CHCs in a
+sweep over the settings the retries vary, plus quantified clauses: Spacer with its default
+settings, Eldarica with quantified clauses (`flex.chc.encodeQuantifiers`). -/
+private def soloBackend? : String → Option Flex.CHC.Backend
+  | "spacer" => some .spacer
+  | "eldarica" => some .eldarica
+  | _ => none
+
+private def runSolver (ctx : Context) (config : Flex.CHC.Config)
     (remainingHeads : IO.Ref (Option Nat)) (provedHeads : IO.Ref Nat) : TacticM Unit := do
-  let label := if backend == .spacer then "spacer" else "eldarica"
+  let label := if config.backend == Flex.CHC.Backend.spacer then "spacer" else "eldarica"
   let index ← IO.mkRef 0
   onPredicates do
     let i ← index.get
     index.modify (· + 1)
-    let result ← solveGoal (← getMainGoal) { backend, timeoutMs := ctx.solverMs }
+    let result ← solveGoal (← getMainGoal) config
       Flex.Automation.proofOracle (headsOnly := true)
     let solver := match result with
       | .failed failure => failure.solver
@@ -229,6 +239,19 @@ private def runSolver (ctx : Context) (backend : Backend)
       setGoals report.certificate.goals.toList
 
 private def pipeline (ctx : Context) : TacticM Unit := do
+  if let some backend := soloBackend? ctx.variant then
+    -- The solver gets the original VC: no Zap, no Fix. Unfold its definition so that its
+    -- binders are visible even when it has no outer quantifier.
+    replaceMainGoal [← (← getMainGoal).deltaTarget (· == ctx.declaration)]
+    let label := if backend == .spacer then "spacer" else "eldarica"
+    let config := { backend, timeoutMs := ctx.solverMs, retrySearch := false, modelFallback := false }
+    let solve := withOptions (flex.chc.encodeQuantifiers.set · (backend == .eldarica)) <|
+      runSolver ctx config (← IO.mkRef (some 0)) (← IO.mkRef 0)
+    if ← attempt ctx label solve then
+      ctx.retainedSolver.set label
+    if ctx.dischargeResidual && !(← getUnsolvedGoals).isEmpty then
+      discard <| attempt ctx "discharge" discharge
+    return
   discard <| attempt ctx "zap" <| onPredicates (evalTactic (← `(tactic| zap)))
   saveCheckpoint ctx
   if (← totalPredicates) > 0 then
@@ -237,7 +260,7 @@ private def pipeline (ctx : Context) : TacticM Unit := do
       let label := if backend == .spacer then "spacer" else "eldarica"
       let heads ← IO.mkRef (some 0)
       let proved ← IO.mkRef 0
-      if ← attempt ctx label (runSolver ctx backend heads proved) then
+      if ← attempt ctx label (runSolver ctx { backend, timeoutMs := ctx.solverMs } heads proved) then
         ctx.retainedSolver.set label
     else if ctx.variant == "zap_solver" then
       let entry ← Tactic.saveState
@@ -250,7 +273,8 @@ private def pipeline (ctx : Context) : TacticM Unit := do
         let label := if backend == .spacer then "spacer" else "eldarica"
         let remainingHeads ← IO.mkRef (some 0)
         let provedHeads ← IO.mkRef 0
-        if ← attempt ctx label (runSolver ctx backend remainingHeads provedHeads) then
+        if ← attempt ctx label
+            (runSolver ctx { backend, timeoutMs := ctx.solverMs } remainingHeads provedHeads) then
           if ctx.dischargeResidual then
             discard <| attempt ctx (label ++ "_discharge") discharge
           let heads ← remainingHeads.get
@@ -298,7 +322,7 @@ private def checkBridge (original target : Expr) (goals : Array MVarId) : TermEl
 
 private def runImpl (name : Name) (variant caseName : String) : TermElabM Unit := do
   unless #["zap_fix_basic", "zap_fix_standard", "zap_fix_deep", "zap_solver",
-      "zap_spacer", "zap_eldarica"].contains variant do
+      "zap_spacer", "zap_eldarica"].contains variant || (soloBackend? variant).isSome do
     throwError "unknown RQ1 variant {variant}"
   let saved ← Term.saveState
   let start ← IO.monoMsNow
@@ -306,7 +330,7 @@ private def runImpl (name : Name) (variant caseName : String) : TermElabM Unit :
   let recursionLimit ← envNat "FLEX_RQ1_RECURSION_LIMIT" 16384
   let output : System.FilePath := (← IO.getEnv "FLEX_RQ1_OUTPUT").getD "/tmp/flex-rq1"
   let ctx : Context := {
-    caseName, variant, output := output / variant
+    caseName, declaration := name, variant, output := output / variant
     deadline := start + (← envNat "FLEX_RQ1_CASE_SECONDS" 180) * 1000
     paSeconds := ← envNat "FLEX_RQ1_PA_SECONDS" 60
     solverMs := ← envNat "FLEX_RQ1_SOLVER_MS" 60000

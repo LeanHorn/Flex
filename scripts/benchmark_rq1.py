@@ -15,6 +15,7 @@ import random
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 from chc_parity import ROOT, binary_info, capture, digest, lean_setup, terminate_case, write_json
@@ -22,8 +23,9 @@ from rq1_corpus import inventory, snapshot_suite, summarize, imports
 
 
 DEFAULT_VARIANTS = ("zap_fix_deep", "zap_solver")
-SOLVER_VARIANTS = ("zap_solver", "zap_spacer", "zap_eldarica")
-VARIANTS = (*DEFAULT_VARIANTS, "zap_spacer", "zap_eldarica")
+# `spacer` and `eldarica` run the solver alone (no Zap, no Fix), one call per CHC.
+SOLVER_VARIANTS = ("zap_solver", "zap_spacer", "zap_eldarica", "spacer", "eldarica")
+VARIANTS = (*DEFAULT_VARIANTS, "zap_spacer", "zap_eldarica", "spacer", "eldarica")
 
 
 def now() -> str:
@@ -299,6 +301,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cases", nargs="+", help="exact suite/Name IDs; default all predicate VCs")
     parser.add_argument("--variants", nargs="+", choices=VARIANTS, default=list(DEFAULT_VARIANTS))
+    parser.add_argument("--jobs", type=int, default=1, help="cases run in parallel (default: serial)")
     parser.add_argument("--inventory-only", action="store_true")
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--discharge", action="store_true", help="also attempt residual VC proof (off by default)")
@@ -319,7 +322,7 @@ def main() -> None:
     args.source = args.source.resolve()
     if args.output.exists() and any(args.output.iterdir()):
         parser.error("use a fresh output directory; existing baselines are immutable")
-    if any(v <= 0 for v in [args.case_timeout, args.startup_timeout, args.pa_timeout,
+    if any(v <= 0 for v in [args.jobs, args.case_timeout, args.startup_timeout, args.pa_timeout,
                             args.solver_timeout, args.phase_heartbeats, args.recursion_limit]):
         parser.error("budgets must be positive")
     args.output.mkdir(parents=True, exist_ok=True)
@@ -385,7 +388,8 @@ def main() -> None:
                 "reused_runs": len(reused),
                 "config": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
                 "policy": "Specification imports only; no User/Proof, handwritten witnesses or per-VC qualifiers. "
-                          "Single repetition, serial execution; imports excluded from Lean phase timings. "
+                          f"Single repetition, {'serial execution' if args.jobs == 1 else f'{args.jobs} parallel jobs'}; "
+                          "imports excluded from Lean phase timings. "
                           "Primary progress is retained predicate instantiation and a checked residual bridge. "
                           "Head elimination and complete VC proof are separate; residual discharge is optional. "
                           "An instantiated candidate with remaining head obligations is not yet a certified invariant."}
@@ -456,9 +460,10 @@ def main() -> None:
     random.Random(args.seed).shuffle(jobs)
     write_json(args.output / "schedule.json", [{"case": c["id"], "variant": v} for c, v in jobs])
     results = []
-    for case, variant in jobs:
-        checkpoint(args.output, {"stage": "running", "case": case["id"], "variant": variant,
-                                 "completed": len(results), "total": len(jobs)})
+    lock = threading.Lock()
+
+    def execute(job: tuple[dict, str]) -> None:
+        case, variant = job
         module = compiled[case["suite"]][case["module"]]
         if (case["id"], variant) in reused:
             record = reused[(case["id"], variant)]
@@ -467,11 +472,18 @@ def main() -> None:
                       "variant": variant, "status": "preparation_failed", "error": json.dumps(module)}
         else:
             record = run_case(case, variant, args, command[0], environment, setup)
-        results.append(record)
-        with (args.output / "results.jsonl").open("a") as handle:
-            handle.write(json.dumps(record) + "\n")
-        paired = summarize_results(args.output, results, selected, args.variants)
-        print(f"{len(results)}/{len(jobs)} {case['id']} {variant}: {record['status']}", flush=True)
+        with lock:
+            results.append(record)
+            with (args.output / "results.jsonl").open("a") as handle:
+                handle.write(json.dumps(record) + "\n")
+            summarize_results(args.output, results, selected, args.variants)
+            checkpoint(args.output, {"stage": "running", "completed": len(results), "total": len(jobs)})
+            print(f"{len(results)}/{len(jobs)} {case['id']} {variant}: {record['status']}", flush=True)
+
+    checkpoint(args.output, {"stage": "running", "completed": 0, "total": len(jobs)})
+    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        for future in [pool.submit(execute, job) for job in jobs]:
+            future.result()
     paired = paired_post_zap(results, selected, args.variants)
     metadata.update(complete=True, finished_at=now(), completed_runs=len(results),
                     source_unchanged=hashes == source_hashes(), paired_post_zap=paired)

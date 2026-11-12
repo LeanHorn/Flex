@@ -52,6 +52,10 @@ structure Config where
   uninterpretedDefs : Bool := false
   encodeNonlinear : Bool := false
   encodeQuantifiers : Bool := false
+  /-- Emit Horn clauses (`encodeHornClause`): every variable is a clause binder, and no function
+  may be uninterpreted, since CHC solvers read uninterpreted functions as predicates or reject
+  them. Uninterpreted sorts (opaque types) are fine. -/
+  horn : Bool := false
   deriving Inhabited, Repr
 
 def Config.ofOptions (options : Options) : Config where
@@ -73,6 +77,20 @@ structure Definition where
   abstracted : Bool
   /-- Nullary definitions whose body is a numeral are inlined. -/
   literal? : Option String := none
+  /-- An abstraction (see `Abstraction`): a variable, read with `select`. -/
+  array : Bool := false
+  deriving Inhabited
+
+/-- In Horn clauses, a definition that cannot be a `define-fun` (recursive, an axiom, or a body
+that does not encode) is abstracted to a universally quantified variable: bound in every clause
+and passed to every relation, so invariants may mention it. Clauses that hold for every
+interpretation hold for the definition itself, so this is sound. -/
+structure Abstraction where
+  symbol : String
+  /-- An `Array` sort over the value parameters, or the result sort if there are none. -/
+  sort : String
+  /-- The Lean function it stands for: the definition applied to its static arguments. -/
+  value : Expr
   deriving Inhabited
 
 structure State where
@@ -93,6 +111,12 @@ structure State where
   counter : Nat := 0
   /-- Whether the current encoding uses an abstraction. -/
   abstracted : Bool := false
+  /-- Horn relation symbols applied so far. -/
+  usedRelations : Std.HashSet String := {}
+  /-- Horn abstractions, in creation order. -/
+  abstractions : Array Abstraction := #[]
+  /-- Whether the current encoding reads an abstraction. -/
+  usesAbstraction : Bool := false
   deriving Inhabited
 
 /-- Where a formula ends up in the solver's input: asserted (`pos`), under a negation (`neg`),
@@ -109,6 +133,11 @@ def Polarity.flip : Polarity → Polarity
 structure Context where
   config : Config
   polarity : Polarity := .both
+  /-- Local predicate symbols encoded as Horn relation applications. -/
+  relations : Std.HashMap FVarId String := {}
+  /-- Abstractions (symbol, sort) that every Horn clause binds and every relation application
+  receives as trailing arguments. -/
+  abstractions : Array (String × String) := #[]
 
 abbrev EncodeM := ReaderT Context (StateRefT State MetaM)
 
@@ -140,6 +169,12 @@ private def unsupported (what : MessageData) : EncodeM α :=
 
 private def isNatType (type : Expr) : MetaM Bool := do
   return (← whnf type).isConstOf ``Nat
+
+/-- The width of `BitVec w` for a literal `w`. -/
+def bitVecWidth? (type : Expr) : MetaM (Option Nat) := do
+  let type ← whnf (← instantiateMVars type)
+  unless type.isAppOfArity ``BitVec 1 do return none
+  (evalNat (← instantiateMVars type.appArg!)).run
 
 /-! ## Sorts -/
 
@@ -200,6 +235,7 @@ partial def encodeSort (type : Expr) : EncodeM String := do
         (← get).lossySorts.contains index || (← get).lossySorts.contains element
       pure (s!"(Array {index} {element})", lossy)
     | _ =>
+      if let some width ← bitVecWidth? reduced then pure (s!"(_ BitVec {width})", false) else
       -- An opaque type is exactly an uninterpreted sort, provided it is nonempty, as every
       -- SMT sort is: a possibly empty type could make a universal premise vacuous.
       if ← isOpaqueType reduced then
@@ -359,9 +395,13 @@ partial def encodeFVar (id : FVarId) : EncodeM String := do
   if let some name := (← get).names[id]? then
     if (← get).lossyNames.contains name then markAbstracted
     return name
+  if let some symbol := (← read).relations[id]? then
+    modify fun s => { s with usedRelations := s.usedRelations.insert symbol }
+    return symbol
   let decl ← id.getDecl
   if let some value := decl.value? then return ← encode value
   if ← isProof (mkFVar id) then unsupported m!"proof term {decl.userName}"
+  if (← read).config.horn then unsupported m!"free variable {decl.userName} in a Horn clause"
   let sort ← encodeSort decl.type
   let lossy := (← get).lossySorts.contains sort
   let name ← fresh decl.userName.toString
@@ -502,25 +542,70 @@ partial def encodeAppAt (e fn : Expr) (args : Array Expr) : EncodeM String := do
     | ``Nat.succ, 1 => return s!"(+ {← encode (arg 0)} 1)"
     | ``Int.toNat, 1 => let a ← encode (arg 0); return s!"(ite (>= {a} 0) {a} 0)"
     | ``Int.natAbs, 1 => let a ← encode (arg 0); return s!"(ite (>= {a} 0) {a} (- {a}))"
+    -- Bit vectors, at literal widths. `int2bv` and `bv2nat` are z3's conversions.
+    | ``BitVec.ofInt, 2 | ``BitVec.ofNat, 2 =>
+      let some w ← (evalNat (← instantiateMVars (arg 0))).run | unsupported m!"bit vector width in {e}"
+      return s!"((_ int2bv {w}) {← encode (arg 1)})"
+    | ``BitVec.toNat, 2 => return s!"(bv2nat {← encode (arg 1)})"
+    | ``BitVec.toInt, 2 =>
+      let w ← bitVecWidthOf e (arg 1)
+      let x ← encode (arg 1)
+      return s!"(ite (bvslt {x} (_ bv0 {w})) (- (bv2nat {x}) {2 ^ w}) (bv2nat {x}))"
+    | ``BitVec.not, 2 => return s!"(bvnot {← encode (arg 1)})"
+    | ``BitVec.neg, 2 => return s!"(bvneg {← encode (arg 1)})"
+    | ``BitVec.and, 3 | ``BitVec.or, 3 | ``BitVec.xor, 3 | ``BitVec.add, 3 | ``BitVec.sub, 3
+    | ``BitVec.mul, 3 | ``BitVec.umod, 3 | ``BitVec.ult, 3 | ``BitVec.ule, 3 | ``BitVec.slt, 3
+    | ``BitVec.sle, 3 | ``BitVec.smtUDiv, 3 =>
+      let op := match name with
+        | ``BitVec.and => "bvand" | ``BitVec.or => "bvor" | ``BitVec.xor => "bvxor"
+        | ``BitVec.add => "bvadd" | ``BitVec.sub => "bvsub" | ``BitVec.mul => "bvmul"
+        | ``BitVec.umod => "bvurem" | ``BitVec.ult => "bvult" | ``BitVec.ule => "bvule"
+        | ``BitVec.slt => "bvslt" | ``BitVec.sle => "bvsle" | _ => "bvudiv"
+      return s!"({op} {← encode (arg 1)} {← encode (arg 2)})"
+    | ``BitVec.udiv, 3 =>
+      -- Lean's `x / 0 = 0`; SMT-LIB's `bvudiv x 0` is all ones.
+      let w ← bitVecWidthOf e (arg 1)
+      let y ← encode (arg 2)
+      return s!"(ite (= {y} (_ bv0 {w})) (_ bv0 {w}) (bvudiv {← encode (arg 1)} {y}))"
+    | ``BitVec.shiftLeft, 3 | ``BitVec.ushiftRight, 3 | ``BitVec.sshiftRight, 3 =>
+      -- Natural shift amounts; a shift by `w` or more is the same as a shift by `w`.
+      let w ← bitVecWidthOf e (arg 1)
+      let s ← encode (arg 2)
+      let op := match name with
+        | ``BitVec.shiftLeft => "bvshl" | ``BitVec.ushiftRight => "bvlshr" | _ => "bvashr"
+      return s!"({op} {← encode (arg 1)} ((_ int2bv {w}) (ite (>= {s} {w}) {w} {s})))"
     | _, 2 =>
       if let some (op, int) := arithmeticOperation? name then
         arithmetic op int (← encode (arg 0)) (← encode (arg 1))
       else encodeConstApp e name levels args
     | _, _ => encodeConstApp e name levels args
-  | .fvar _ | .proj .. | .app .. | .mdata .. =>
-    -- Function-valued terms are arrays; each argument is one read.
-    let mut result ← encode fn
-    let mut type ← inferType fn
-    for argument in args do
-      let .forallE _ _ body _ ← whnf type | unsupported m!"application {e}"
-      if body.hasLooseBVars then unsupported m!"dependent application {e}"
-      if (← isProof argument) || (← isType argument) then unsupported m!"application {e}"
-      result := s!"(select {result} {← encode argument})"
-      type := body
-    if (← isNatType (← inferType e)) then markAbstracted
-    return result
+  | .fvar id =>
+    if let some symbol := (← read).relations[id]? then
+      modify fun s => { s with usedRelations := s.usedRelations.insert symbol }
+      let encoded := (← args.mapM fun a => encode a) ++ (← read).abstractions.map (·.1)
+      return if encoded.isEmpty then symbol else s!"({symbol} {" ".intercalate encoded.toList})"
+    encodeReads e fn args
+  | .proj .. | .app .. | .mdata .. => encodeReads e fn args
   | .mvar _ => unsupported m!"metavariable in {e}"
   | _ => unsupported m!"application {e}"
+
+/-- The literal width of a bit-vector operand. -/
+partial def bitVecWidthOf (e operand : Expr) : EncodeM Nat := do
+  let some w ← bitVecWidth? (← inferType operand) | unsupported m!"bit vector width in {e}"
+  return w
+
+/-- Function-valued terms are arrays; each argument is one read. -/
+partial def encodeReads (e fn : Expr) (args : Array Expr) : EncodeM String := do
+  let mut result ← encode fn
+  let mut type ← inferType fn
+  for argument in args do
+    let .forallE _ _ body _ ← whnf type | unsupported m!"application {e}"
+    if body.hasLooseBVars then unsupported m!"dependent application {e}"
+    if (← isProof argument) || (← isType argument) then unsupported m!"application {e}"
+    result := s!"(select {result} {← encode argument})"
+    type := body
+  if (← isNatType (← inferType e)) then markAbstracted
+  return result
 
 /-- Linear arithmetic directly; non-linear operations only when enabled. Lean's `x / 0 = 0` and
 `x % 0 = x` are kept exactly; SMT-LIB leaves division by zero unspecified. -/
@@ -612,7 +697,10 @@ partial def encodeDefinitionApp (e : Expr) (name : Name) (levels : List Level)
   if definition.abstracted then markAbstracted
   if let some literal := definition.literal? then return literal
   let encodedValues ← values.mapM fun a => encode a
-  let head := if encodedValues.isEmpty then definition.symbol
+  if definition.array then modify fun s => { s with usesAbstraction := true }
+  let head :=
+    if definition.array then encodedValues.foldl (fun a v => s!"(select {a} {v})") definition.symbol
+    else if encodedValues.isEmpty then definition.symbol
     else s!"({definition.symbol} {" ".intercalate encodedValues.toList})"
   selects e head args[consumed:].toArray
 
@@ -634,8 +722,10 @@ partial def encodeDefinition (key : Expr) (name : Name) (levels : List Level) (i
       match info with
       | .defnInfo _ =>
         let saved := (← get).abstracted
+        let savedUses := (← get).usesAbstraction
         modify fun s => { s with
-          abstracted := false, pendingDefinitions := s.pendingDefinitions.insert key }
+          abstracted := false, usesAbstraction := false
+          pendingDefinitions := s.pendingDefinitions.insert key }
         let attempt ← try
             let value ← instantiateValueLevelParams info levels
             let body := (value.beta arguments).headBeta
@@ -645,13 +735,16 @@ partial def encodeDefinition (key : Expr) (name : Name) (levels : List Level) (i
               return n
             -- A definition may be used at either polarity.
             let encoded ← withPolarity .both (encode body)
+            -- A `define-fun` body cannot mention a clause-bound abstraction.
+            if (← get).usesAbstraction then throwError "its body uses an abstraction"
             pure (some (names, encoded, (← get).abstracted))
           catch error =>
             if error.isInterrupt then throw error
             trace[flex.smt] "{name} is uninterpreted: {error.toMessageData}"
             pure none
         modify fun s => { s with
-          abstracted := saved, pendingDefinitions := s.pendingDefinitions.erase key }
+          abstracted := saved, usesAbstraction := savedUses
+          pendingDefinitions := s.pendingDefinitions.erase key }
         pure attempt
       | _ => pure none
     let definition ← match interpreted? with
@@ -663,8 +756,14 @@ partial def encodeDefinition (key : Expr) (name : Name) (levels : List Level) (i
           declare s!"(define-fun {symbol} ({" ".intercalate formals.toList}) {resultSort} {body})"
           pure { symbol, abstracted := abstracted || lossy }
       | none =>
-        declare s!"(declare-fun {symbol} ({" ".intercalate paramSorts.toList}) {resultSort})"
-        pure { symbol, abstracted := true }
+        if (← read).config.horn then
+          let sort := paramSorts.foldr (fun p acc => s!"(Array {p} {acc})") resultSort
+          let value ← mkLambdaFVars params (mkAppN (.const name levels) arguments)
+          modify fun s => { s with abstractions := s.abstractions.push { symbol, sort, value } }
+          pure { symbol, abstracted := true, array := true }
+        else do
+          declare s!"(declare-fun {symbol} ({" ".intercalate paramSorts.toList}) {resultSort})"
+          pure { symbol, abstracted := true }
     modify fun s => { s with definitions := s.definitions.insert key definition }
     return definition
 
@@ -698,6 +797,61 @@ initialize registerTraceClass `flex.smt
 partial def conjuncts (e : Expr) : Array Expr :=
   let e := e.consumeMData
   if e.isAppOfArity ``And 2 then conjuncts (e.getArg! 0) ++ conjuncts (e.getArg! 1) else #[e]
+
+/-- An encoded Horn clause `∀ binders, premises → head`. -/
+structure HornClause where
+  /-- `(symbol sort)` pairs. -/
+  binders : Array String
+  premises : Array String
+  head : String
+  deriving Inhabited
+
+/-- Render as one `assert`: nested implications, or with `conjoined` one `and` of premises. -/
+def HornClause.render (clause : HornClause) (conjoined : Bool := false) : String :=
+  let body :=
+    if clause.premises.isEmpty then clause.head
+    else if conjoined then
+      let guard := if clause.premises.size == 1 then clause.premises[0]!
+        else s!"(and {" ".intercalate clause.premises.toList})"
+      s!"(=> {guard} {clause.head})"
+    else clause.premises.foldr (fun p body => s!"(=> {p} {body})") clause.head
+  let body := if clause.binders.isEmpty then body
+    else s!"(forall ({" ".intercalate clause.binders.toList}) {body})"
+  s!"(assert {body})"
+
+/-- Encode a clause `∀ xs, p₁ → … → pₙ → head` as a Horn clause, with `Config.horn` set and κs
+bound in `Context.relations`. Variables become universal binders (`Nat` ones guarded by
+`0 ≤ x`). A premise conjunct that cannot be encoded is dropped, which only strengthens the
+clause, so any solution of the encoding still solves the original; it marks the encoding
+abstracted. The head must encode. -/
+partial def encodeHornClause (clause : Expr) : EncodeM HornClause :=
+  go clause #[] #[]
+where
+  go (clause : Expr) (binders premises : Array String) : EncodeM HornClause := do
+    match (← instantiateMVars clause).consumeMData with
+    | .forallE name domain body bi =>
+      if ← isProp domain then
+        if body.hasLooseBVar 0 then unsupported m!"proof-dependent premise"
+        let mut premises := premises
+        for conjunct in conjuncts domain do
+          try premises := premises.push (← withPolarity .both (encode conjunct))
+          catch error =>
+            if error.isInterrupt || error.isRuntime then throw error
+            trace[flex.smt] "omitted premise: {error.toMessageData}"
+            markAbstracted
+        go (body.lowerLooseBVars 1 1) binders premises
+      else
+        let sort ← encodeSort domain
+        let nat ← isNatType domain
+        withLocalDecl name bi domain fun x => do
+          let symbol ← fresh name.toString
+          let premises := if nat then premises.push s!"(>= {symbol} 0)" else premises
+          withBinder x symbol <|
+            go (body.instantiate1 x) (binders.push s!"({symbol} {sort})") premises
+    | head =>
+      let head ← withPolarity .both (encode head)
+      let abstractions := (← read).abstractions.map fun (symbol, sort) => s!"({symbol} {sort})"
+      return { binders := binders ++ abstractions, premises, head }
 
 /-- Run an encoding, starting from an empty state. -/
 def EncodeM.run' (config : Config) (k : EncodeM α) : MetaM α := do

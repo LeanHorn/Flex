@@ -117,6 +117,9 @@ structure Config where
   deadlineMs : Option Nat := none
   /-- Retry timeout/unknown with equivalent Horn syntax when the caller has time. -/
   retrySearch : Bool := true
+  /-- Retry an unusable answer with `modelFallback?` settings. With `retrySearch` off as well,
+  each problem gets exactly one solver call. -/
+  modelFallback : Bool := true
   spacerInlining : Bool := false
   /-- Eldarica interval analysis can be disabled when retrying an unimportable model. -/
   eldaricaIntervals : Bool := true

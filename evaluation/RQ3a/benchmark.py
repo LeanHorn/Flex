@@ -26,7 +26,10 @@ from rq1_corpus import imports as lean_imports
 
 HERE = Path(__file__).resolve().parent
 CONFIGS = {'zap_fix': (True, True, False), 'se': (False, False, True),
-           'flex': (True, True, True), 'se_zap_fix': (True, True, True)}
+           'flex': (True, True, True), 'se_zap_fix': (True, True, True),
+           'spacer_only': (False, False, True), 'eldarica_only': (False, False, True)}
+# CHC solvers per configuration; S/E configurations not listed use both, Spacer first.
+SE_BACKENDS = {'spacer_only': 'spacer', 'eldarica_only': 'eldarica'}
 DEFAULTS = {'a': ['zap_fix', 'se', 'flex'],
             'b': ['native_spacer', 'native_eldarica', 'se', 'zap_fix', 'se_zap_fix']}
 TIMEOUT_POLICY = 'reserved_blocks_v1'
@@ -193,6 +196,7 @@ def trial(case, study, config, args, command, env, header):
         'FLEX_PARITY_ZAP': str(int(zap)), 'FLEX_PARITY_FULL': str(int(fix)),
         'FLEX_PARITY_SE': str(int(se)),
         'FLEX_PARITY_SCRAPE': getattr(args, 'scrape', 'auto'),
+        'RQ3_SE_BACKENDS': SE_BACKENDS.get(config, 'spacer,eldarica'),
         'RQ3_CHC_FIRST': str(int(config == 'se_zap_fix')),
         'RQ3_STAGE_SECONDS': str(stage_budget(config, args)),
         'FLEX_PARITY_PROFILE_PA': '1', 'FLEX_PARITY_CASE_SECONDS': str(watchdog),

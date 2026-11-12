@@ -14,6 +14,7 @@ import tempfile
 
 LABELS={'zap_fix':'Zap + Fix', 'se':'S/E only', 'flex':'Full Flex',
         'se_zap_fix':'S/E → Zap + Fix',
+        'spacer_only':'Spacer only', 'eldarica_only':'Eldarica only',
         'native_spacer':'Spacer (SMT)', 'native_eldarica':'Eldarica (SMT)'}
 
 
@@ -88,6 +89,76 @@ def distribution(values):
             'max': values[-1]}
 
 
+def cyclic_progress(cls, terminal, checked, proved, all_heads):
+    """Partial progress on loops: every constraint that mentions a cyclic predicate -- with a
+    predicate in its conclusion (head) or not (query), cyclic in the conclusion or among the
+    hypotheses -- is proved in the kept, kernel-checked result. Heads include initiation,
+    which rules out `False`; queries rule out `True`.
+    Without cyclic predicates, every predicate is solved and every head obligation is
+    proved (`all_heads`). None when not logged."""
+    unknown = {'has_cyclic_predicates':None,'cyclic_heads_proved':None,
+               'unproved_cyclic_obligations':None,'logged_obligations':None}
+    # Cyclic predicates are Zap's cut set; older classifications listed every predicate on a
+    # dependency cycle instead and are not comparable.
+    if 'scc_cyclic_predicates' not in cls or 'obligations' not in terminal:
+        return unknown
+    cyclic=set(cls['cyclic_predicates'])
+    obligations=terminal.get('obligations') or []
+    obligations=[o for o in obligations if o.get('kind','head') in {'head','query'}]
+    unproved=[o for o in obligations if not o.get('proved')
+              and (o.get('head') in cyclic or cyclic & set(o.get('hypotheses',[])))]
+    result={'has_cyclic_predicates':bool(cyclic),'unproved_cyclic_obligations':len(unproved),
+            'logged_obligations':len(obligations)}
+    if not checked:
+        return {**result,'cyclic_heads_proved':False}
+    if proved or not cyclic:
+        return {**result,'cyclic_heads_proved':proved or all_heads}
+    # Predicates sharing a head obligation with a cyclic predicate must also be solved.
+    relevant=set(cyclic)
+    for a,b in cls.get('dependency_edges',[]):
+        if a in cyclic or b in cyclic: relevant|={a,b}
+    unsolved=relevant & set(terminal.get('remaining_predicate_names') or [])
+    # Zap's own unproved heads carry no provenance; count them against the result.
+    kept=terminal.get('retention',{}).get('retained_candidates',[])
+    zap_open=any(r.get('backend')=='zap' and (r.get('remaining_heads') or 0)>0 for r in kept)
+    # A kept solution certified by fallback has no per-head record; it cannot count.
+    untracked=any(r.get('remaining_heads') is None for r in kept)
+    # Solver certificates keep queries inside one residual goal, without per-query records.
+    untracked=untracked or any(r.get('backend') in {'spacer','eldarica'} for r in kept)
+    return {**result,'cyclic_heads_proved':not (unproved or unsolved or zap_open or untracked)}
+
+
+def stop_reason(base, cls, terminal):
+    """Why a trial that is not fully proved stopped, checked in order:
+    cut_off: the run's deadline ended it (its top-level search or last stage timed out or
+      was interrupted) or the outer watchdog killed it; a timed-out solver call or stage
+      that the run moved past does not count;
+    no_certified_result: no kernel-checked partial result;
+    unclosed_budget / unclosed_capability: every predicate solved and every head
+      obligation proved, only non-head goals left; `budget` when some attempt on a goal
+      left unproved hit a resource limit (heartbeats, SMT timeout, exhausted budget);
+    head_unproved: every predicate solved, some head obligation unproved;
+    partial_search: some predicate solved by Fix or a solver with all its head
+      obligations proved while another predicate is still unsolved;
+    no_solution: otherwise."""
+    if base['fully_proved'] or base['configuration'].startswith('native_'): return None
+    if base['deadline_hit'] or base['external_timeout']: return 'cut_off'
+    if not base['kernel_checked']: return 'no_certified_result'
+    if base['all_heads_eliminated']:
+        goals=terminal.get('unproved_goals')
+        if goals is None: return 'unclosed_unknown'
+        limited=base['discharge_budget_exhausted'] or any(g.get('limits') for g in goals)
+        return 'unclosed_budget' if limited else 'unclosed_capability'
+    if base['all_predicates_instantiated']: return 'head_unproved'
+    heads=defaultdict(list)
+    for o in terminal.get('obligations') or []:
+        if o.get('kind','head')=='head' and o.get('backend') in {'fix','chc'}:
+            heads[o['head']].append(o.get('proved'))
+    if any(all(v) for v in heads.values()) and terminal.get('remaining_predicate_names'):
+        return 'partial_search'
+    return 'no_solution'
+
+
 def row(record, cases, classes, phases):
     key=(record['study'],record['case']); case=cases[key]
     terminal=next((e for e in reversed(record.get('events',[])) if e['stage']=='result'),{})
@@ -101,7 +172,12 @@ def row(record, cases, classes, phases):
     imported=any(e['stage']=='chc/import' and e['status']=='ok' for e in events)
     before=terminal.get('original_predicates')
     after=terminal.get('remaining_predicates')
-    removed=max(0,before-after) if checked and before is not None and after is not None else 0
+    # Count removals from the predicates left after preprocessing (Zap's eliminable plus cut
+    # sets), so a trivial predicate that preprocessing drops in every arm is not progress.
+    cls=classes.get(key,{})
+    preprocessed=cls['acyclic']+cls['cyclic'] if 'scc_cyclic' in cls else None
+    baseline=preprocessed if preprocessed is not None else before
+    removed=max(0,baseline-after) if checked and baseline is not None and after is not None else 0
     category=('proved' if proved else 'heads_eliminated' if all_heads else
               'instantiated' if all_inst else 'some_predicates' if removed else
               'preparation_failed' if record['status']=='preparation_failed' else 'no_certified_progress')
@@ -135,8 +211,18 @@ def row(record, cases, classes, phases):
           **{k:terminal.get('proof_metrics',{}).get(k) for k in
              ['kernel_ns','proof_nodes','proof_depth','proof_constants']}}
     if record['status']=='preparation_failed':base['wall_ms']=None
+    base.update(cyclic_progress(classes.get(key,{}), terminal, checked, proved, all_heads))
     base['predicate_progress'] = category in {'proved','heads_eliminated','instantiated','some_predicates'}
     base['genuine_partial_progress'] = base['predicate_progress'] and not proved
+    base['preprocessed_predicates'] = preprocessed
+    base['predicates_removed'] = removed if checked else None
+    kept=retention.get('retained_candidates',[])
+    base['zap_retained'] = any(r.get('backend')=='zap' for r in kept)
+    # Strongest kind of partial progress, for a checked result that is not a full proof.
+    base['partial_reason'] = None if proved or not base['genuine_partial_progress'] else (
+        'cyclic_constraints_proved' if base.get('cyclic_heads_proved') and base.get('has_cyclic_predicates') else
+        'zap_eliminated' if base['zap_retained'] else
+        'all_instantiated' if all_inst else 'predicates_removed')
     base['solver_calls'] = sum(e['stage']=='chc/solver' for e in events)
     base['record_source'] = record.get('record_source')
     for metric, match in [('solver',lambda k:k.endswith('/solver')),
@@ -150,6 +236,12 @@ def row(record, cases, classes, phases):
     base['solver_timeouts']=sum(e['stage']=='chc/solver' and e['status']=='timeout' for e in events)
     base['tactic_time_measured'] = base['flex_ms'] is not None
     base['external_timeout'] = record['status'] in {'case_timeout','process_timeout'}
+    # The closing step's own heartbeat budget ran out (its phase failed rather than ended).
+    base['discharge_budget_exhausted'] = any(e['phase']=='discharge' and e['status']=='failed'
+                                             for e in phases)
+    top=[e for e in phases if e['status']!='start' and (e['phase']=='search' or e['phase'].startswith('stage/'))]
+    base['deadline_hit'] = bool(top) and top[-1]['status'] in {'timeout','interrupted'}
+    base['stop_reason'] = stop_reason(base, classes.get(key,{}), terminal)
     return base,[{'study':base['study'],'case':base['case'],'configuration':base['configuration'],
                   'phase':k,'ms':durations[k] if not starts[k] else None,
                   'completed_ms':durations[k], 'completed_calls':completed[k],
@@ -349,7 +441,7 @@ def figures(output):
                          'axes.spines.top':False,'axes.spines.right':False})
     with PdfPages(output/'report.pdf') as pdf:
         for study in sorted({r['study'] for r in rows}):
-            configs = [c for c in ['zap_fix','se','se_zap_fix','flex']
+            configs = [c for c in ['zap_fix','se','spacer_only','eldarica_only','se_zap_fix','flex']
                        if any(r['study']==study and r['configuration']==c for r in rows)]
             if not configs: continue
             fig, axes = plt.subplots(1,2,figsize=(12,5.3))
@@ -404,8 +496,15 @@ def progress(output):
             final=next((e for e in reversed(r.get('events',[])) if e.get('stage')=='result'),{})
             checked=final.get('kernel_checked') is True
             full=checked and final.get('fully_proved') is True and r['status']=='proved'
-            partial=checked and not full and (final.get('all_predicates_instantiated') is True or
-                                              (final.get('predicate_count_reduction') or 0)>0)
+            # Same baseline as the results table: predicates left after preprocessing.
+            path=output/r['artifacts']/'classification.json' if r.get('artifacts') else None
+            cls=json.loads(path.read_text()) if path and path.exists() else {}
+            remaining=final.get('remaining_predicates')
+            if 'scc_cyclic' in cls and remaining is not None:
+                reduced=cls['acyclic']+cls['cyclic']-remaining>0
+            else:
+                reduced=(final.get('predicate_count_reduction') or 0)>0
+            partial=checked and not full and (final.get('all_predicates_instantiated') is True or reduced)
             category=('proved' if full else 'genuine_partial' if partial else
                       'preparation_failed' if r['status']=='preparation_failed' else
                       r['status'] if key[1].startswith('native_') else 'no_predicate_progress')

@@ -1,6 +1,7 @@
 import Flex.CHC.Witness
 import Flex.PA.Check
 import Flex.Zap.Emit
+import Flex.Obligations
 import Smt
 
 namespace Flex.CHC
@@ -316,14 +317,15 @@ private partial def walk (relations : Array Relation) (oracle : ProofOracle)
 /-- Replace certified κ-heads by True, retaining the original constraint tree.
 The returned equivalence closes every temporary binder before it escapes. -/
 private partial def walkHeads (relations : Array Relation) (oracle : ProofOracle)
-    (raw : Expr) : CertM (Expr × Expr) := do
+    (raw : Expr) (hypotheses : List Name := []) : CertM (Expr × Expr) := do
   let raw ← Prepare.expose raw
   if raw.getAppFn.isMVar then
-    unless relations.any (·.kvar.mvarId == raw.getAppFn.mvarId!) do
-      throwError "CHC certification: unregistered predicate head"
+    let some relation := relations.find? (·.kvar.mvarId == raw.getAppFn.mvarId!)
+      | throwError "CHC certification: unregistered predicate head"
     let (target, equivalence) ← cleanup raw
     let proof? ← if target.isConstOf ``True then pure (some (Lean.mkConst ``True.intro))
       else tryOracle oracle target
+    Flex.Obligations.record "chc" relation.kvar.name hypotheses (proved := proof?.isSome)
     if let some proof := proof? then
       modify fun s => { s with result.provedHeads := s.result.provedHeads + 1 }
       let proof := mkApp4 (mkConst ``Iff.mpr) raw target equivalence proof
@@ -331,6 +333,9 @@ private partial def walkHeads (relations : Array Relation) (oracle : ProofOracle
     modify fun s => { s with result.remainingHeads := s.result.remainingHeads.map (· + 1) }
     return (target, equivalence)
   if let .forallE name domain body bi := raw then
+    let hypotheses := hypotheses ++ relations.toList.filterMap fun relation =>
+      if (domain.find? fun e => e.isMVar && e.mvarId! == relation.kvar.mvarId).isSome then
+        some relation.kvar.name else none
     let domain ← normalize domain
     if ← isProp domain then
       if body.hasLooseBVar 0 then
@@ -339,20 +344,20 @@ private partial def walkHeads (relations : Array Relation) (oracle : ProofOracle
       if cleanDomain != domain then
         let (target, bodyIff) ← withLocalDecl name bi cleanDomain fun parameter => do
           let hypothesis := mkApp4 (mkConst ``Iff.mpr) domain cleanDomain domainIff parameter
-          let (reduced, equivalence) ← walkHeads relations oracle (body.instantiate1 hypothesis)
+          let (reduced, equivalence) ← walkHeads relations oracle (body.instantiate1 hypothesis) hypotheses
           return (← mkForallFVars #[parameter] reduced,
             ← mkAppM ``forall_congr' #[← mkLambdaFVars #[parameter] equivalence])
         let domainBridge ← mkAppM ``imp_congr
           #[domainIff, ← mkAppM ``Iff.refl #[body.instantiate1 (Lean.mkConst ``True.intro)]]
         return (target, ← mkAppM ``Iff.trans #[domainBridge, bodyIff])
     return ← withLocalDecl name bi domain fun parameter => do
-      let (reduced, equivalence) ← walkHeads relations oracle (body.instantiate1 parameter)
+      let (reduced, equivalence) ← walkHeads relations oracle (body.instantiate1 parameter) hypotheses
       let target ← mkForallFVars #[parameter] reduced
       let motive ← mkLambdaFVars #[parameter] equivalence
       return (target, ← mkAppM ``forall_congr' #[motive])
   if let some (left, right) := raw.and? then
-    let (left', leftIff) ← walkHeads relations oracle left
-    let (right', rightIff) ← walkHeads relations oracle right
+    let (left', leftIff) ← walkHeads relations oracle left hypotheses
+    let (right', rightIff) ← walkHeads relations oracle right hypotheses
     return (mkApp2 (mkConst ``And) left' right',
       ← mkAppM ``and_congr #[leftIff, rightIff])
   cleanup raw

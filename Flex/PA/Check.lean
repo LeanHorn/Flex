@@ -48,6 +48,7 @@ private def withSilencedMessages {α} (k : TermElabM α) : TermElabM α := do
 def proveLeafWith
   (tac : TSyntax `tactic)
   (goal : Expr)
+  (onError : Exception → TermElabM Unit := fun _ => pure ())
   : TermElabM (Option Expr) := do
     withSilencedMessages <| withNewMCtxDepth do
       let saved ← saveState
@@ -73,6 +74,7 @@ def proveLeafWith
       catch e =>
         saved.restore
         if e.isInterrupt then throw e
+        onError e
         return none
 
 /-- Try to prove `goal` with the default PA oracle. -/

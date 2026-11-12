@@ -46,6 +46,12 @@ structure Config where
   chcFirst : Bool := false
   /-- Cap the Zap/Fix and CHC stages in either order; zero uses only the shared deadline. -/
   stageTimeout : Nat := 0
+  /-- Separate Zap from Fix and cap its preparation/elimination stage in seconds.
+  Zero keeps the existing stage allocation. -/
+  zapTimeout : Nat := 0
+  /-- Cap the separate Fix stage, including escalation, certification, and discharge.
+  Zero keeps the existing stage allocation. Both caps remain within `totalTimeout`. -/
+  paTimeout : Nat := 0
   zapCertificate : ZapCertificate := .constructive
   /-- Simplify equality-bound witnesses once after Zap; disabled by default. -/
   postprocess : Bool := false
@@ -333,6 +339,9 @@ private def runPA (ctx : Context) (scrape : PAScrapeConfig)
         opts.set `flex.automation.proofHeartbeats limit else opts) <|
       synthOracle ctx queries
   withOptions (fun opts =>
+      -- An explicit PA stage owns the synthesis deadline as well as certification.
+      let opts := if ctx.setup.config.paTimeout > 0 then
+          flex.fixpointTimeout.set opts 0 else opts
       if search == .sources && !opts.contains `flex.automation.equationHeartbeats then
         opts.set `flex.automation.equationHeartbeats (5000 : Nat) else opts) <|
     fixImpl proveLeaf scrape (some (proofOracle ctx)) (observe := ctx.setup.onPA)
@@ -734,7 +743,8 @@ def flexImpl (setup : Setup) : TacticM Unit := focus do
   let reserve ← if (← getMaxHeartbeats) == 0 then pure 0 else
     pure (min 20000000 ((← getRemainingHeartbeats) / 20))
   let ctx : Context := { setup, deadline, reserve, checkpoint := saved }
-  if setup.config.chcFirst || setup.config.stageTimeout > 0 then
+  let separatePA := setup.config.zapTimeout > 0 || setup.config.paTimeout > 0
+  if setup.config.chcFirst || setup.config.stageTimeout > 0 || separatePA then
     let external := setup.backends.filter (· != .fix)
     let internal := setup.backends.filter (· == .fix)
     let se : Setup := { setup with
@@ -742,16 +752,31 @@ def flexImpl (setup : Setup) : TacticM Unit := focus do
       config := { setup.config with zap := false, nesting := false } }
     let pa : Setup := { setup with backends := internal }
     let hasInternal := setup.config.zap || setup.config.nesting || !internal.isEmpty
-    let mut stages := if external.isEmpty then [("stage/zap_fix", pa)]
-      else if !hasInternal then [("stage/se", se)]
-      else if setup.config.chcFirst then [("stage/se", se), ("stage/zap_fix", pa)]
-      else [("stage/zap_fix", pa), ("stage/se", se)]
-    while let (name, stageSetup) :: later := stages do
+    let internalStages := if separatePA then Id.run do
+        let zap : Setup := { setup with
+          backends := []
+          config := { setup.config with closeLeaves := false } }
+        let fix : Setup := { pa with
+          config := { pa.config with zap := false, nesting := false } }
+        let stages := if setup.config.zap || setup.config.nesting then
+            [("stage/zap", zap, setup.config.zapTimeout)] else []
+        return stages ++ (if !internal.isEmpty || setup.config.closeLeaves then
+          [("stage/fix", fix, setup.config.paTimeout)] else [])
+      else [("stage/zap_fix", pa, 0)]
+    let mut stages := if external.isEmpty then internalStages
+      else if !hasInternal then [("stage/se", se, 0)]
+      else if setup.config.chcFirst then [("stage/se", se, 0)] ++ internalStages
+      else internalStages ++ [("stage/se", se, 0)]
+    while let (name, stageSetup, cap) :: later := stages do
       stages := later
       if (← getUnsolvedGoals).isEmpty then break
       let now ← IO.monoMsNow
-      let share := deadline.map fun endTime => (endTime - now) / (1 + later.length)
-      let allowance := if setup.config.stageTimeout == 0 then share else
+      let remaining := deadline.map (· - now)
+      let share := remaining.map (· / (1 + later.length))
+      -- Explicit component caps are maxima, not equal shares of the total budget.
+      let allowance := if cap > 0 then
+          some (remaining.map (min (cap * 1000)) |>.getD (cap * 1000))
+        else if setup.config.stageTimeout == 0 then share else
         some (share.map (min (setup.config.stageTimeout * 1000)) |>.getD
           (setup.config.stageTimeout * 1000))
       runStage { ctx with setup := stageSetup, deadline := allowance.map (now + ·) } name

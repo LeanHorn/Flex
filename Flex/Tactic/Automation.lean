@@ -455,6 +455,45 @@ def proofOracle : Flex.CHC.ProofOracle := fun target => do
       first | omega | grind |
         aesop (config := { maxRuleApplications := 200 }) (add unsafe 20% (by omega)))) target
 
+private initialize oracleBatchCounter : IO.Ref Nat ← IO.mkRef 0
+
+/-- Direct IO survives speculative rollback. Counts describe logical synthesis queries,
+not the solver's internal `check-sat` calls or native tactic attempts. -/
+private def observeSynthBatch (backend : String) (queries : Nat)
+    (select : Array PASynthResult → Array PASynthResult)
+    (action : TermElabM (Array PASynthResult)) : TermElabM (Array PASynthResult) := do
+  unless (← getOptions).getBool `flex.benchOracles false do return ← action
+  let id ← oracleBatchCounter.modifyGet fun n => (n + 1, n + 1)
+  let start ← IO.monoNanosNow
+  let heartbeats ← IO.getNumHeartbeats
+  let record (event : String) (fields : List (String × Json)) : IO Unit := do
+    let data := Json.mkObj ([
+      ("event", toJson event), ("batch_id", toJson id), ("backend", toJson backend),
+      ("queries", toJson queries), ("mono_ms", toJson (← IO.monoMsNow)),
+      ("measurement", toJson "logical_synthesis_queries")] ++ fields)
+    IO.println s!"FIX_ORACLE {data.compress}"
+  record "start" []
+  let result ← IO.mkRef (none : Option (Array PASynthResult))
+  let status ← IO.mkRef "interrupted"
+  try
+    let values ← action
+    result.set (some (select values))
+    status.set "ok"
+    return values
+  catch error =>
+    status.set (if error.isInterrupt then "interrupted" else "error")
+    throw error
+  finally
+    let elapsed ← pure ((← IO.monoNanosNow) - start)
+    let values ← result.get
+    let count (p : PASynthResult → Bool) := toJson (values.map fun xs => (xs.filter p).size)
+    record "end" [
+      ("status", toJson (← status.get)), ("completed", toJson values.isSome),
+      ("elapsed_ns", toJson elapsed), ("elapsed_ms", toJson (elapsed / 1000000)),
+      ("heartbeats_raw", toJson ((← IO.getNumHeartbeats) - heartbeats)),
+      ("valid", count (· == .valid)), ("invalid", count (· == .invalid)),
+      ("unknown", count fun value => match value with | .unknown _ => true | _ => false)]
+
 /-- Batch SMT decisions select candidates; only `proofOracle` builds evidence. One exact SMT
 pass (`Flex.SMT`) decides what it can encode; unsupported or inconclusive queries fall back to
 native proofs. The fallback shares `flex.automation.synthHeartbeats` across the batch: every
@@ -466,7 +505,8 @@ def synthOracle : PASynthOracle := fun targets => do
   let perCheck := flex.automation.synthTimeout.get opts
   let mut results ← if perCheck == 0 then
     pure (targets.map fun _ => PASynthResult.unknown "SMT synthesis disabled")
-    else Flex.PA.smtOracle (← Flex.Timeout.capMs perCheck) targets
+    else observeSynthBatch "SMT" targets.size id do
+      Flex.PA.smtOracle (← Flex.Timeout.capMs perCheck) targets
   unless results.size == targets.size do
     throwError "PA synthesis oracle returned the wrong number of decisions"
   trace[flex.synthesis] "SMT: {targets.size} queries, \
@@ -478,41 +518,43 @@ def synthOracle : PASynthOracle := fun targets => do
   let pending := unknown results
   let budget := flex.automation.synthHeartbeats.get opts * 1000
   if pending.isEmpty || budget == 0 then return results
-  let start ← IO.monoMsNow
-  let startHeartbeats ← IO.getNumHeartbeats
-  -- Remaining shared budget, in thousands of heartbeats like `proofHeartbeats`.
-  let available : TermElabM Nat := do
-    Flex.Timeout.checkDeadline
-    return (budget - ((← IO.getNumHeartbeats) - startHeartbeats)) / 1000
-  let proves (limit : Nat) (proof : TermElabM (Option Expr)) : TermElabM Bool := do
-    let limit := min limit (← available)
-    if limit == 0 then return false
-    return (← withOptions (·.set `flex.automation.proofHeartbeats limit) proof).isSome
-  let full := flex.automation.proofHeartbeats.get opts
-  let quick := min 500 (min full (max 1 (budget / 1000 / (2 * pending.size))))
-  -- `omega` needs no more than the quick budget, so the full pass skips it.
-  let cheap ← `(tactic| omega)
-  for tactic in #[← `(tactic| grind only), cheap] do
+  observeSynthBatch "native" pending.size (fun values => pending.map (values[·]!)) do
+    let mut results := results
+    let start ← IO.monoMsNow
+    let startHeartbeats ← IO.getNumHeartbeats
+    -- Remaining shared budget, in thousands of heartbeats like `proofHeartbeats`.
+    let available : TermElabM Nat := do
+      Flex.Timeout.checkDeadline
+      return (budget - ((← IO.getNumHeartbeats) - startHeartbeats)) / 1000
+    let proves (limit : Nat) (proof : TermElabM (Option Expr)) : TermElabM Bool := do
+      let limit := min limit (← available)
+      if limit == 0 then return false
+      return (← withOptions (·.set `flex.automation.proofHeartbeats limit) proof).isSome
+    let full := flex.automation.proofHeartbeats.get opts
+    let quick := min 500 (min full (max 1 (budget / 1000 / (2 * pending.size))))
+    -- `omega` needs no more than the quick budget, so the full pass skips it.
+    let cheap ← `(tactic| omega)
+    for tactic in #[← `(tactic| grind only), cheap] do
+      for i in unknown results do
+        if ← proves quick (attempt tactic targets[i]! (budgetLeaves := 1)) then
+          results := results.set! i .valid
+    let portfolio := (← nativePortfolio).filter (· != cheap)
     for i in unknown results do
-      if ← proves quick (attempt tactic targets[i]! (budgetLeaves := 1)) then
+      let target := targets[i]!
+      if let .unknown reason := results[i]! then
+        trace[flex.oracle] "SMT synthesis inconclusive: {reason}"
+      if ← proves full (proveWithSourcePredicates target) then
         results := results.set! i .valid
-  let portfolio := (← nativePortfolio).filter (· != cheap)
-  for i in unknown results do
-    let target := targets[i]!
-    if let .unknown reason := results[i]! then
-      trace[flex.oracle] "SMT synthesis inconclusive: {reason}"
-    if ← proves full (proveWithSourcePredicates target) then
-      results := results.set! i .valid
-      continue
-    for tactic in portfolio do
-      if ← proves full (attempt tactic target (budgetLeaves := 1)) then
+        continue
+      for tactic in portfolio do
+        if ← proves full (attempt tactic target (budgetLeaves := 1)) then
+          results := results.set! i .valid
+          break
+      if results[i]! != .valid && (← proves full (proveWithEquations target)) then
         results := results.set! i .valid
-        break
-    if results[i]! != .valid && (← proves full (proveWithEquations target)) then
-      results := results.set! i .valid
-  trace[flex.synthesis] "native fallback: {pending.size} queries, \
-    {pending.size - (unknown results).size} valid, {(← IO.monoMsNow) - start}ms"
-  return results
+    trace[flex.synthesis] "native fallback: {pending.size} queries, \
+      {pending.size - (unknown results).size} valid, {(← IO.monoMsNow) - start}ms"
+    return results
 
 /-- The structural walk used by `solve_fixpoint`, with checked leaf proofs and
 finite progress. Definitions are retried only after their target changes; goals

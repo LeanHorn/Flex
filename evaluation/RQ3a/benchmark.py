@@ -191,7 +191,8 @@ def trial(case, study, config, args, command, env, header):
     archive_attempt(directory)
     record = common.run_case(case, config, run_args, command, {**env,
         'FLEX_PARITY_ZAP': str(int(zap)), 'FLEX_PARITY_FULL': str(int(fix)),
-        'FLEX_PARITY_SE': str(int(se)), 'FLEX_PARITY_SCRAPE': 'auto',
+        'FLEX_PARITY_SE': str(int(se)),
+        'FLEX_PARITY_SCRAPE': getattr(args, 'scrape', 'auto'),
         'RQ3_CHC_FIRST': str(int(config == 'se_zap_fix')),
         'RQ3_STAGE_SECONDS': str(stage_budget(config, args)),
         'FLEX_PARITY_PROFILE_PA': '1', 'FLEX_PARITY_CASE_SECONDS': str(watchdog),

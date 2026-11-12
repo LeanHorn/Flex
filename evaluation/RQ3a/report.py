@@ -266,13 +266,15 @@ def tables(output):
         r.update(flex_budget_seconds=None if native else budget,
                  solver_budget_seconds=settings['solver_timeout'],
                  stage_budget_seconds=stage_budget(record['configuration'],settings),
+                 zap_stage_budget_seconds=settings.get('zap_timeout') or None,
+                 fix_stage_budget_seconds=settings.get('fix_timeout') or None,
                  timeout_policy=settings.get('timeout_policy','legacy_shared_deadline'),
                  phase_heartbeat_limit=None if native else settings['heartbeats'],
                  proof_heartbeat_limit=None if native else settings['proof_heartbeats'],
                  watchdog_seconds=settings['solver_timeout']+30 if native else
                      settings.get('case_timeout') or budget+120,
                  workers=settings.get('workers',1))
-        if settings.get('timeout_policy')=='reserved_blocks_v1' and not native:
+        if settings.get('timeout_policy') in {'reserved_blocks_v1', 'component_caps_v1'} and not native:
             r.update(backend_usage(raw_phases, record.get('events',[])))
         rows.append(r);phases+=p
         identity={k:r[k] for k in ['study','case','configuration']}

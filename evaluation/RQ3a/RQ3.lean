@@ -16,7 +16,7 @@ private def envNat (name : String) (fallback : Nat) : IO Nat := do
   match ← IO.getEnv name with
   | none => return fallback
   | some value =>
-    let some n := value.toNat? | throw <| IO.userError s!"invalid {name}: {value}"
+    let some n := value.toNat? | throw (IO.userError s!"invalid {name}: {value}")
     return n
 
 private def emit (output : System.FilePath) (stage status : String)
@@ -36,13 +36,29 @@ private def emitPhase (output : System.FilePath) (event : Flex.Portfolio.PhaseEv
       ("heartbeats_raw", toJson (← IO.getNumHeartbeats)),
       ("elapsed_ms", toJson event.elapsedMs), ("mono_ms", toJson (← IO.monoMsNow))]).compress
 
-private def recordPA (output : System.FilePath) : PAObserver := fun event => do
+private structure PAStage where
+  index : Nat := 0
+  mode : Option String := none
+  startedMs : Nat := 0
+  startedHeartbeats : Nat := 0
+
+private def recordPA (output : System.FilePath) (state : IO.Ref PAStage) : PAObserver := fun event => do
+  let now ← IO.monoMsNow
+  let heartbeats ← IO.getNumHeartbeats
+  if let .stageStarted mode := event then
+    state.modify fun previous => {
+      index := previous.index + 1, mode := some (toString mode),
+      startedMs := now, startedHeartbeats := heartbeats }
+  let current ← state.get
   let record (status : String) (fields : List (String × Json)) := do
-    emit output "fix/pa" status (("mono_ms", toJson (← IO.monoMsNow)) :: fields)
+    emit output "fix/pa" status ([
+      ("mono_ms", toJson now), ("heartbeats_raw", toJson heartbeats),
+      ("pa_stage", toJson current.index), ("mode", toJson current.mode),
+      ("stage_elapsed_ms", toJson (now - current.startedMs)),
+      ("stage_heartbeats_raw", toJson (heartbeats - current.startedHeartbeats))] ++ fields)
   match event with
-  | .stageStarted mode => record "stage_start" [("mode", toJson (toString mode))]
-  | .stageFinished mode accepted => record "stage_end" [
-      ("mode", toJson (toString mode)), ("accepted", toJson accepted)]
+  | .stageStarted _ => record "stage_start" []
+  | .stageFinished _ accepted => record "stage_end" [("accepted", toJson accepted)]
   | .setup scraped standard tagged candidates =>
     record "setup" [
       ("scraped_templates", toJson scraped), ("bank_templates", toJson standard),
@@ -126,8 +142,65 @@ private partial def predicateCount (target : Expr) : MetaM Nat := do
       fun x => predicateCount (target.bindingBody!.instantiate1 x)
   return 0
 
-/-- Check the original theorem as a function of exactly the reported residual goals. -/
-private def checkBridge (output : System.FilePath) (original target : Expr)
+private def children : Expr → List Expr
+  | .app f a => [f, a]
+  | .lam _ t b _ | .forallE _ t b _ => [t, b]
+  | .letE _ t v b _ => [t, v, b]
+  | .mdata _ e | .proj _ _ e => [e]
+  | _ => []
+
+/-- Follow generated helpers, stopping at declarations present before the trial. -/
+private def proofPackage (baseline : Environment) (roots : Array Expr)
+    : TermElabM (Array ConstantInfo) := do
+  let env ← getEnv
+  let mut states : Std.HashMap Name Nat := {}
+  let mut pending := roots.toList.flatMap (fun e => e.getUsedConstants.toList.map (·, false))
+  let mut ordered := #[]
+  while let (name, visited) :: rest := pending do
+    pending := rest
+    if baseline.contains name || states[name]? == some 2 then continue
+    let some info := env.find? name | throwError "missing proof dependency {name}"
+    if visited then
+      states := states.insert name 2
+      ordered := ordered.push info
+    else
+      if states[name]? == some 1 then throwError "cyclic generated proof dependency {name}"
+      let some value := info.value? true | throwError "unsupported generated proof dependency {name}"
+      states := states.insert name 1
+      let deps := info.type.getUsedConstants.toList ++ value.getUsedConstants.toList
+      pending := deps.map (·, false) ++ (name, true) :: pending
+  return ordered
+
+/-- DAG metrics: new helper types and bodies are included without materializing expansions. -/
+private def expressionStats (roots : Array Expr) (helpers : Array ConstantInfo)
+    : Nat × Nat × Nat := Id.run do
+  let values : Std.HashMap Name (List Expr) := helpers.foldl (fun m info =>
+    m.insert info.name [info.type, info.value! true]) {}
+  let descendants := fun (e : Expr) => match e with
+    | .const name _ => values.getD name []
+    | _ => children e
+  let mut depths : Std.HashMap Expr Nat := {}
+  let mut constants : NameSet := {}
+  let mut pending := roots.toList.map (·, false)
+  while let (e, visited) :: rest := pending do
+    pending := rest
+    if depths.contains e then continue
+    if visited then
+      depths := depths.insert e (1 + (descendants e).foldl (fun n c => max n (depths[c]!)) 0)
+      if let .const name _ := e then constants := constants.insert name
+    else
+      pending := (descendants e).map (·, false) ++ (e, true) :: pending
+  return (roots.foldl (fun n e => max n (depths[e]!)) 0, depths.size, constants.size)
+
+private def replayDeclaration : ConstantInfo → TermElabM Declaration
+  | .thmInfo value => pure (.thmDecl value)
+  | .defnInfo value => pure (.defnDecl value)
+  | .opaqueInfo value => pure (.opaqueDecl value)
+  | info => throwError "cannot replay generated declaration {info.name}"
+
+
+/-- Check the original theorem and generated helpers against the pre-trial environment. -/
+private def checkBridge (output : System.FilePath) (baseline : Environment) (original target : Expr)
     (goals : Array MVarId) : TermElabM Json := do
   let saved ← saveState
   try
@@ -144,11 +217,21 @@ private def checkBridge (output : System.FilePath) (original target : Expr)
       if proof.hasMVar || proof.hasFVar || proof.hasLooseBVars || proof.hasSorry then
         throwError "certificate contains unresolved or admitted evidence"
       let type ← mkForallFVars hypotheses target
+      let helpers ← measure output "verify/helpers" fun _ => proofPackage baseline #[type, proof]
+      let declarations ← helpers.mapM replayDeclaration
+      let finalDecl := Declaration.thmDecl {
+        name := ← mkFreshUserName `rq3_certificate
+        levelParams := [], type, value := proof }
+      let context ← readThe Core.Context
+      let opts := maxRecDepth.set (maxHeartbeats.set
+        ((← getOptions).setBool `debug.skipKernelTC false) 0) context.maxRecDepth
       let kernelStart ← IO.monoNanosNow
-      measure output "verify/kernel" fun _ => withoutModifyingEnv do
-        addDecl (.thmDecl {
-          name := ← mkFreshUserName `rq3_certificate
-          levelParams := [], type, value := proof })
+      measure output "verify/kernel" fun _ => do
+        let mut kernel := baseline.toKernelEnv
+        for declaration in declarations.push finalDecl do
+          match kernel.addDecl opts declaration context.cancelTk? with
+          | .ok next => kernel := next
+          | .error error => throwError "kernel rejected proof package: {error.toMessageData opts}"
       let kernelNs := (← IO.monoNanosNow) - kernelStart
       measure output "verify/type" fun _ => do
         unless ← isDefEq (← inferType proof) (← mkForallFVars hypotheses target) do
@@ -158,7 +241,15 @@ private def checkBridge (output : System.FilePath) (original target : Expr)
           for axiomName in ← collectAxioms name do
             unless #[``propext, ``Classical.choice, ``Quot.sound].contains axiomName do
               throwError "certificate depends on {axiomName}"
+      let (packageDepth, packageNodes, packageConstants) ← measure output "verify/metrics" fun _ =>
+        pure (expressionStats #[type, proof] helpers)
       return Json.mkObj [("kernel_ns", toJson kernelNs),
+        ("kernel_scope", toJson "original bridge and all generated auxiliary declarations"),
+        ("proof_package_depth", toJson packageDepth),
+        ("proof_package_nodes", toJson packageNodes),
+        ("proof_package_constants", toJson packageConstants),
+        ("proof_auxiliary_declarations", toJson helpers.size),
+        ("proof_metrics_version", toJson (2 : Nat)),
         ("proof_depth", toJson proof.approxDepth.toNat),
         ("proof_nodes", toJson (← proof.numObjs)),
         ("proof_constants", toJson proof.getUsedConstants.size)]
@@ -172,9 +263,12 @@ private structure Retention where
   backend : String
   remainingHeads : Option Nat
   heads : Array MVarId
+  paStage : Option Nat
+  scrapeMode : Option String
 
 private def remember (records : IO.Ref (Array Retention)) (key : Name) (backend : String)
-    (remainingHeads : Option Nat) (goals : Array MVarId) (zap := false) : TermElabM Unit := do
+    (remainingHeads : Option Nat) (goals : Array MVarId) (zap := false)
+    (pa : Option PAStage := none) : TermElabM Unit := do
   let index := (← records.get).size
   let markerType ← mkEq (mkNatLit index) (mkNatLit index)
   let marker ← mkFreshExprMVar markerType
@@ -183,7 +277,7 @@ private def remember (records : IO.Ref (Array Retention)) (key : Name) (backend 
     return tag.contains "_head"
   records.modify (·.push {
     marker := marker.mvarId!, markerType, key, backend,
-    remainingHeads, heads })
+    remainingHeads, heads, paStage := pa.map (·.index), scrapeMode := pa.bind (·.mode) })
 
 private def retained (records : Array Retention) : TermElabM Json := do
   let mut selected : Std.HashMap Name Retention := {}
@@ -203,7 +297,8 @@ private def retained (records : Array Retention) : TermElabM Json := do
     known := known && count.isSome
     remaining := remaining + count.getD 0
     rows := rows.push (Json.mkObj [("backend", toJson record.backend),
-      ("remaining_heads", toJson count)])
+      ("remaining_heads", toJson count), ("pa_stage", toJson record.paStage),
+      ("scrape_mode", toJson record.scrapeMode)])
   return Json.mkObj [("retained_candidates", Json.arr rows),
     ("remaining_heads", if known then toJson remaining else Json.null),
     ("heads_known", toJson known)]
@@ -244,7 +339,7 @@ private def classify (target : Expr) : TermElabM Json := do
     let goal ← Flex.Preprocess.prepareGoal original.mvarId!
     let countsRef ← IO.mkRef #[0,0,0,0]
     unless ← goal.isAssignedOrDelayedAssigned do
-      discard <| Tactic.run goal do
+      discard $ Tactic.run goal do
         countsRef.set (← graph (← goal.getType))
     let counts ← countsRef.get
     let kind := if counts[0]! + counts[1]! == 0 then "none"
@@ -349,11 +444,16 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
     tryCatchRuntimeEx (do
       let heartbeats ← envNat "FLEX_PARITY_HEARTBEATS" 4000000
       let proofHeartbeats ← envNat "FLEX_PARITY_PROOF_HEARTBEATS" 40000
+      let synthHeartbeats ← envNat "FLEX_PARITY_SYNTH_HEARTBEATS" 0
+      let preparation := (← IO.getEnv "FLEX_PARITY_PREPARE").filter fun source =>
+        !source.trimAscii.isEmpty
       let zap := (← IO.getEnv "FLEX_PARITY_ZAP").getD "1" != "0"
       let full := (← IO.getEnv "FLEX_PARITY_FULL").getD "0" == "1"
       let solvers := (← IO.getEnv "FLEX_PARITY_SE").getD "1" != "0"
       let chcFirst := (← IO.getEnv "RQ3_CHC_FIRST").getD "0" == "1"
       let stageSeconds ← envNat "RQ3_STAGE_SECONDS" 0
+      let zapSeconds ← envNat "FLEX_PARITY_ZAP_SECONDS" 0
+      let paSeconds ← envNat "FLEX_PARITY_PA_SECONDS" 0
       let totalSeconds ← envNat "FLEX_PARITY_FLEX_SECONDS" (if full && solvers then 360 else 180)
       let caseSeconds ← envNat "FLEX_PARITY_CASE_SECONDS" (totalSeconds + 120)
       let solverSeconds ← envNat "FLEX_PARITY_SOLVER_SECONDS" 90
@@ -377,9 +477,9 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
         let opts := opts.setBool `trace.flex.synthesis profilePA
         let opts := flex.automation.proofHeartbeats.set opts proofHeartbeats
         let opts := flex.fixpointTimeout.set opts totalSeconds
-        -- Synthesis decides candidates with the exact SMT encoding alone; undecided
-        -- candidates are dropped. Certification and discharge still use Lean automation.
-        let opts := flex.automation.synthHeartbeats.set opts 0
+        -- RQ3a defaults to SMT-only synthesis; semantic scraping runs can enable
+        -- the library's native fallback explicitly without changing earlier trials.
+        let opts := flex.automation.synthHeartbeats.set opts synthHeartbeats
         -- Refinement-type constraints use non-linear arithmetic (e.g. `%` by a variable);
         -- leave it to the solver instead of bailing.
         let opts := flex.smt.encodeNonlinear.set opts true
@@ -390,27 +490,33 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
           | some executable => flex.eldarica.executable.set opts executable
           | none => opts
         return opts
-      withOptions (fun _ => options) <|
+      withOptions (fun _ => options) do
         withTheReader Core.Context (fun ctx => { ctx with maxRecDepth := recursionLimit }) do
           let config : Flex.Portfolio.Config := {
             nesting := false, zap, chcFirst, stageTimeout := stageSeconds
+            zapTimeout := zapSeconds, paTimeout := paSeconds
             heartbeats, totalTimeout := totalSeconds, solverTimeout := solverSeconds }
           IO.FS.writeFile (output / "invocation.json") (Json.mkObj [
             ("entry_point", toJson "Flex.Portfolio.flexImpl"),
             ("backends", toJson (backends.map toString)),
             ("chc_first", toJson chcFirst),
             ("stage_timeout_seconds", toJson stageSeconds),
+            ("zap_timeout_seconds", toJson zapSeconds),
+            ("pa_timeout_seconds", toJson paSeconds),
             ("scrape", if full then toJson scrapeName else Json.null),
             ("profile_pa", toJson profilePA),
+            ("input_preparation", toJson preparation),
             ("diagnostic", toJson diagnostic),
             ("preprocess", toJson config.preprocess), ("zap", toJson config.zap),
             ("postprocess", toJson config.postprocess), ("nesting", toJson config.nesting),
             ("split_free", toJson config.splitFree),
             ("keep_candidates", toJson config.keepCandidates),
             ("total_timeout_seconds", toJson config.totalTimeout),
-            ("fixpoint_timeout_seconds", toJson (flex.fixpointTimeout.get options)),
+            ("fixpoint_timeout_seconds", toJson (if paSeconds > 0 then 0 else
+              flex.fixpointTimeout.get options)),
             ("solver_timeout_seconds", toJson config.solverTimeout),
-            ("timeout_policy", toJson "reserved_blocks_v1"),
+            ("timeout_policy", toJson (if zapSeconds > 0 || paSeconds > 0 then
+              "component_caps_v1" else "reserved_blocks_v1")),
             ("oracle_timeout_policy", toJson "remaining backend allocation"),
             ("case_timeout_seconds", toJson caseSeconds),
             ("phase_heartbeats", toJson heartbeats),
@@ -421,10 +527,32 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
             ("synth_heartbeats", toJson (flex.automation.synthHeartbeats.get options)),
             ("recursion_limit", toJson recursionLimit)]).pretty
           let target := Lean.mkConst name
+          let baseline ← getEnv
+          let original ← mkFreshExprMVar (some target) (kind := .syntheticOpaque)
+          let prepared ← match preparation with
+            | none => pure original.mvarId!
+            | some source => do
+              let tactic ← match Parser.runParserCategory (← getEnv) `tactic ("(\n" ++ source ++ "\n)") with
+                | .ok tactic => pure tactic
+                | .error error => throwError "input preparation: {error}"
+              let goals ← measure output "prepare/input" fun _ =>
+                Tactic.run original.mvarId! (Tactic.evalTactic tactic)
+              let [goal] := goals
+                | throwError "input preparation must leave exactly one goal"
+              pure goal
+          -- Measure the prepared proposition, not the file or recursively expanded definitions.
+          let inputMetrics ← measure output "input/metrics" fun _ => prepared.withContext do
+            let expression ← whnf (← instantiateMVars (← prepared.getType))
+            let (depth, nodes, constants) := expressionStats #[expression] #[]
+            pure (Json.mkObj [("expr_depth", toJson depth), ("expr_dag_nodes", toJson nodes),
+              ("expr_constants", toJson constants),
+              ("scope", toJson "prepared goal after top-level unfolding; named model definitions remain opaque")])
+          IO.FS.writeFile (output / "input_metrics.json") inputMetrics.pretty
           -- Structural classification shares the trial's process; it precedes the measured tactic.
           if (← IO.getEnv "RQ3_CLASSIFY").getD "1" != "0" then
             let classifyStart ← IO.monoMsNow
-            let info ← tryCatchRuntimeEx (some <$> classify target) fun error => do
+            let info ← tryCatchRuntimeEx (prepared.withContext do
+                some <$> classify (← prepared.getType)) fun error => do
               if error.isInterrupt then throw error
               emit output "classification" "failed" [("error", toJson (← error.toMessageData.toString))]
               pure none
@@ -432,16 +560,16 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
               IO.FS.writeFile (output / "classification.json") info.pretty
               emit output "classification" "ok"
                 [("elapsed_ms", toJson ((← IO.monoMsNow) - classifyStart))]
-          let before ← predicateCount target
-          let original ← mkFreshExprMVar (some target) (kind := .syntheticOpaque)
+          let before ← prepared.withContext do predicateCount (← prepared.getType)
           stage.set "flex"
           emit output "flex" "running" [("original_predicates", toJson before)]
           let attempt ← IO.mkRef 0
           let backendAttempt ← IO.mkRef 0
           let retentions ← IO.mkRef (#[] : Array Retention)
+          let paState ← IO.mkRef ({} : PAStage)
           let tacticStart ← IO.monoMsNow
           let tacticHB ← IO.getNumHeartbeats
-          let goals ← Tactic.run original.mvarId! <| Flex.Portfolio.flexImpl {
+          let goals ← Tactic.run prepared $ Flex.Portfolio.flexImpl {
             config, backends, scrape := { mode := scrapeMode }
             onPhase := fun event => do
               let isAttempt := event.phase.startsWith "attempt/"
@@ -449,10 +577,11 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
               let index ← backendAttempt.get
               emitPhase output event (if isAttempt && !event.status.startsWith "skipped_" then
                 some index else none)
-            onPA := if profilePA then recordPA output else fun _ => pure ()
+            onPA := if profilePA then recordPA output paState else fun _ => pure ()
             onCHC := recordCHC output attempt backendAttempt
-            onSynthesis := fun goal backend _ heads goals =>
-              remember retentions goal.name (toString backend) heads goals
+            onSynthesis := fun goal backend _ heads goals => do
+              let pa ← if backend == .fix && profilePA then some <$> paState.get else pure none
+              remember retentions goal.name (toString backend) heads goals (pa := pa)
             onZap := fun heads => do
               let key ← mkFreshId
               remember retentions key "zap" (some heads.size) heads true }
@@ -474,7 +603,7 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
           stage.set "kernel"
           emit output "kernel" "running"
           let kernelStart ← IO.monoMsNow
-          let proofMetrics ← checkBridge output original target goals.toArray
+          let proofMetrics ← checkBridge output baseline original target goals.toArray
           emit output "kernel" "ok" [("elapsed_ms", toJson ((← IO.monoMsNow) - kernelStart))]
           emit output "result" (if goals.isEmpty then "proved" else "partial") [
             ("retention", retention), ("proof_metrics", proofMetrics),

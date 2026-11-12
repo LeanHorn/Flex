@@ -34,7 +34,7 @@ SMT2LEAN_DIR = "vendor/SMTLib-to-Lean"
 
 # Strings that must not appear anywhere in the archive (case-insensitive).
 DENY = re.compile(r"leanhorn|jam-khan|jamkhan|jamkabeer|kabeer|petros|markopoulos|lehmann|"
-                  r"hku\.hk|uchile|/home/[a-z]|/Users/[a-z]", re.I)
+                  r"hku\.hk|uchile|rjhala|/home/[a-z]|/Users/[a-z]|Users\$47\$", re.I)
 ALLOW: list[re.Pattern] = []
 
 TEXT_SUFFIXES = {".lean", ".md", ".txt", ".py", ".sh", ".json", ".toml", ".yml", ".yaml",

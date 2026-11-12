@@ -126,6 +126,25 @@ private partial def predicateCount (target : Expr) : MetaM Nat := do
       fun x => predicateCount (target.bindingBody!.instantiate1 x)
   return 0
 
+/-- Names of predicate existentials still present in the positive constraint structure. -/
+private partial def predicateNames (target : Expr) : MetaM (Array Name) := do
+  let target ← whnf (← instantiateMVars target)
+  if target.isAppOfArity ``Exists 2 then
+    let domain := target.getArg! 0
+    let isPredicate ← forallTelescopeReducing domain fun _ result => pure result.isProp
+    let name := match target.appArg! with
+      | .lam name .. => name
+      | _ => `_
+    return ← withLocalDeclD name domain fun witness => do
+      let rest ← predicateNames (target.appArg!.beta #[witness])
+      return if isPredicate then rest.push name else rest
+  if let some (left, right) := target.and? then
+    return (← predicateNames left) ++ (← predicateNames right)
+  if target.isForall then
+    return ← withLocalDecl target.bindingName! target.bindingInfo! target.bindingDomain!
+      fun x => predicateNames (target.bindingBody!.instantiate1 x)
+  return #[]
+
 /-- Check the original theorem as a function of exactly the reported residual goals. -/
 private def checkBridge (output : System.FilePath) (original target : Expr)
     (goals : Array MVarId) : TermElabM Json := do
@@ -208,13 +227,21 @@ private def retained (records : Array Retention) : TermElabM Json := do
     ("remaining_heads", if known then toJson remaining else Json.null),
     ("heads_known", toJson known)]
 
-private partial def graph (target : Expr) : Tactic.TacticM (Array Nat) := do
+/-- Cyclic predicate names and predicate dependency edges, across all ∃-blocks. -/
+private structure GraphInfo where
+  /-- Predicates on a dependency cycle (strongly connected components). -/
+  sccCyclic : Array Name := #[]
+  /-- Zap's cut set: the predicates Zap cannot eliminate. -/
+  cut : Array Name := #[]
+  edges : Array (Name × Name) := #[]
+
+private partial def graph (info : IO.Ref GraphInfo) (target : Expr) : Tactic.TacticM (Array Nat) := do
   let target ← whnf target
   if target.isForall then
     return ← withLocalDeclD target.bindingName! target.bindingDomain! fun x =>
-      graph (target.bindingBody!.instantiate1 x)
+      graph info (target.bindingBody!.instantiate1 x)
   if let some (a, b) := target.and? then
-    let a ← graph a; let b ← graph b
+    let a ← graph info a; let b ← graph info b
     return a.zipWith (· + ·) b
   unless target.isAppOfArity ``Exists 2 do return #[0, 0, 0, 0]
   let result ← IO.mkRef #[0, 0, 0, 0]
@@ -235,6 +262,9 @@ private partial def graph (target : Expr) : Tactic.TacticM (Array Nat) := do
     let cyc := (tarjanSCC vars.toList deps).filter fun scc =>
       scc.length > 1 || scc.any (fun k => hasSelfLoop k deps)
     result.set #[vars.size - cyc.flatten.length, cyc.flatten.length, elim.length, cut.length]
+    info.modify fun i => { sccCyclic := i.sccCyclic ++ (cyc.flatten.map (·.name)).toArray,
+                           cut := i.cut ++ (cut.map (·.name)).toArray,
+                           edges := i.edges ++ (deps.map fun (a, b) => (a.name, b.name)).toArray }
   result.get
 
 private def classify (target : Expr) : TermElabM Json := do
@@ -243,16 +273,26 @@ private def classify (target : Expr) : TermElabM Json := do
     let original ← mkFreshExprMVar target
     let goal ← Flex.Preprocess.prepareGoal original.mvarId!
     let countsRef ← IO.mkRef #[0,0,0,0]
+    let info ← IO.mkRef ({} : GraphInfo)
     unless ← goal.isAssignedOrDelayedAssigned do
       discard <| Tactic.run goal do
-        countsRef.set (← graph (← goal.getType))
+        countsRef.set (← graph info (← goal.getType))
+    let info ← info.get
     let counts ← countsRef.get
-    let kind := if counts[0]! + counts[1]! == 0 then "none"
-      else if counts[1]! == 0 then "acyclic_only"
-      else if counts[0]! == 0 then "cyclic_only" else "mixed"
-    return Json.mkObj [("kind", toJson kind), ("acyclic", toJson counts[0]!),
-      ("cyclic", toJson counts[1]!), ("eliminable", toJson counts[2]!),
-      ("cut", toJson counts[3]!)]
+    -- Cyclic means Zap's cut set (predicates Zap cannot eliminate); acyclic means Zap
+    -- eliminates it, including predicates on a cycle that every cycle reaches through a
+    -- cut predicate. Strongly connected components are kept as `scc_*` for reference.
+    let (acyclic, cyclic) := (counts[2]!, counts[3]!)
+    let kind := if acyclic + cyclic == 0 then "none"
+      else if cyclic == 0 then "acyclic_only"
+      else if acyclic == 0 then "cyclic_only" else "mixed"
+    return Json.mkObj [("kind", toJson kind), ("acyclic", toJson acyclic),
+      ("cyclic", toJson cyclic), ("eliminable", toJson counts[2]!),
+      ("cut", toJson counts[3]!),
+      ("cyclic_predicates", toJson (info.cut.map (·.toString))),
+      ("scc_acyclic", toJson counts[0]!), ("scc_cyclic", toJson counts[1]!),
+      ("scc_cyclic_predicates", toJson (info.sccCyclic.map (·.toString))),
+      ("dependency_edges", toJson (info.edges.map fun (a, b) => #[a.toString, b.toString]))]
   finally Flex.CHC.restoreTermState saved
 
 /-- Keep original assertions and definitions; remove response requests and process controls. -/
@@ -349,6 +389,9 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
     tryCatchRuntimeEx (do
       let heartbeats ← envNat "FLEX_PARITY_HEARTBEATS" 4000000
       let proofHeartbeats ← envNat "FLEX_PARITY_PROOF_HEARTBEATS" 40000
+      -- Overrides for budget-sensitivity checks; defaults match Flex.
+      let dischargeHeartbeats ← envNat "FLEX_PARITY_DISCHARGE_HEARTBEATS" 500000
+      let smtSeconds ← envNat "FLEX_PARITY_SMT_SECONDS" 30
       let zap := (← IO.getEnv "FLEX_PARITY_ZAP").getD "1" != "0"
       let full := (← IO.getEnv "FLEX_PARITY_FULL").getD "0" == "1"
       let solvers := (← IO.getEnv "FLEX_PARITY_SE").getD "1" != "0"
@@ -365,8 +408,13 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
         | _ => throwError "invalid FLEX_PARITY_SCRAPE: {scrapeName}"
       let profilePA := (← IO.getEnv "FLEX_PARITY_PROFILE_PA").getD "0" == "1"
       let diagnostic := (← IO.getEnv "RQ3_DIAGNOSTIC").getD "0" == "1"
+      -- RQ3_SE_BACKENDS selects the CHC solvers (default both, Spacer first).
+      let seNames := ((← IO.getEnv "RQ3_SE_BACKENDS").getD "spacer,eldarica").splitOn ","
+      let seBackends : List Flex.Portfolio.Backend ← seNames.mapM fun
+        | "spacer" => pure .spacer | "eldarica" => pure .eldarica
+        | other => throwError "invalid RQ3_SE_BACKENDS entry: {other}"
       let backends : List Flex.Portfolio.Backend :=
-        (if full then [.fix] else []) ++ (if solvers then [.spacer, .eldarica] else [])
+        (if full then [.fix] else []) ++ (if solvers then seBackends else [])
       let recursionLimit ← envNat "FLEX_PARITY_RECURSION_LIMIT" 16384
       let spacerExe ← IO.getEnv "FLEX_PARITY_EXECUTABLE"
       let eldaricaExe ← IO.getEnv "FLEX_PARITY_ELDARICA_EXECUTABLE"
@@ -376,6 +424,9 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
         let opts := opts.setBool `trace.flex diagnostic
         let opts := opts.setBool `trace.flex.synthesis profilePA
         let opts := flex.automation.proofHeartbeats.set opts proofHeartbeats
+        let opts := flex.automation.smtTimeout.set opts smtSeconds
+        -- Record each predicate-head obligation with its hypothesis predicates.
+        let opts := flex.logObligations.set opts true
         let opts := flex.fixpointTimeout.set opts totalSeconds
         -- Synthesis decides candidates with the exact SMT encoding alone; undecided
         -- candidates are dropped. Certification and discharge still use Lean automation.
@@ -394,7 +445,8 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
         withTheReader Core.Context (fun ctx => { ctx with maxRecDepth := recursionLimit }) do
           let config : Flex.Portfolio.Config := {
             nesting := false, zap, chcFirst, stageTimeout := stageSeconds
-            heartbeats, totalTimeout := totalSeconds, solverTimeout := solverSeconds }
+            heartbeats, totalTimeout := totalSeconds, solverTimeout := solverSeconds
+            dischargeHeartbeats }
           IO.FS.writeFile (output / "invocation.json") (Json.mkObj [
             ("entry_point", toJson "Flex.Portfolio.flexImpl"),
             ("backends", toJson (backends.map toString)),
@@ -415,6 +467,8 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
             ("case_timeout_seconds", toJson caseSeconds),
             ("phase_heartbeats", toJson heartbeats),
             ("proof_heartbeats", toJson proofHeartbeats),
+            ("discharge_heartbeats", toJson dischargeHeartbeats),
+            ("smt_timeout_seconds", toJson smtSeconds),
             ("smt_uninterpreted_defs", toJson (flex.smt.uninterpretedDefs.get options)),
             ("smt_encode_nonlinear", toJson (flex.smt.encodeNonlinear.get options)),
             ("smt_encode_quantifiers", toJson (flex.smt.encodeQuantifiers.get options)),
@@ -459,12 +513,31 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
           let tacticHeartbeats := ((← IO.getNumHeartbeats) - tacticHB) / 1000
           let flexMs := (← IO.monoMsNow) - tacticStart
           let retention ← retained (← retentions.get)
+          let markers ← Flex.Obligations.collect
+          let kind (marker : Json) := (marker.getObjValAs? String "kind").toOption.getD ""
+          let callOf (marker : Json) := (marker.getObjValAs? Nat "call").toOption.getD 0
+          -- A query left as a goal is proved iff that goal is now closed.
+          let queries ← (markers.filter (kind · == "query")).mapM fun marker => do
+            let some goal := (marker.getObjValAs? String "goal").toOption | pure marker
+            let proof ← instantiateMVars (mkMVar ⟨goal.toName⟩)
+            pure (marker.setObjVal! "proved" (toJson !proof.hasExprMVar))
+          let obligations := markers.filter (kind · == "head") ++ queries
+          -- Goals the proof oracle left unproved, with the resource limits its attempts hit.
+          let limits := markers.filter (kind · == "limit")
+          let unprovedGoals := (markers.filter (kind · == "unproved")).map fun marker =>
+            let call := callOf marker
+            let reasons := (limits.filter (callOf · == call)).filterMap fun limit =>
+              (limit.getObjValAs? String "reason").toOption
+            Json.mkObj [("call", toJson call), ("limits", toJson reasons.toList.eraseDups)]
           emit output "flex" "ok" [("elapsed_ms", toJson flexMs)]
+          let remainingNames ← IO.mkRef (#[] : Array String)
           let after ← measure output "checkpoint/format" fun _ => do
             let mut after := 0
             let mut residuals := []
             for goal in goals do
               after := after + (← goal.withContext do predicateCount (← goal.getType))
+              let names ← goal.withContext do predicateNames (← goal.getType)
+              remainingNames.modify (· ++ names.map (·.toString))
               residuals := residuals ++ [(← Meta.ppGoal goal).pretty]
             IO.FS.writeFile (output / "residual.txt") (String.intercalate "\n\n---\n\n" residuals)
             return after
@@ -478,6 +551,9 @@ def run (targetName : Option Name := none) : TermElabM Unit := do
           emit output "kernel" "ok" [("elapsed_ms", toJson ((← IO.monoMsNow) - kernelStart))]
           emit output "result" (if goals.isEmpty then "proved" else "partial") [
             ("retention", retention), ("proof_metrics", proofMetrics),
+            ("obligations", Json.arr obligations),
+            ("unproved_goals", Json.arr unprovedGoals),
+            ("remaining_predicate_names", toJson (← remainingNames.get)),
             ("tactic_heartbeats", toJson tacticHeartbeats),
             ("goals", toJson goals.length),
             ("original_predicates", toJson before), ("remaining_predicates", toJson after),

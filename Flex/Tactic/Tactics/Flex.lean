@@ -291,7 +291,10 @@ private def close (ctx : Context) : TacticM Unit := do
         if proof.isSome then provedLeaf.set true
         return proof
       -- Failed search need not leave hundreds of split goals to reassemble.
-      if !(← provedLeaf.get) && !(← getUnsolvedGoals).isEmpty then restore before
+      if !(← provedLeaf.get) && !(← getUnsolvedGoals).isEmpty then
+        let markers ← Flex.Obligations.collect
+        restore before
+        Flex.Obligations.reinstate markers
     remaining := remaining ++ (← getUnsolvedGoals)
   setGoals remaining
 

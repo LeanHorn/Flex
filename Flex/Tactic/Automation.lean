@@ -2,6 +2,7 @@ import Flex.CHC.Certificate
 import Flex.Tactic.Oracles
 import Flex.PA.Smt
 import Flex.Tactic.Timeout
+import Flex.Obligations
 
 /-! SMT-first synthesis and checked residual automation. -/
 
@@ -240,13 +241,17 @@ private def attempt (tactic : TSyntax `tactic) (target : Expr)
   let mut limit := flex.automation.proofHeartbeats.get (← getOptions) * 1000 * budgetLeaves
   if (← getMaxHeartbeats) != 0 then
     limit := min limit ((← getRemainingHeartbeats) / 2)
-  if limit == 0 then return none
+  if limit == 0 then
+    Flex.Obligations.recordLimit "no_budget"
+    return none
   let saved ← Term.saveState
-  tryCatchRuntimeEx
+  let failure ← IO.mkRef (none : Option String)
+  let result ← tryCatchRuntimeEx
     (withTheReader Core.Context (fun ctx => { ctx with maxHeartbeats := limit }) <|
       Core.withCurrHeartbeats do
         try
-          let candidate ← proveLeafWith tactic target
+          let candidate ← proveLeafWith tactic target (onError := fun error => do
+            failure.set (some (← error.toMessageData.toString)))
           Core.checkInterrupted
           let candidate ← candidate.mapM instantiateMVars
           let oracleEnvironment ← getEnv
@@ -270,7 +275,17 @@ private def attempt (tactic : TSyntax `tactic) (target : Expr)
       Flex.CHC.restoreTermState saved
       if error.isInterrupt then throw error
       Core.checkInterrupted
+      if error.isRuntime then failure.set (some "runtime limit")
       return none)
+  -- Markers are made after the attempt's state is rolled back, so they persist.
+  if result.isNone then
+    if let some message ← failure.get then
+      let lower := message.toLower
+      if message == "runtime limit" then Flex.Obligations.recordLimit "heartbeats"
+      else if (lower.splitOn "reason: timeout").length > 1 ||
+          (lower.splitOn "reason: resourceout").length > 1 then
+        Flex.Obligations.recordLimit "smt_timeout"
+  return result
 
 /-- Run a tactic in isolation and accept only kernel-checked evidence. -/
 def proveWith (tactic : TSyntax `tactic) (target : Expr) : TermElabM (Option Expr) :=
@@ -405,7 +420,7 @@ private def nativePortfolio : TermElabM (Array (TSyntax `tactic)) := do
 
 /-- Simplify conjunctions, then try reconstructed SMT and the native portfolio.
 Every accepted proof is kernel checked and uses only Lean's standard axioms. -/
-def proofOracle : Flex.CHC.ProofOracle := fun target => do
+private def proofOracleCore : Flex.CHC.ProofOracle := fun target => do
   if let some proof ← proveCompletedPrefix target then return some proof
   let quickLimit := min 500 (flex.automation.proofHeartbeats.get (← getOptions))
   if let some proof ← withOptions (·.set `flex.automation.proofHeartbeats quickLimit) <|
@@ -454,6 +469,17 @@ def proofOracle : Flex.CHC.ProofOracle := fun target => do
     (try simp_all (config := { maxSteps := 10000 })) <;>
       first | omega | grind |
         aesop (config := { maxRuleApplications := 200 }) (add unsafe 20% (by omega)))) target
+
+
+/-- Simplify conjunctions, then try reconstructed SMT and the native portfolio.
+Every accepted proof is kernel checked and uses only Lean's standard axioms.
+With `flex.logObligations`, an unproved goal is recorded with the budget limits its
+attempts hit, under one call identifier. -/
+def proofOracle : Flex.CHC.ProofOracle := fun target => do
+  let call := (← instantiateMVars target).hash.toNat + 1
+  let proof ← withOptions (flex.oracleCall.set · call) (proofOracleCore target)
+  if proof.isNone then Flex.Obligations.recordUnproved call
+  return proof
 
 /-- Batch SMT decisions select candidates; only `proofOracle` builds evidence. One exact SMT
 pass (`Flex.SMT`) decides what it can encode; unsupported or inconclusive queries fall back to

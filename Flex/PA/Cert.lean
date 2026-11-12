@@ -3,6 +3,7 @@ import Lean
 import Flex.Core
 import Flex.PA.Weaken
 import Flex.PA.Check
+import Flex.Obligations
 import Flex.Zap.Emit
 
 open Lean Meta Elab Term Tactic
@@ -82,6 +83,12 @@ partial def checkPASafety
   if dependent || contextDepends || mentionsPredicates assign goal then
     discard <| validate (← instantiateMVars goal)
 
+/-- Predicates of `assign` that occur in `e`. -/
+private def mentionedKVars (assign : List (KVar × List (Expr × List Nat)))
+    (e : Expr) : List Name :=
+  assign.filterMap fun (κ, _) =>
+    if (e.find? fun e => e.isMVar && e.mvarId! == κ.mvarId).isSome then some κ.name else none
+
 /-- Certify heads and validate predicate-dependent safety leaves before keeping residuals. -/
 partial def walkPAProof
     (assign : List (KVar × List (Expr × List Nat)))
@@ -91,35 +98,45 @@ partial def walkPAProof
     (validateSafety : PAOracle := fun _ => pure none)
     (dependsOnPredicates : Bool := false)
     (unprovedHead : Option (Expr → TermElabM Expr) := none)
-    (onHead : TermElabM Unit := pure ()) :
+    (onHead : TermElabM Unit := pure ())
+    (hypotheses : List Name := []) :
     TermElabM Expr := do
   if let some (κ, survivors, args) := paHead? assign goal then
     let proof ← emitPALeaf κ survivors args oracle unprovedHead
     onHead
+    let deferred ← match proof with
+      | .mvar id => do pure !(← id.isAssigned)
+      | _ => pure false
+    Flex.Obligations.record "fix" κ.name hypotheses (proved := !deferred)
     return proof
   if goal.getAppFn.isMVar then
     throwError "fix: head metavariable{indentExpr goal.getAppFn}\nis not a \
       cut variable handled by PA. Eliminate acyclic κ's with `zap` first."
   if goal.isForall then
     let dependent := dependsOnPredicates || mentionsPredicates assign goal.bindingDomain!
+    let hypotheses := hypotheses ++ mentionedKVars assign goal.bindingDomain!
     let dom ← instantiateMVars goal.bindingDomain!
     let name := goal.bindingName!
     let bi   := goal.bindingInfo!
     return ← withLocalDecl name bi dom fun fv => do
       let body  := goal.bindingBody!.instantiate1 fv
       let inner ← walkPAProof assign body residualOut oracle validateSafety dependent
-        unprovedHead onHead
+        unprovedHead onHead hypotheses
       mkLambdaFVars #[fv] inner
   if let some (l, r) := goal.and? then
     let pL ← walkPAProof assign l residualOut oracle validateSafety dependsOnPredicates
-      unprovedHead onHead
+      unprovedHead onHead hypotheses
     let pR ← walkPAProof assign r residualOut oracle validateSafety dependsOnPredicates
-      unprovedHead onHead
+      unprovedHead onHead hypotheses
     return mkAndIntro l r pL pR
   let contextDepends := (← getLCtx).any fun decl =>
     mentionsPredicates assign decl.type || decl.value?.any (mentionsPredicates assign)
+  let mentioned := hypotheses ++ mentionedKVars assign goal
   if dependsOnPredicates || contextDepends || mentionsPredicates assign goal then
-    if let some proof ← validateSafety (← instantiateMVars goal) then return proof
+    if let some proof ← validateSafety (← instantiateMVars goal) then
+      Flex.Obligations.recordQuery "fix" mentioned none
+      return proof
   let m ← mkFreshExprMVar (some goal) (kind := .syntheticOpaque)
   residualOut.modify (·.push m.mvarId!)
+  unless mentioned.isEmpty do Flex.Obligations.recordQuery "fix" mentioned m.mvarId!
   return m

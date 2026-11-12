@@ -88,11 +88,13 @@ Run from `flex-benchmarks/`:
 cd ../flex-benchmarks
 # smoke: 4 queries x the paper's three arms (Flex = Zap + Fix, Spacer alone, Eldarica alone)
 python3 -B ../Flex/evaluation/RQ3a/benchmark.py --benchmarks . --count 4 \
-  --configs zap_fix spacer_only eldarica_only --workers 1 --output ../Flex/evaluation/results/RQ3a/smoke
+  --configs zap_fix spacer_only eldarica_only --workers 1 --no-figures \
+  --output ../Flex/evaluation/results/RQ3a/smoke
 # full: every query x the same arms (add `se flex` for the combined pipelines)
 python3 -B ../Flex/evaluation/RQ3a/benchmark.py --benchmarks . --count 0 \
-  --configs zap_fix spacer_only eldarica_only --workers 4 --output ../Flex/evaluation/results/RQ3a/full
-python3 -B ../Flex/evaluation/RQ3a/report.py ../Flex/evaluation/results/RQ3a/full
+  --configs zap_fix spacer_only eldarica_only --workers 4 --no-figures \
+  --output ../Flex/evaluation/results/RQ3a/full
+python3 -B ../Flex/evaluation/RQ3a/report.py --tables-only ../Flex/evaluation/results/RQ3a/full
 ```
 
 ## 6. RQ3b: CHC-COMP (`evaluation/RQ3b/README.md`)

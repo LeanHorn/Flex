@@ -17,6 +17,7 @@ import re
 import statistics
 import subprocess
 import sys
+import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -222,12 +223,12 @@ def run(args, cases, command, env, header):
         completed = {(r["case"], r["variant"], r["repeat"]) for r in map(json.loads, records.read_text().splitlines())}
     tasks = [(c, v, repeat) for repeat in range(1, args.repeats + 1) for c in cases for v in args.variants]
     random.Random(args.seed).shuffle(tasks)
-    for index, (case, variant, repeat) in enumerate(tasks):
-        if (case["case"], variant, repeat) in completed:
-            continue
-        if (args.output / "STOP").exists():
-            print("Stopped between cases; --run-only resumes.", flush=True)
-            return
+    lock = threading.Lock()
+    pending = iter([(i, task) for i, task in enumerate(tasks) if (task[0]["case"], *task[1:]) not in completed])
+    stopped = threading.Event()
+    failures = []
+
+    def trial(index, case, variant, repeat):
         if common.digest(Path(case["generated"])) != case["generated_sha256"]:
             raise ValueError(f"input changed: {case['case']}")
         path = directory / f"{index:04}-{variant}.lean"
@@ -273,11 +274,45 @@ def run(args, cases, command, env, header):
                 row["status"] = ("reduced" if code == 0 and row.get("head_goals") == 0
                                  and row.get("eliminated") == expected["eliminable"]
                                  and row.get("cut") == expected["cut"] else "incomplete_reduction")
-        with records.open("a") as handle:
-            handle.write(json.dumps(row) + "\n")
-        print(f"{len(completed) + 1}/{len(tasks)} {variant} {row['status']} {case['case']} {row['ms']:.1f} ms", flush=True)
-        completed.add((case["case"], variant, repeat))
-        summarize(args.output)
+        row["workers"] = args.workers
+        return row
+
+    def worker():
+        while True:
+            with lock:
+                if stopped.is_set() or (args.output / "STOP").exists():
+                    stopped.set()
+                    return
+                item = next(pending, None)
+            if item is None:
+                return
+            index, (case, variant, repeat) = item
+            try:
+                row = trial(index, case, variant, repeat)
+            except BaseException as error:  # stop every worker; re-raised after join
+                with lock:
+                    failures.append(error)
+                    stopped.set()
+                return
+            with lock:
+                with records.open("a") as handle:
+                    handle.write(json.dumps(row) + "\n")
+                completed.add((case["case"], variant, repeat))
+                print(f"{len(completed)}/{len(tasks)} {variant} {row['status']} {case['case']} {row['ms']:.1f} ms", flush=True)
+                summarize(args.output)
+
+    # Trials are independent processes; with --workers > 1 they run concurrently and
+    # wall-clock metrics (ms, kernel_us) are measured under contention.
+    threads = [threading.Thread(target=worker) for _ in range(args.workers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    if failures:
+        raise failures[0]
+    if stopped.is_set():
+        print("Stopped between cases; --run-only resumes.", flush=True)
+        return
     common.write_json(args.output / "completion.json", {"complete": True, "runs": len(completed)})
 
 
@@ -298,6 +333,8 @@ def main():
     parser.add_argument("--variants", nargs="+", choices=VARIANTS, default=list(VARIANTS))
     parser.add_argument("--include-unclassified", action="store_true", help="retain classification failures for targeted diagnostic retries")
     parser.add_argument("--classify-workers", type=int, default=2)
+    parser.add_argument("--workers", type=int, default=1,
+                        help="concurrent timing trials; >1 is faster but makes ms/kernel_us noisier")
     parser.add_argument("--classify-only", action="store_true")
     parser.add_argument("--run-only", action="store_true", help="resume frozen selection and settings")
     parser.add_argument("--progress", action="store_true")
@@ -328,7 +365,7 @@ def main():
         if args.output.exists() and any(args.output.iterdir()):
             parser.error("output must be empty; use --run-only to resume")
         if min(args.repeats, args.timeout, args.heartbeats, args.prepare_timeout,
-               args.prepare_heartbeats, args.classify_workers) < 1 or args.count < 0:
+               args.prepare_heartbeats, args.classify_workers, args.workers) < 1 or args.count < 0:
             parser.error("invalid count or budget")
         if args.process_timeout is None:
             args.process_timeout = args.prepare_timeout + args.timeout + 120
@@ -356,7 +393,7 @@ def main():
         common.write_json(args.output / "settings.json", {
             **{k: v for k, v in vars(args).items() if isinstance(v, (str, int, bool))},
             "variants": args.variants,
-            "platform": platform.platform(), "timing_workers": 1,
+            "platform": platform.platform(), "timing_workers": args.workers,
             "git_head": common.capture(["git", "rev-parse", "HEAD"]),
             "git_diff_sha256": hashlib.sha256(common.capture(["git", "diff"]).encode()).hexdigest(),
             "postprocess": False, "nesting": False, "backends": [], "closeLeaves": False,

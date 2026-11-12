@@ -89,8 +89,13 @@ python3 -B evaluation/RQ2/make_manifests.py flux PROJECT... --output DIR
 python3 -B evaluation/RQ2/make_manifests.py liquidhaskell path/to/liquid-haskell --output DIR
 ```
 
-Timing trials run **serially**, in a recorded seeded order. Stop competing builds
-and evaluations. On macOS, prefix the command with `caffeinate -is` and leave the
+Timing trials run **serially** by default, in a recorded seeded order. Stop competing
+builds and evaluations. `--workers N` runs N trials concurrently. Coverage, heartbeats,
+and proof size are unaffected, but wall-clock `ms` and `kernel_us` are then measured
+under contention, and trials near the internal deadline may time out where a serial
+run would not; use it for exploratory runs, not reported timings. Each trial needs
+about 2.5 GB of memory. Every result row records `workers`, and `settings.json`
+records `timing_workers` for the initial run. On macOS, prefix the command with `caffeinate -is` and leave the
 lid open. Compilation and module loading happen outside the tactic timer.
 Classification uses two workers and one process per case, so one slow input does
 not cancel other cases. It finishes before timing begins.

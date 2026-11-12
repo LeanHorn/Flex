@@ -68,8 +68,8 @@ python3 scripts/rq1_table.py evaluation/results/RQ1/full    # numbers in the RQ1
 
 ```sh
 B=../flex-benchmarks
-# smoke: 10 CHC-COMP queries
-python3 -B evaluation/RQ2/benchmark_rq2.py --corpus $B/CHC-COMP/generated --count 10 \
+# smoke: four Liquid Fixpoint queries x three variants
+python3 -B evaluation/RQ2/benchmark_rq2.py --manifest $B/rq2/smoke/manifest.json --count 0 \
   --output evaluation/results/RQ2/smoke
 # full: each set separately, three repetitions (serial timing; use --workers N only for exploration)
 for set in liquid-fixpoint flux_tests flux-medium wave flux-other; do
@@ -86,12 +86,12 @@ Run from `flex-benchmarks/`:
 
 ```sh
 cd ../flex-benchmarks
-# smoke: 4 queries x 3 configurations
+# smoke: 4 queries x the paper's three arms (Flex = Zap + Fix, Spacer alone, Eldarica alone)
 python3 -B ../Flex/evaluation/RQ3a/benchmark.py --benchmarks . --count 4 \
-  --configs zap_fix se flex --workers 1 --output ../Flex/evaluation/results/RQ3a/smoke
-# full: 544 queries x 3 configurations
+  --configs zap_fix spacer_only eldarica_only --workers 1 --output ../Flex/evaluation/results/RQ3a/smoke
+# full: every query x the same arms (add `se flex` for the combined pipelines)
 python3 -B ../Flex/evaluation/RQ3a/benchmark.py --benchmarks . --count 0 \
-  --configs zap_fix se flex --workers 4 --output ../Flex/evaluation/results/RQ3a/full
+  --configs zap_fix spacer_only eldarica_only --workers 4 --output ../Flex/evaluation/results/RQ3a/full
 python3 -B ../Flex/evaluation/RQ3a/report.py ../Flex/evaluation/results/RQ3a/full
 ```
 
@@ -101,12 +101,12 @@ Run from `flex-benchmarks/`:
 
 ```sh
 cd ../flex-benchmarks
-# smoke: 10 tasks x all arms
-python3 -B ../Flex/evaluation/RQ3b/benchmark.py --benchmarks . --count 10 --workers 2 \
-  --output ../Flex/evaluation/results/RQ3b/smoke
-# full: 1,730 tasks x 5 arms (resume with the same command plus --resume)
-python3 -B ../Flex/evaluation/RQ3b/benchmark.py --benchmarks . --count 0 --workers 8 \
-  --output ../Flex/evaluation/results/RQ3b/full
+# smoke: 6 tasks x the paper's three arms
+python3 -B ../Flex/evaluation/RQ3b/benchmark.py --benchmarks . --count 6 --workers 2 \
+  --configs zap_fix spacer_only eldarica_only --output ../Flex/evaluation/results/RQ3b/smoke
+# full: 1,730 tasks x 3 arms (resume with the same command plus --resume)
+python3 -B ../Flex/evaluation/RQ3b/benchmark.py --benchmarks . --count 0 --workers 5 \
+  --configs zap_fix spacer_only eldarica_only --output ../Flex/evaluation/results/RQ3b/full
 python3 -B ../Flex/evaluation/RQ3b/report.py ../Flex/evaluation/results/RQ3b/full
 ```
 

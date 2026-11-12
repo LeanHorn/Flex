@@ -131,9 +131,53 @@ def flex_path_dependencies(bench: Path, flex: Path):
             raise SystemExit(f"{lakefile}: unrecognized Flex requirement")
 
 
+# Commit hashes of our (partly public) repositories would lead back to them.
+HEX = re.compile(rb"(?<![0-9a-fA-F])[0-9a-f]{7,40}(?![0-9a-fA-F])")
+OUR_COMMITS: set[bytes] = set()
+
+
+def hex_tokens(data: bytes) -> set[bytes]:
+    return {t for t in HEX.findall(data) if re.search(rb"[a-f]", t)}
+
+
+def find_our_commits(stage: Path, repos: list[Path]):
+    """Every 7-40 digit hex token in the archive that names a commit in one of our repositories."""
+    tokens = set()
+    for path in stage.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.name.endswith(".tar.gz"):
+            with tarfile.open(path, "r:gz") as tar:
+                for member in tar.getmembers():
+                    if member.isfile():
+                        tokens |= hex_tokens(tar.extractfile(member).read())
+        else:
+            tokens |= hex_tokens(path.read_bytes())
+    ordered = sorted(tokens)
+    query = "".join(f"{t.decode()}^{{commit}}\n" for t in ordered)
+    for repo in repos:
+        out = subprocess.run(["git", "-C", str(repo), "cat-file", "--batch-check"], input=query,
+                             check=True, capture_output=True, text=True).stdout.splitlines()
+        OUR_COMMITS.update(t for t, line in zip(ordered, out) if line.split()[1:2] == ["commit"])
+    print(f"  {len(OUR_COMMITS)} commit hashes of our repositories to anonymize")
+
+
+def scrub_commits(data: bytes) -> bytes:
+    return HEX.sub(lambda m: b"anonymized" if m.group(0) in OUR_COMMITS else m.group(0), data)
+
+
 def scrub_bytes(data: bytes) -> bytes:
     # Translator source comments: absolute path of the generating machine → corpus-relative.
-    return re.sub(rb'"/Users/[^"]*?/CHC-COMP/', b'"CHC-COMP/', data)
+    return scrub_commits(re.sub(rb'"/Users/[^"]*?/CHC-COMP/', b'"CHC-COMP/', data))
+
+
+def anonymize_commits(root: Path):
+    for path in root.rglob("*"):
+        if path.is_file() and not path.name.endswith(".gz"):
+            data = path.read_bytes()
+            new = scrub_commits(data)
+            if new != data:
+                path.write_bytes(new)
 
 
 def rebuild_chc_archive(bench: Path):
@@ -208,7 +252,8 @@ def scan(root: Path) -> list[str]:
 
     def check(label, data: bytes):
         for line in data.decode("utf-8", "replace").splitlines():
-            if DENY.search(line) and not any(a.search(line) for a in ALLOW):
+            if (DENY.search(line) and not any(a.search(line) for a in ALLOW)) or \
+                    hex_tokens(line.encode()) & OUR_COMMITS:
                 hits.append(f"{label}: {line.strip()[:160]}")
                 return
 
@@ -247,9 +292,11 @@ def main():
     anonymize_flex_text(flex)
     print("rewriting benchmark dependencies and corpus archive ...")
     flex_path_dependencies(bench, flex)
+    find_our_commits(stage, [ROOT, args.benchmarks.resolve(), ROOT / ".lake/packages/smt2lean"])
     rebuild_chc_archive(bench)
     anonymize_bench_text(bench)
     anonymize_remaining_urls(stage)
+    anonymize_commits(stage)
     refresh_sums(bench)
     shutil.copy2(HERE / "README.md", stage / "README.md")
     print("scanning for identifying strings ...")

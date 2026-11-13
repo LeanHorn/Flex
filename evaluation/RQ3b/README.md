@@ -10,6 +10,8 @@ or LaTeX required.
 | `se` | 180 s | Spacer, then Eldarica |
 | `zap_fix` | 180 s | Zap, then escalating PA scraping |
 | `se_zap_fix` | 360 s | S/E stage, then Zap + Fix; at most 180 s each |
+| `spacer_only` | 180 s | Spacer alone, through the same Flex import and discharge |
+| `eldarica_only` | 180 s | Eldarica alone, through the same Flex import and discharge |
 | `native_spacer` | 90 s | Original SMT input, requesting a model |
 | `native_eldarica` | 90 s | Original SMT input, requesting a model |
 
@@ -28,19 +30,19 @@ remain; an open residual proof does not undo an accepted S/E invariant.
 The combined arm has twice the budget: report its coverage with that extra cost.
 Both combined orderings reserve a separate 180 s block for Zap + Fix and for S/E.
 Custom `--combined-timeout` must allow two `--flex-timeout` blocks.
-The policy is recorded as `reserved_blocks_v1`; earlier pilot runs keep their
-original settings and must not be pooled with this policy for timing comparisons.
+The policy is recorded as `reserved_blocks_v1`; runs with other recorded policies
+must not be pooled with it for timing comparisons.
 
-## Collaborator setup
+## Setup
 
-Use sibling checkouts of `Flex` and `flex-benchmarks` at agreed commit revisions.
+Use `Flex` and `flex-benchmarks` side by side, at matching revisions.
 The benchmark checkout must contain `CHC-COMP/manifest.json`, `selection.json`,
 and the archives listed in the manifest. The harness unpacks and verifies them;
 no manual extraction or translation is needed.
 
-Prerequisites: Python 3.9+, Elan/Lean, a C/C++ toolchain, Z3, Java and Eldarica.
+Prerequisites: Python 3.10+, Elan/Lean, a C/C++ toolchain, Z3, Java and Eldarica.
 Use Flex's `lean-toolchain` and `lake-manifest.json`; do not run `lake update`.
-The pilot used Lean 4.34.0, Z3 4.15.4 and Eldarica 2.3. cvc5 is supplied by
+Tested with Lean 4.34.0, Z3 4.15.4 and Eldarica 2.3. cvc5 is supplied by
 pinned Lean dependencies. On Ubuntu, follow the package installation and
 `LEAN_CC` wrapper in [CI](../../.github/workflows/lean_action_ci.yml).
 
@@ -55,21 +57,21 @@ cd ../flex-benchmarks
 
 ## Full run
 
-Run inside `tmux` or a server allocation. Start with 4–8 workers, within the
-allocated physical cores and RAM; solvers may use additional threads. Keep the
-worker count fixed, avoid swapping and unrelated work. Use one worker for isolated
+Choose the worker count within the available physical cores and RAM; solvers may
+use additional threads. Keep the worker count fixed, avoid swapping and unrelated
+work. Use one worker for isolated
 latency. Build time is excluded from query timings; classification runs in each
 trial before the measured tactic, so it is excluded from `flex_ms` only.
 
 ```sh
-# Prepare all 1,730 tasks × five arms = 8,650 trials. No evaluation yet.
+# Prepare all 1,730 tasks × the paper's three arms = 5,190 trials. No evaluation yet.
 python3 -B ../Flex/evaluation/RQ3b/benchmark.py \
-  --benchmarks . --count 0 --workers 8 \
+  --benchmarks . --count 0 --workers 5 --configs zap_fix spacer_only eldarica_only \
   --output ../Flex/evaluation/results/RQ3b/full --prepare-only
 
 # Start; use this same command to resume an interrupted run.
 python3 -B ../Flex/evaluation/RQ3b/benchmark.py \
-  --benchmarks . --count 0 --workers 8 \
+  --benchmarks . --count 0 --workers 5 --configs zap_fix spacer_only eldarica_only \
   --output ../Flex/evaluation/results/RQ3b/full --resume
 
 python3 -B ../Flex/evaluation/RQ3b/benchmark.py \
@@ -83,22 +85,15 @@ solver launchers. Incomplete attempts are archived; completed trials are reused.
 Keep dependencies and solver installations unchanged: compiled Flex artifacts
 are copied, external installations are not.
 
-To select arms, pass `--configs se zap_fix se_zap_fix`, or
-`--configs native_spacer native_eldarica` for baselines alone. Explicit lists
-replace the default five arms. Use a new output directory for different settings.
+Without `--configs`, the runner uses five arms: `native_spacer`,
+`native_eldarica`, `se`, `zap_fix` and `se_zap_fix`. Explicit lists replace them. Use a new output directory for different settings.
 
-## Local pilot
+## Samples
 
-Use **60 queries and four workers**, with `--count 60 --seed 20261104 --workers 4`
-and a separate output directory. This gives 300 trials. Selection covers every
-source suite, rotating across within-suite SMT-size quartiles, without filtering
-on outcomes. It is a suite-balanced pilot, not a corpus-weighted coverage estimate.
-The internal budgets sum to 15 worker-hours before startup/checking overhead;
-successful short trials reduce actual runtime.
-
-On macOS, prefix the run command with `caffeinate -i -s`; keep AC connected and
-the lid open. The screen can turn off. Run inside `tmux`, or use `nohup` with
-stdout/stderr redirected to a log if the terminal may close.
+`--count N` (with a fixed `--seed`) selects N tasks in a separate output
+directory. Selection covers every source suite, rotating across within-suite
+SMT-size quartiles, without filtering on outcomes. It is a suite-balanced sample,
+not a corpus-weighted coverage estimate.
 
 ## CSV data
 

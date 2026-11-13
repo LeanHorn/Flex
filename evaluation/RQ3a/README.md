@@ -24,6 +24,8 @@ positive-test directory membership is not a SAT guarantee. No outcome filtering.
 | `zap_fix` | Zap → Fix → discharge | 180 s |
 | `se` | Spacer → Eldarica if needed → discharge | 180 s |
 | `flex` | Zap → Fix → Spacer/Eldarica → discharge | 360 s: two 180 s blocks |
+| `spacer_only` | Spacer → discharge | 180 s |
+| `eldarica_only` | Eldarica → discharge | 180 s |
 
 All use the same checked discharge, True/False preprocessing, no nesting, and no
 postprocessing. Fix decides candidates with the exact SMT encoding only: the native
@@ -58,11 +60,11 @@ The combined arm gets twice the budget: compare its coverage with that extra tim
 explicit. Custom combined budgets must accommodate both standalone blocks:
 `--combined-timeout` must be at least twice `--flex-timeout`.
 
-## First setup
+## Setup
 
-Use Python 3.9+, Elan/Lean, a C/C++ build toolchain, Z3, Java and Eldarica. Check out
-matching, pinned revisions of both repositories; share those revisions with the
-results. The harness records commits, source hashes and solver binary versions.
+Use Python 3.10+, Elan/Lean, a C/C++ build toolchain, Z3, Java and Eldarica. Use
+matching, pinned revisions of both repositories. The harness records source hashes
+and solver binary versions.
 
 ```sh
 git clone https://github.com/LeanHorn/Flex.git
@@ -76,7 +78,7 @@ z3 --version
 eld -h
 ```
 
-The current development runs used Lean 4.34.0, Z3 4.15.4 and Eldarica 2.3. cvc5 is
+Tested with Lean 4.34.0, Z3 4.15.4 and Eldarica 2.3. cvc5 is
 provided by the pinned Lean dependencies; a separate CLI installation is not
 required. Put `z3` and `eld` on PATH, or pass `--z3 /path/to/z3 --eldarica /path/to/eld`.
 
@@ -95,17 +97,17 @@ library only. `--no-figures` works without plotting dependencies.
 ```sh
 # Small end-to-end check: four queries × three configurations.
 python3 -B ../Flex/evaluation/RQ3a/benchmark.py \
-  --benchmarks . --count 4 --configs zap_fix se flex \
-  --workers 1 --output ../Flex/evaluation/results/RQ3a/rq3a-smoke
+  --benchmarks . --count 4 --configs zap_fix spacer_only eldarica_only \
+  --workers 1 --output ../Flex/evaluation/results/RQ3a/smoke
 
 # Full RQ3a: 544 queries × three configurations = 1,632 trials.
 python3 -B ../Flex/evaluation/RQ3a/benchmark.py \
-  --benchmarks . --count 0 --configs zap_fix se flex \
-  --workers 1 --output ../Flex/evaluation/results/RQ3a/rq3a-full
+  --benchmarks . --count 0 --configs zap_fix spacer_only eldarica_only \
+  --workers 1 --output ../Flex/evaluation/results/RQ3a/full
 ```
 
-For the two-arm comparison already measured, use `--configs zap_fix se` (1,088
-trials). To investigate one arm, use `--configs se` or `--configs zap_fix`.
+Without `--configs`, the runner uses `zap_fix se flex`. To investigate one arm,
+pass only that configuration.
 `--diagnostic` retains detailed failure traces; use the same tracing setting for
 all compared runs. `--skip-classification` omits the graph analysis for a
 diagnostic run; input sizes and predicate/proof measurements are still recorded.
@@ -118,7 +120,7 @@ original VC. One trial is run per query/configuration in a seeded, rotated order
 For repetition variability, use separate output folders and report each run;
 medians below are across queries, not repeated measurements of one query.
 
-## Workers, server and laptop
+## Workers
 
 `--workers N` bounds concurrent Lean query processes. Each gets its own solver
 processes and the same budget. One coordinator appends results, so workers never
@@ -126,30 +128,22 @@ write shared result files concurrently. Completion order can differ from the
 recorded submission order. Solvers/JVMs may use additional threads and memory.
 
 - For clean latency numbers, use **one worker on an otherwise idle machine**.
-- On a Mac, start with **2 workers** for coverage; try 4 only with spare CPU/RAM.
-- On a server, start with **4–8 workers**, then scale within allocated physical
-  cores and available memory. Check for swapping and throughput before increasing.
+- More workers improve throughput only within the available physical cores and
+  memory; check for swapping before increasing.
 - Keep worker count, machine and settings identical between compared arms. The
   parallel run measures performance under that concurrency, not isolated latency.
   Do not run unrelated builds or repairs during the final timing experiment.
 
-On macOS prefix the command with `caffeinate -is`; keep AC connected and the lid
-open. On a server run inside `tmux`, or a scheduler allocation with sufficient
-wall time and memory. Run one coordinator per output folder; a lock prevents two
-coordinators from corrupting a run. Separate allocations need separate outputs.
+Run one coordinator per output folder; a lock prevents two coordinators from
+corrupting a run.
 
 ```sh
-# Server example, from flex-benchmarks inside tmux or your allocation:
-python3 -B ../Flex/evaluation/RQ3a/benchmark.py \
-  --benchmarks . --count 0 --configs zap_fix se flex \
-  --workers 8 --output ../Flex/evaluation/results/RQ3a/rq3a-server
-
 # Live progress, including all active workers:
 python3 -B ../Flex/evaluation/RQ3a/benchmark.py \
-  --output ../Flex/evaluation/results/RQ3a/rq3a-server --progress
+  --output ../Flex/evaluation/results/RQ3a/full --progress
 
 # Graceful stop: finish active trials, then stop scheduling.
-touch ../Flex/evaluation/results/RQ3a/rq3a-server/STOP
+touch ../Flex/evaluation/results/RQ3a/full/STOP
 # Remove STOP and repeat the exact original command with --resume.
 ```
 
@@ -225,10 +219,10 @@ recorded with each distribution. Mean and average are the same column, `mean`.
 ```sh
 # Recompute tables from saved records; no solver or proof runs:
 python3 -B ../Flex/evaluation/RQ3a/report.py \
-  ../Flex/evaluation/results/RQ3a/rq3a-full --tables-only
+  ../Flex/evaluation/results/RQ3a/full --tables-only
 # Generate figures too:
 python3 -B ../Flex/evaluation/RQ3a/report.py \
-  ../Flex/evaluation/results/RQ3a/rq3a-full
+  ../Flex/evaluation/results/RQ3a/full
 ```
 
 For explicit failed-only recovery, `report.py NEW_OUTPUT --merge ORIGINAL RETRY`

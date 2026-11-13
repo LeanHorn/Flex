@@ -28,7 +28,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 
 # Removed from the Flex export: this packaging folder and internal notes.
-FLEX_EXCLUDE = ["scripts/artifact", "evaluation/CLEANUP.txt"]
+FLEX_EXCLUDE = ["scripts/artifact", "evaluation/CLEANUP.txt", "evaluation/RQ1/se-plan.txt"]
 SMT2LEAN_EXCLUDE = ["benchmarks", "tests/smt/lh_mergesort.smt2"]  # upstream build paths
 SMT2LEAN_DIR = "vendor/SMTLib-to-Lean"
 
@@ -102,31 +102,14 @@ def vendor_smt2lean(flex: Path):
 def anonymize_flex_text(flex: Path):
     edit(flex / "README.md", ('git = "https://github.com/LeanHorn/Flex"\nrev = "main"',
                               'path = "../Flex"  # this folder'))
-    readme = flex / "evaluation/RQ1/README.md"
-    text = readme.read_text()
-    # The opening paragraph points at an internal PR and local result folders.
-    text = re.sub(r"The latest proof refresh is .*?\n\n", "", text, count=1, flags=re.S)
-    readme.write_text(text)
     edit(flex / "evaluation/RQ3a/README.md",
          ("git clone https://github.com/LeanHorn/Flex.git\n"
           "git clone https://github.com/LeanHorn/flex-benchmarks.git\n",
           "# The artifact already contains Flex/ and flex-benchmarks/ side by side.\n"))
-    readme = flex / "evaluation/RQ4/README.md"
-    text = readme.read_text()
-    text = text.replace("git clone https://github.com/LeanHorn/Flex.git\n"
-                        "git clone https://github.com/LeanHorn/flex-benchmarks.git\n",
-                        "# The artifact already contains Flex/ and flex-benchmarks/ side by side.\n")
-    text = text.replace("# Use the revision containing this handoff and the checked-in dependency pins.\n", "")
-    # Internal revisions and result folders; the artifact's CHC-COMP hashes follow its archive.
-    text, n1 = re.subn(r"The screening used `flex-benchmarks` revision.*?fails preparation explicitly\.\n",
-                       "Inputs are verified against the hashes in `selection.json`; a mismatch fails\n"
-                       "preparation explicitly.\n", text, flags=re.S)
-    text, n2 = re.subn(r"The handoff was checked locally on .*?configuration order above\.\n",
-                       "For reference, our smoke run proved 1/3, 2/3, 3/3, 3/3, and 3/3 in the\n"
-                       "configuration order above.\n", text, flags=re.S)
-    text, n3 = re.subn(r" The existing local results\nare also in .*?server measurements\.\n", "\n", text, flags=re.S)
-    assert n1 == n2 == n3 == 1, "RQ4 README changed; update the artifact edits"
-    readme.write_text(text)
+    edit(flex / "evaluation/RQ4/README.md",
+         ("git clone https://github.com/LeanHorn/Flex.git\n"
+          "git clone https://github.com/LeanHorn/flex-benchmarks.git\n",
+          "# The artifact already contains Flex/ and flex-benchmarks/ side by side.\n"))
     edit(flex / SMT2LEAN_DIR / "README.md",
          ("git clone https://github.com/LeanHorn/SMTLib-to-Lean.git",
           "# vendored in Flex/vendor/SMTLib-to-Lean"))

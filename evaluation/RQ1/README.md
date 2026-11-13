@@ -1,25 +1,14 @@
-# RQ1 invariant-synthesis baseline
+# RQ1: invariant synthesis on the case studies
 
-The latest proof refresh is [flex-benchmarks PR #5](https://github.com/LeanHorn/flex-benchmarks/pull/5).
-All 61 predicate-bearing case-study proofs check against Flex `e170a04b`, including
-manual residuals: **214/227 predicates inferred**, with complete inference in
-**52/61 VCs**. These are explicit per-VC settings, including cleanup and larger
-synthesis budgets, not a validation of plain defaults or a new timing run.
-The PR includes the exact scope, source hashes and remaining manual predicates.
-Local final sources, logs and verification records are consolidated in
-`results/current-flex-20261104/`; the older [saved proof collection](proofs/README.txt)
-remains historical evidence. See [the archive index](../CLEANUP.txt) for other
-retained results and corpus locations.
-
-The local `flex-benchmarks` corpus contains 131 case-study VCs excluding Wave
-and `flux-medium`. This runner selects only the **61 with unknown predicates**:
+The `flex-benchmarks` corpus contains 131 case-study VCs, excluding WaVe and
+`flux-medium`. This runner selects only the **61 with unknown predicates**:
 27 acyclic-only, 18 cyclic-only, and 16 mixed. The 70 κ-free VCs are inventoried
 but not compiled or evaluated. Classification is a generated-source dependency
 analysis; the Lean harness independently counts remaining predicate binders.
 
 The primary progress criterion is **retained predicate instantiation**, even
 when head obligations remain for manual proof. Head elimination and complete
-automatic proof are separate measurements. Two independent tracks use current Flex:
+automatic proof are separate measurements. Two independent tracks use Flex:
 
 - **Zap + Fix (Deep)**: standard bank, definition/goal scraping,
   batched SMT synthesis, and checked Lean certification. This is one fixed
@@ -36,8 +25,9 @@ One repetition runs serially. Lean timings exclude imports; process wall time
 and startup are recorded separately. Solver startup remains included.
 
 ```sh
-caffeinate -i python3 scripts/benchmark_rq1.py \
-  --output evaluation/RQ1/results/baseline-YYYYMMDD
+python3 scripts/benchmark_rq1.py --discharge --variants zap_fix_deep spacer eldarica \
+  --output evaluation/results/RQ1/full
+python3 scripts/rq1_table.py evaluation/results/RQ1/full
 ```
 
 Use `--source PATH` for another `flex-benchmarks` checkout. `--cases suite/Name`
@@ -61,7 +51,7 @@ project or Flex dependency pin is changed.
 `summary.json` contain outcomes and synthesis counts. Case directories retain
 phase events, residuals, proof terms, solver candidates, and diagnostics.
 `metadata.json`, `selection.json`, and workspace manifests record code, source,
-dependency, tool and budget provenance. Generated data stays gitignored.
+dependency, tool and budget provenance.
 
 Count interpretation:
 
@@ -81,11 +71,5 @@ Count interpretation:
   Remaining goals are saved for manual proof. Preparation failures and timeouts
   remain visible and in the denominator.
 
-The earlier 46/131 and 8/34 figures describe existing proof scripts, not results
-of this automatic track. PR1 measures a new reproducible baseline; replaying
-handwritten proofs or supplying their qualifiers is a separate experiment.
-Current Fix rolls back if head certification fails; S/E retains candidates
-with explicit obligations. The baseline records that behavioral difference.
-
-The [S/E design notes](se-plan.txt) include a motivating prefix-invariant example
-and distinguish automatic synthesis from experiments requiring bespoke lemmas.
+Fix rolls back if head certification fails; S/E retains candidates with explicit
+obligations. The results record that behavioral difference.

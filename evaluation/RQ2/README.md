@@ -33,33 +33,33 @@ hashes must match classification before a trial receives reduction credit.
 ## Run
 
 Use the repository's pinned Lean toolchain and installed Lake dependencies.
-Python 3.9+ is sufficient; this experiment does not invoke an external solver.
+Python 3.10+ is sufficient; this experiment does not invoke an external solver.
 Run the commands below from the Flex repository root. The runner automatically
 loads shared utilities from `scripts/chc_parity.py` and `scripts/benchmark_flex.py`;
 no `PYTHONPATH` setup is needed.
 
 ```sh
-# Pilot: 100 CHC-COMP cases; select by structure, then run all three variants.
-python3 -B evaluation/RQ2/benchmark_rq2.py \
-  --corpus evaluation/CHC-COMP/generated \
-  --output evaluation/RQ2/results/pilot100 --count 100
+B=../flex-benchmarks
+# Every eligible CHC-COMP case, with three repetitions per variant.
+python3 -B evaluation/RQ2/benchmark_rq2.py --corpus $B/CHC-COMP/generated \
+  --count 0 --repeats 3 --output evaluation/results/RQ2/chc-comp
 
-# Full eligible corpus, with three repetitions per variant.
-python3 -B evaluation/RQ2/benchmark_rq2.py \
-  --corpus /path/to/generated-chc-comp \
-  --output evaluation/RQ2/results/chc-comp --count 0 --repeats 3
+# A balanced sample of 100 CHC-COMP cases (see "Selection"), all three variants.
+python3 -B evaluation/RQ2/benchmark_rq2.py --corpus $B/CHC-COMP/generated \
+  --count 100 --output evaluation/results/RQ2/chc-comp-100
 
-# Refinement-typechecker statement manifests (same format as benchmark_flex.py).
-python3 -B evaluation/RQ2/benchmark_rq2.py \
-  --manifest /path/to/cases.json \
-  --output evaluation/RQ2/results/flux --count 0 --repeats 3
+# Refinement-typechecker statement manifests: liquid-fixpoint, flux_tests,
+# flux-medium, wave, flux-other.
+python3 -B evaluation/RQ2/benchmark_rq2.py --manifest $B/rq2/flux_tests/manifest.json \
+  --count 0 --repeats 3 --output evaluation/results/RQ2/flux_tests
 
-python3 -B evaluation/RQ2/benchmark_rq2.py --output evaluation/RQ2/results/pilot100 --progress
+# Progress of a running or interrupted run.
+python3 -B evaluation/RQ2/benchmark_rq2.py --output evaluation/results/RQ2/chc-comp --progress
 
 # Retry a fixed manifest with constructive Zap only; preserve preparation failures.
 python3 -B evaluation/RQ2/benchmark_rq2.py \
   --manifest /path/to/failures.json --count 0 --variants zap \
-  --include-unclassified --output evaluation/RQ2/results/targeted-retry
+  --include-unclassified --output evaluation/results/RQ2/retry
 ```
 
 A statement manifest contains `cases`, each with `case`, `suite`, `generated`,
@@ -95,8 +95,7 @@ and proof size are unaffected, but wall-clock `ms` and `kernel_us` are then meas
 under contention, and trials near the internal deadline may time out where a serial
 run would not; use it for exploratory runs, not reported timings. Each trial needs
 about 2.5 GB of memory. Every result row records `workers`, and `settings.json`
-records `timing_workers` for the initial run. On macOS, prefix the command with `caffeinate -is` and leave the
-lid open. Compilation and module loading happen outside the tactic timer.
+records `timing_workers` for the initial run. Compilation and module loading happen outside the tactic timer.
 Classification uses two workers and one process per case, so one slow input does
 not cancel other cases. It finishes before timing begins.
 
@@ -114,8 +113,8 @@ positive `∀` and `∧` in the prepared goal and sums over every predicate (∃
 Classification does not repeat preprocessing during this traversal. Graph membership
 and Zap's elimination/cut partition are recorded separately. Source duplicates
 are removed before selection.
-The 100-case pilot balances graph kinds (acyclic-only, mixed, cyclic-only) and spreads them across suites,
-using a fixed seed and **no success-based filtering**. `--count 0` uses every
+A sample (`--count N`) balances graph kinds (acyclic-only, mixed, cyclic-only) and
+spreads them across suites, using a fixed seed and **no success-based filtering**. `--count 0` uses every
 eligible case. Classification errors stay in the inventory.
 For a targeted retry, `--include-unclassified` also schedules these cases and
 keeps their failures in the denominator. A successful but unclassified reduction

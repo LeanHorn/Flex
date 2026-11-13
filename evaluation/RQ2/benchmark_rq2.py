@@ -375,12 +375,13 @@ def main():
             parser.error("variants must be distinct")
         cases, metadata = read_cases(args)
         args.output.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["lake", "build", "Flex"], cwd=ROOT, check=True,
-                       stdout=(args.output / "build.log").open("w"), stderr=subprocess.STDOUT)
         header = HELPER.read_text()
         # Freeze imports used by statements as well as the measurement harness.
         imports = [module for case in cases for module in
                    re.findall(r"^import (.*)$", Path(case["generated"]).read_text(), re.MULTILINE)]
+        # Statements may import modules outside Flex's closure; build them before freezing.
+        subprocess.run(["lake", "build", "Flex", *dict.fromkeys(m.strip() for m in imports)], cwd=ROOT, check=True,
+                       stdout=(args.output / "build.log").open("w"), stderr=subprocess.STDOUT)
         command, env = common.lean_setup(args.output, True, common.with_imports(header, imports))
         command, env = freeze(args.output, command, env)
         for source in HARNESS:

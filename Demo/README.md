@@ -1,4 +1,4 @@
-# RQ4: foundational verifiers
+# Foundational verifiers
 
 | Material | Source |
 | --- | --- |

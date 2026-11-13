@@ -130,7 +130,7 @@ private def classify (goal : MVarId) : TacticM Json := do
     ("kind", toJson kind), ("predicates", toJson predicates), ("predicate_goals", toJson goals.length),
     ("acyclic", toJson acyclic), ("cyclic", toJson ncyclic),
     ("eliminable", toJson elim.length), ("cut", toJson cut.length),
-    ("eligible", toJson (acyclic > 0 && !elim.isEmpty)),
+    ("eligible", toJson (!elim.isEmpty)),  -- Zap eliminates something after its feedback cut
     ("elimination_names", toJson (elim.map (toString ∘ KVar.name))),
     ("cut_names", toJson (cut.map (toString ∘ KVar.name)))]
 

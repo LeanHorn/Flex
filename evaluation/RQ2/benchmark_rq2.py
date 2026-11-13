@@ -122,7 +122,7 @@ def select_cases(args, cases, rows):
         elif args.include_unclassified and row["status"] != "classified":
             eligible.append({**by_id[row["case"]], "classification": {"kind": "unclassified"},
                              "classification_failure": row})
-    # Equal acyclic/mixed quotas, spread across source suites. No outcome is consulted.
+    # Equal quotas per graph kind, spread across source suites. No outcome is consulted.
     rng = random.Random(args.seed)
     groups = defaultdict(lambda: defaultdict(list))
     for case in eligible:
@@ -144,12 +144,12 @@ def select_cases(args, cases, rows):
         raise ValueError(f"only {len(eligible)} eligible cases for requested {count}")
     chosen = []
     while len(chosen) < count:
-        for kind in ("acyclic_only", "mixed", "unclassified"):
+        for kind in ("acyclic_only", "mixed", "cyclic_only", "unclassified"):
             if ordered.get(kind) and len(chosen) < count:
                 chosen.append(ordered[kind].pop(0))
     selection = {"seed": args.seed, "eligible": len(eligible),
                  "classification_counts": dict(Counter(r.get("classification", {}).get("kind", r["status"]) for r in rows)),
-                 "method": "source-deduplicated; balanced acyclic/mixed; round-robin suites, seeded order within suites; no success filtering",
+                 "method": "source-deduplicated; eligible if Zap eliminates a predicate after its feedback cut; balanced by graph kind; round-robin suites, seeded order within suites; no success filtering",
                  "includes_unclassified": args.include_unclassified,
                  "cases": chosen}
     common.write_json(args.output / "selection.json", selection)

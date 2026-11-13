@@ -106,14 +106,15 @@ stops between trials; remove it before resuming. Completed trials are preserved.
 
 ## Selection and measurements
 
-Only **acyclic-only or mixed graphs with an eliminable predicate**, after common
-preprocessing, qualify. Purely cyclic graphs are excluded even when cutting a
-cycle would leave removable vertices. As in `flex`, classification descends
+A CHC qualifies when, after common preprocessing, **Zap's feedback cut leaves at
+least one eliminable predicate**. This uses the same dependency graph and cut as
+Zap, so purely cyclic graphs qualify when cutting their cycles leaves removable
+vertices (typically the query predicate). As in `flex`, classification descends
 positive `∀` and `∧` in the prepared goal and sums over every predicate (∃) goal.
 Classification does not repeat preprocessing during this traversal. Graph membership
 and Zap's elimination/cut partition are recorded separately. Source duplicates
 are removed before selection.
-The 100-case pilot balances acyclic/mixed cases and spreads them across suites,
+The 100-case pilot balances graph kinds (acyclic-only, mixed, cyclic-only) and spreads them across suites,
 using a fixed seed and **no success-based filtering**. `--count 0` uses every
 eligible case. Classification errors stay in the inventory.
 For a targeted retry, `--include-unclassified` also schedules these cases and

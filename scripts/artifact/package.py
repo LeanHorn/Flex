@@ -111,6 +111,22 @@ def anonymize_flex_text(flex: Path):
          ("git clone https://github.com/LeanHorn/Flex.git\n"
           "git clone https://github.com/LeanHorn/flex-benchmarks.git\n",
           "# The artifact already contains Flex/ and flex-benchmarks/ side by side.\n"))
+    readme = flex / "evaluation/RQ4/README.md"
+    text = readme.read_text()
+    text = text.replace("git clone https://github.com/LeanHorn/Flex.git\n"
+                        "git clone https://github.com/LeanHorn/flex-benchmarks.git\n",
+                        "# The artifact already contains Flex/ and flex-benchmarks/ side by side.\n")
+    text = text.replace("# Use the revision containing this handoff and the checked-in dependency pins.\n", "")
+    # Internal revisions and result folders; the artifact's CHC-COMP hashes follow its archive.
+    text, n1 = re.subn(r"The screening used `flex-benchmarks` revision.*?fails preparation explicitly\.\n",
+                       "Inputs are verified against the hashes in `selection.json`; a mismatch fails\n"
+                       "preparation explicitly.\n", text, flags=re.S)
+    text, n2 = re.subn(r"The handoff was checked locally on .*?configuration order above\.\n",
+                       "For reference, our smoke run proved 1/3, 2/3, 3/3, 3/3, and 3/3 in the\n"
+                       "configuration order above.\n", text, flags=re.S)
+    text, n3 = re.subn(r" The existing local results\nare also in .*?server measurements\.\n", "\n", text, flags=re.S)
+    assert n1 == n2 == n3 == 1, "RQ4 README changed; update the artifact edits"
+    readme.write_text(text)
     edit(flex / SMT2LEAN_DIR / "README.md",
          ("git clone https://github.com/LeanHorn/SMTLib-to-Lean.git",
           "# vendored in Flex/vendor/SMTLib-to-Lean"))
@@ -187,6 +203,8 @@ def rebuild_chc_archive(bench: Path):
     with tarfile.open(path, "r:gz") as tar:
         members = [(m, tar.extractfile(m).read()) for m in tar.getmembers()]
     files = {m.name: scrub_bytes(data) for m, data in members}
+    rehashed = {hashlib.sha256(data).hexdigest(): hashlib.sha256(files[m.name]).hexdigest()
+                for m, data in members if m.name.startswith("generated/")}
     for name in [n for n in files if n.endswith("-manifest.json")]:
         report = json.loads(files[name])
         for entry in report["files"]:
@@ -209,6 +227,17 @@ def rebuild_chc_archive(bench: Path):
             entry["bytes"] = path.stat().st_size
             entry["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
+    return rehashed
+
+
+def rehash_rq4_selection(flex: Path, rehashed: dict[str, str]):
+    """RQ4 pins each CHC-COMP input by hash; follow the comment scrub above."""
+    path = flex / "evaluation/RQ4/selection.json"
+    selection = json.loads(path.read_text())
+    for case in selection["cases"]:
+        if case["corpus"] == "chc-comp":
+            case["generated_sha256"] = rehashed[case["generated_sha256"]]
+    path.write_text(json.dumps(selection, indent=2) + "\n")
 
 
 def refresh_sums(bench: Path):
@@ -293,7 +322,7 @@ def main():
     print("rewriting benchmark dependencies and corpus archive ...")
     flex_path_dependencies(bench, flex)
     find_our_commits(stage, [ROOT, args.benchmarks.resolve(), ROOT / ".lake/packages/smt2lean"])
-    rebuild_chc_archive(bench)
+    rehash_rq4_selection(flex, rebuild_chc_archive(bench))
     anonymize_bench_text(bench)
     anonymize_remaining_urls(stage)
     anonymize_commits(stage)

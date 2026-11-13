@@ -17,7 +17,8 @@ and the benchmark projects depend on Flex through the relative path `../Flex`.
 - Linux (tested on Ubuntu 24.04, x86-64) or macOS; 16 GB RAM or more.
 - [elan](https://github.com/leanprover/elan). The pinned toolchain (Lean 4.34.0) is installed
   automatically from `Flex/lean-toolchain`.
-- Python 3.9 or newer (standard library only; `matplotlib` optional for figures).
+- Python 3.10 or newer (standard library only; `matplotlib` optional for figures,
+  and `evaluation/RQ4/requirements.txt` for the RQ4 figures).
 - A C/C++ toolchain, Z3 (we used 4.15.4), Java and Eldarica 2.3 on `PATH` (`z3`, `eld`).
   cvc5 comes with the pinned Lean dependencies.
 
@@ -43,7 +44,7 @@ The same setup is in `Flex/.github/workflows/lean_action_ci.yml`.
 cd Flex
 MATHLIB_NO_CACHE_ON_UPDATE=1 lake build          # fetches pinned dependencies; do not run `lake update`
 lake lean Tests/SMT.lean -- --error=hasSorry     # small tactic test
-lake lean Demo/Imp.lean                          # RQ4: the Imp verifier and its example programs
+lake lean Demo/Imp.lean                          # the Imp verifier and its example programs
 (cd ../flex-benchmarks && python3 CHC-COMP/unpack.py)   # unpack and verify the CHC-COMP corpus
 ```
 
@@ -110,6 +111,22 @@ python3 -B ../Flex/evaluation/RQ3b/benchmark.py --benchmarks . --count 6 --worke
 python3 -B ../Flex/evaluation/RQ3b/benchmark.py --benchmarks . --count 0 --workers 5 \
   --configs zap_fix spacer_only eldarica_only --output ../Flex/evaluation/results/RQ3b/full
 python3 -B ../Flex/evaluation/RQ3b/report.py ../Flex/evaluation/results/RQ3b/full
+```
+
+## 7. RQ4: qualifier scraping (`evaluation/RQ4/README.md`)
+
+Run from `flex-benchmarks/`. RQ4 needs Z3 but neither Eldarica nor Java.
+
+```sh
+cd ../flex-benchmarks
+# smoke: 3 queries (one per corpus) x the five scraping configurations
+python3 -B ../Flex/evaluation/RQ4/benchmark.py --benchmarks . --smoke \
+  --output ../Flex/evaluation/results/RQ4/smoke
+python3 -B ../Flex/evaluation/RQ4/report.py --results ../Flex/evaluation/results/RQ4/smoke
+# full: the paper's 391 CHCs x 5 configurations (resume with the same command plus --resume)
+python3 -B ../Flex/evaluation/RQ4/benchmark.py --benchmarks . --workers 1 \
+  --output ../Flex/evaluation/results/RQ4/full
+python3 -B ../Flex/evaluation/RQ4/report.py --results ../Flex/evaluation/results/RQ4/full
 ```
 
 Timings depend on the machine and on the number of workers; coverage numbers should match

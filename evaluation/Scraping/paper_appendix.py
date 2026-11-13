@@ -64,10 +64,18 @@ def coverage_graph(by_config, n, output, compact=False):
     fig.subplots_adjust(left=.16, right=.98, bottom=.20, top=.79) if compact else \
         fig.subplots_adjust(left=.105, right=.77, bottom=.17, top=.95)
     events, anchors, diagnostics = [], [], {}
+    observed = [float(r['flex_ms']) / 1000 for rows in by_config.values()
+                for r in rows if fully_proved(r) and r.get('flex_ms') and float(r['flex_ms']) > 0]
+    upper = max(120., max(observed, default=0))
+    lower = min(.05, min(observed, default=.05))
     for config, label, color, style in zip(CONFIGS, LABELS, colors, styles):
         times = np.sort([float(r['flex_ms']) / 1000
-                         for r in by_config[config] if fully_proved(r)])
-        assert len(times) and np.all(times > 0)
+                         for r in by_config[config] if fully_proved(r)
+                         and r.get('flex_ms') and float(r['flex_ms']) > 0])
+        if not len(times):
+            ax.plot([lower, upper], [0, 0], color=color, linestyle=style, label=label)
+            diagnostics[config] = dict(proved=0, timed_proofs=0)
+            continue
         empirical_times = np.unique(times)
         empirical_counts = np.searchsorted(times, empirical_times, side='right')
         events.extend((config, float(t), int(count))
@@ -80,7 +88,8 @@ def coverage_graph(by_config, n, output, compact=False):
                            *(t for t in (1., 10., 30., 50.)
                              if times[0] < t < times[-1])])
         counts = np.searchsorted(times, knots, side='right')
-        curve = PchipInterpolator(np.log10(knots), counts, extrapolate=False)
+        curve = PchipInterpolator(np.log10(knots), counts, extrapolate=False) if len(knots) > 1 else \
+            lambda x: np.full(np.shape(x), counts[0], dtype=float)
         grid = np.unique(np.r_[np.geomspace(times[0], times[-1], 1200), knots])
         heights = curve(np.log10(grid))
         assert np.all(np.diff(heights) >= -1e-9)
@@ -90,14 +99,14 @@ def coverage_graph(by_config, n, output, compact=False):
         anchors.extend((config, float(t), int(count)) for t, count in zip(knots, counts))
 
         # The curve begins at the first observed proof and never rises before it.
-        ax.plot(np.r_[grid, 120.], np.r_[heights, len(times)], color=color,
+        ax.plot(np.r_[grid, upper], np.r_[heights, len(times)], color=color,
                 linestyle=style, linewidth=(1.5 if config == 'auto' else 1.1) if compact else
                 (1.85 if config == 'auto' else 1.5), label=label,
                 solid_capstyle='round', dash_capstyle='round',
                 zorder=4 if config == 'auto' else 3)
         ax.plot(times[-1], len(times), 'o', color=color, markersize=3, zorder=5)
         if not compact:
-            ax.annotate(f'{label}  {len(times)}', (120., len(times)), xytext=(7, 0),
+            ax.annotate(f'{label}  {len(times)}', (upper, len(times)), xytext=(7, 0),
                         textcoords='offset points', va='center', color=color,
                         fontsize=9, fontweight='bold' if config == 'auto' else 'normal',
                         annotation_clip=False)
@@ -111,10 +120,10 @@ def coverage_graph(by_config, n, output, compact=False):
                                    sampled_max_interpolation_error_chcs=float(np.max(errors)))
 
     ax.set_xscale('log')
-    ax.set_xlim(.05, 120.)
-    ax.set_ylim(0, n + 18)
+    ax.set_xlim(lower, upper)
+    ax.set_ylim(0, n + max(1, n * .046))
     ax.set_xticks([.1, 1, 10, 100], ['0.1', '1', '10', '100'])
-    ax.set_yticks([0, 100, 200, 300, n])
+    ax.set_yticks(sorted({0, *range(100, n, 100), n}))
     ax.set_xlabel('Tactic time per CHC (s, log scale)', labelpad=6 if compact else 8)
     ax.set_ylabel('Fully proved CHCs', labelpad=7)
     if compact:

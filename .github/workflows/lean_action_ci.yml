@@ -53,3 +53,8 @@ jobs:
           python3 -B evaluation/RQ3b/benchmark.py --help
           python3 -B evaluation/RQ3b/report.py --help
           python3 -B evaluation/RQ3a/test_harness.py
+      - name: Check RQ4 tooling
+        run: |
+          python3 -B evaluation/RQ4/benchmark.py --help
+          python3 -B evaluation/RQ4/report.py --help
+          python3 -B evaluation/RQ4/export.py --help

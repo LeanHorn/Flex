@@ -306,9 +306,14 @@ def freeze_runtime(args):
                  ROOT / 'evaluation/RQ3a/benchmark.py', ROOT / 'evaluation/RQ3a/report.py',
                  ROOT / 'scripts/chc_parity.py', runtime_root / 'lean-setup.json',
                  runtime_root / 'frozen-command.json', runtime_root / 'frozen-environment.json',
-                 runtime_root / 'compiled-hashes.json', after / 'settings.json',
-                 output / 'settings.json', output / 'manifest.json', output / 'selection.json',
-                 after / 'metadata.json', after / 'manifest.json', after / 'results.jsonl'}
+                 runtime_root / 'compiled-hashes.json',
+                 output / 'settings.json', output / 'manifest.json', output / 'selection.json'}
+        if after is not None:
+            paths.update(after / name for name in
+                         ('settings.json', 'metadata.json', 'manifest.json', 'results.jsonl'))
+        if args.manifest is not None:
+            paths.add(args.manifest)
+            paths.update((ROOT / 'evaluation/RQ4').glob('*.py'))
         def collect(value):
             if isinstance(value, str) and Path(value).is_file():
                 paths.add(Path(value))
@@ -327,8 +332,14 @@ def freeze_runtime(args):
                 raise ValueError(f'changed screened compiled artifact: {artifact}')
         dependencies = [{'path': str(path), 'sha256': rq3.common.digest(path),
                          'bytes': path.stat().st_size} for path in sorted(paths)]
-        rq3.save(provenance, {'screening': str(after), 'runtime_root': str(runtime_root),
+        versions = {}
+        for name, cmd in [('lean', [command[0], '--version']), ('z3', ['z3', '--version'])]:
+            probe = subprocess.run(cmd, env={**os.environ, **frozen_env}, capture_output=True,
+                                   text=True, timeout=10, check=True)
+            versions[name] = probe.stdout.strip()
+        rq3.save(provenance, {'screening': str(after) if after else None, 'runtime_root': str(runtime_root),
                              'fresh_runtime': args.fresh_runtime, 'command': command,
+                             'tool_versions': versions,
                              'dependencies': dependencies,
                              'python': sys.version, 'platform': platform.platform(),
                              'note': 'Compiled runtime root and screening provenance are recorded separately. '
@@ -343,6 +354,11 @@ def freeze_runtime(args):
         helpers.mkdir(parents=True, exist_ok=True)
         for path in (ROOT / 'evaluation/RQ3a').glob('*.py'):
             shutil.copy2(path, helpers / path.name)
+        handoff = output / 'source/evaluation/RQ4'
+        handoff.mkdir(parents=True, exist_ok=True)
+        for path in (ROOT / 'evaluation/RQ4').glob('*'):
+            if path.is_file():
+                shutil.copy2(path, handoff / path.name)
         if header_path.resolve() != (helpers / 'RQ3.lean').resolve():
             shutil.copy2(header_path, helpers / 'RQ3.lean')
         scripts = output / 'source/scripts'
@@ -392,6 +408,10 @@ def progress(output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--after', type=Path)
+    parser.add_argument('--manifest', type=Path, help='portable RQ4 selection, without a local screening run')
+    parser.add_argument('--benchmarks', type=Path, help='flex-benchmarks checkout for --manifest')
+    parser.add_argument('--smoke', action='store_true', help='one fixed real query from each RQ4 corpus')
+    parser.add_argument('--no-figures', action='store_true', help='write CSV/JSON without plotting dependencies')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--workers', type=int, default=2)
     parser.add_argument('--count', type=int, default=50, help='sample size; 0 selects every eligible Fix success')
@@ -407,9 +427,19 @@ def main():
     if args.progress:
         progress(args.output)
         return
-    if args.after is None or args.count < 0 or args.workers < 1:
-        parser.error('--after is required; count must be nonnegative and workers positive')
-    args.after = args.after.resolve()
+    if (args.after is None) == (args.manifest is None) or args.count < 0 or args.workers < 1:
+        parser.error('provide exactly one of --after or --manifest; count must be nonnegative and workers positive')
+    if args.manifest:
+        if args.benchmarks is None:
+            parser.error('--manifest requires --benchmarks')
+        if not shutil.which('z3'):
+            parser.error('Z3 is required for Fix candidate checks; install z3 and put it on PATH')
+        args.manifest = args.manifest.resolve()
+        args.benchmarks = args.benchmarks.resolve()
+        args.fresh_runtime = True
+        args.count = 0
+    else:
+        args.after = args.after.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     lock = (args.output / 'run.lock').open('a')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -421,6 +451,9 @@ def main():
                     external_solvers=False, timeout_policy='component_caps_v1')
     if args.fresh_runtime:
         settings['fresh_runtime'] = True
+    if args.manifest:
+        settings.pop('screening')
+        settings.update(manifest_sha256=rq3.common.digest(args.manifest), smoke=args.smoke)
     meta_path = args.output / 'metadata.json'
     if args.resume:
         if load(args.output / 'settings.json') != settings:
@@ -437,13 +470,19 @@ def main():
     try:
         selection_path = args.output / 'selection.json'
         if not selection_path.exists():
-            if not wait_for_screening(args.after, args.output, meta):
+            if args.after and not wait_for_screening(args.after, args.output, meta):
                 meta.update(phase='stopped', complete=False)
                 rq3.save(meta_path, meta)
                 return
             meta.update(phase='prepare')
             rq3.save(meta_path, meta)
-            selection = prepare_selection(args)
+            if args.manifest:
+                spec = importlib.util.spec_from_file_location('rq4_corpus', ROOT / 'evaluation/RQ4/corpus.py')
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                selection = module.prepare(args)
+            else:
+                selection = prepare_selection(args)
         else:
             selection = load(selection_path)
         verify_inputs(selection)
@@ -472,12 +511,13 @@ def main():
                                       skip_classification=False, no_figures=True,
                                       z3=shutil.which('z3') or 'z3', eldarica='eld')
         active = {}
-        source_meta = load(args.after / 'metadata.json')
+        source_meta = load(args.after / 'metadata.json') if args.after else {}
         meta.update(phase='trials', complete=False, trials_started_at=meta.get('trials_started_at', rq3.now()),
                     flex_commit=rq3.common.git_info(['rev-parse', 'HEAD'])
                         if args.fresh_runtime else source_meta.get('flex_commit'),
                     screening_flex_commit=source_meta.get('flex_commit'),
-                    benchmarks_commit=source_meta.get('benchmarks_commit'), resource_tool=resource_kind)
+                    benchmarks_commit=selection.get('benchmarks_commit', source_meta.get('benchmarks_commit')),
+                    resource_tool=resource_kind)
         rq3.save(meta_path, meta)
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
             def refill():
@@ -525,7 +565,7 @@ def main():
         meta.update(complete=False, phase='reporting', trials_finished_at=rq3.now())
         rq3.save(meta_path, meta)
         verify_runtime(args.output, selection, 'after_trials')
-        summarize(args.output, figures=True)
+        summarize(args.output, figures=not args.no_figures)
         meta.update(complete=finished, phase='complete' if finished else 'stopped', finished_at=rq3.now())
         rq3.save(meta_path, meta)
         progress(args.output)

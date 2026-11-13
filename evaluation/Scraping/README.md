@@ -191,3 +191,68 @@ Wall-clock measurements include enabled instrumentation overhead. Peak recursion
 depth and aggregate simultaneous memory of Lean plus external solver processes
 are not measured; missing fields remain null. Keep the immutable raw results and
 the recorded schema/metric versions when producing paper tables.
+
+### Paper appendix for the completed local pilot
+
+Generate the concise appendix tables of corpus coverage, successful-proof timing,
+and successful scraping levels for the 391 cases retained in the paper. The generator
+selects refinement-typechecker, CHC-COMP, and RQ1 cases from the completed
+406-case run; it excludes the 15 Imp cases and recomputes every aggregate.
+The original measurements remain unchanged:
+
+```sh
+python3 evaluation/Scraping/paper_appendix.py \
+  --results evaluation/results/Scraping/ablation406-20261112 \
+  --output /private/tmp/scraping-paper-appendix
+```
+
+The output contains `sections/scraping-ablation.tex` and numeric summaries in
+`scraping-appendix-metrics.json`.
+The subsection records the corpus breakdown, local measurement setup, stopping
+levels, and incomplete proofs. Detailed timing and candidate statistics remain
+in the JSON output, with missing timeout timings distinct from observed durations. This
+generator reproduces the local pilot; its prose and assertions must be reviewed
+when replacing those measurements with a different run.
+
+Add `--graph` to generate `figures/scraping-coverage.pdf` and `.png` (requires
+NumPy, SciPy, and Matplotlib). Each line shows cumulative kernel-checked full
+proofs against individual tactic time on a logarithmic axis. To make the curves
+readable, monotone PCHIP interpolation joins empirical 5%-rank anchors and exact
+1/10/30/50-second counts; endpoint dots and labels retain the exact last proof
+time and final coverage. Curves begin at the first observed proof. Failures stay
+in the 391-case population and never become completion events.
+
+The graph is a visual interpolation, not an additional measurement. Companion
+`scraping-coverage-empirical.csv` and `scraping-coverage-anchors.csv` retain the
+exact events and interpolation anchors; `scraping-coverage-plot.json` records
+endpoints and sampled interpolation error. Use the supplied
+`scraping-coverage-caption.txt` when presenting the plot. Graphs are standalone
+assets; they are not duplicated in the generated appendix subsection. The paper
+presents its comparison plots and a timing summary in RQ4, with the full timing
+table in the appendix.
+
+Add `--candidate-graph` for standalone candidate comparisons.
+The simplest is `figures/scraping-candidates-summary.pdf` (also PNG):
+two horizontal bars per configuration show median and P90 peak candidate counts
+on one linear scale, with exact labels. Its companion CSV contains the plotted
+values. Full-distribution alternatives are `figures/scraping-candidates.pdf`
+for peak instantiated candidate pools and `figures/scraping-templates.pdf`
+for peak scraped qualifier-template counts.
+Both also have PNG previews. They use all 391 matched CHCs, including failed
+proofs, ranked independently within each configuration. Curves interpolate every
+sorted observation monotonically; median and P90 markers are exact. A
+`log(1 + count)` vertical scale preserves zero counts.
+
+Candidate pools are summed over predicates at each stage, then maximized over
+visited stages. Template counts exclude the 19 built-in templates and separately
+generated position-specific candidates. Neither plot sums repeated stages or
+claims to measure continuous growth over time. Companion CSVs preserve each
+case and count; JSON summaries and captions document the measures. These two
+plots are generated for review without inserting them into the appendix.
+
+For the main RQ4 layout, `--rq4-panels` generates
+`figures/scraping-coverage-compact.pdf` and
+`figures/scraping-candidates-summary-compact.pdf`. These use the same data as the
+full-size plots, but share a fixed canvas and aligned axes for placement side by
+side. Their lettering is sized for half-page width; the full timing table can
+sit beneath both panels.

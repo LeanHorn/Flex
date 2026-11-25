@@ -78,16 +78,18 @@ partial def exprSol1 (κ : KVar) (e : Expr) : KM Expr := do
           return mkConst ``False
         let abstr := conjunct.abstract #[fvar]
         let lam   := Expr.lam name dom abstr .default
-        return mkApp2 (mkConst ``Exists [Level.one]) dom lam
+        return mkApp2 (mkConst ``Exists [← getLevel dom]) dom lam
   -- κ(y₁, ..., yₙ)
   else if e.getAppFn.isMVar && e.getAppFn.mvarId! == κ.mvarId then
     let args := e.getAppArgs.toList
     -- Build each equality `zᵢ = aᵢ`, but drop tautologies (`zᵢ = zᵢ`) that arise
     -- when `stripScopePrefix` has already substituted the outer binder into `aᵢ`.
-    let eqs := (κ.params.zip (args.zip κ.paramTypes)).filterMap fun (pi, (ai, ty)) =>
+    -- `Eq`'s level is `ty`'s; a dependent `ty` (loose bvars) is measured through `aᵢ` instead.
+    let eqs ← (κ.params.zip (args.zip κ.paramTypes)).filterMapM fun (pi, (ai, ty)) => do
       let lhs : Expr := .fvar (FVarId.mk pi)
-      if lhs == ai then none
-      else some (mkApp3 (mkConst ``Eq [Level.one]) ty lhs ai)
+      if lhs == ai then return none
+      let lvl ← getLevel (← if ty.hasLooseBVars then inferType ai else pure ty)
+      return some (mkApp3 (mkConst ``Eq [lvl]) ty lhs ai)
     match eqs with
     | []      => return mkConst ``True
     | [eq]    => return eq

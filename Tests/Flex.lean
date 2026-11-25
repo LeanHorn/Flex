@@ -417,3 +417,14 @@ run_elab do
       throwError "native cancellation did not finish promptly"
 
 end TimeoutTests
+
+namespace UniverseTests
+
+universe u
+
+-- Strongest solutions over `α : Type u` build `Exists`/`Eq` at the domain's level, not at `Type`.
+example : ∀ (α : Type u), ∃ κ1 : List α → α → Prop,
+    (∀ (as : List α) (y : α), y ∈ as → κ1 as y) ∧ ∀ (as : List α) (y : α), κ1 as y → y ∈ as := by
+  intro α; flex
+
+end UniverseTests

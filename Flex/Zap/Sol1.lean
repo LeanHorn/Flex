@@ -68,11 +68,13 @@ private partial def solve (κ : KVar) (tracked : Bool) (e : Expr) : KM (Expr × 
             solve κ tracked body
         let h := if body == raw then h else occurs κ tracked raw
         let lam := Expr.lam name dom (conjunct.abstract #[fvar]) .default
-        return (mkApp2 (mkConst ``Exists [Level.one]) dom lam, occurs κ tracked dom || h)
+        return (mkApp2 (mkConst ``Exists [← getLevel dom]) dom lam, occurs κ tracked dom || h)
   else if e.getAppFn.isMVar && e.getAppFn.mvarId! == κ.mvarId then
     let args := e.getAppArgs.toList
-    let eqs := (κ.params.zip (args.zip κ.paramTypes)).map fun (pi, (ai, ty)) =>
-      mkApp3 (mkConst ``Eq [Level.one]) ty (.fvar (FVarId.mk pi)) ai
+    -- `Eq`'s level is `ty`'s; a dependent `ty` (loose bvars) is measured through `ai` instead.
+    let eqs ← (κ.params.zip (args.zip κ.paramTypes)).mapM fun (pi, (ai, ty)) => do
+      let lvl ← getLevel (← if ty.hasLooseBVars then inferType ai else pure ty)
+      return mkApp3 (mkConst ``Eq [lvl]) ty (.fvar (FVarId.mk pi)) ai
     let solution := match eqs with
       | []      => mkConst ``True
       | [eq]    => eq
